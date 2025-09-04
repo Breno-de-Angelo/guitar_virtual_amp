@@ -1,12 +1,9 @@
-use std::sync::{
-    Arc,
-    atomic::{AtomicUsize, Ordering},
-};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 const BUFFER_SIZE: usize = 4096;
 
 pub struct AudioBuffer<T> {
-    data: Arc<Vec<T>>,
+    data: Vec<T>,
     index: AtomicUsize,
 }
 
