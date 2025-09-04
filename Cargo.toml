@@ -1,0 +1,11 @@
+[package]
+name = "guitar_virtual_amp"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+alsa = "0.7"
+eframe = "0.32.1"
+egui_plot = "0.33.0"
+num-complex = "0.4.6"
+rustfft = "6.4.0"
