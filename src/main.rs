@@ -1,21 +1,27 @@
-//! Um monitor de áudio de baixa latência que captura de um dispositivo ALSA,
-//! converte o sinal de mono para estéreo e o reproduz na saída padrão.
+// //! Um monitor de áudio de baixa latência que captura de um dispositivo ALSA,
+// //! converte o sinal de mono para estéreo e o reproduz na saída padrão.
 
-mod buffer;
 mod capture;
 mod gui;
 
+use crossbeam::channel::bounded;
 use std::error::Error;
 use std::thread;
 
+const BUFFER_SIZE: usize = 1024;
+
 fn main() -> Result<(), Box<dyn Error>> {
-    let audio_buffer = buffer::AudioBuffer::new();
+    let (tx, rx) = bounded(BUFFER_SIZE);
 
     let (capture_pcm, playback_pcm) = capture::init_capture(
-        capture::CaptureConfig {
+        capture::AudioConfig {
             device_name: String::from("hw:2,0"),
+            channels: 1,
+            sample_rate: 48000,
+            period_size: 256,
+            buffer_size: 1024,
         },
-        capture::PlaybackConfig {
+        capture::AudioConfig {
             device_name: String::from("default"),
             channels: 2,
             sample_rate: 48000,
@@ -25,7 +31,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     )?;
     thread::spawn(|| {
         println!("Thread de áudio iniciada.");
-        if let Err(e) = capture::playback(capture_pcm, playback_pcm, audio_buffer) {
+        if let Err(e) = capture::playback(capture_pcm, playback_pcm, tx) {
             eprintln!("Erro na thread de áudio: {}", e);
         }
     });
@@ -34,7 +40,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     eframe::run_native(
         "Guitar Virtual Amp",
         options,
-        Box::new(|_cc| Ok(Box::new(gui::AudioApp::new(audio_buffer)))),
+        Box::new(|_cc| Ok(Box::new(gui::AudioApp::new(rx)))),
     )?;
     Ok(())
 }
