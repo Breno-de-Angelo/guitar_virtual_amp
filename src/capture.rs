@@ -56,49 +56,6 @@ pub fn init_device(device_config: AudioConfig) -> Result<PCM, Box<dyn std::error
     Ok(pcm)
 }
 
-pub fn capture(pcm: PCM, tx: Sender<f64>) -> Result<(), Error> {
-    let io = pcm.io_i16()?;
-    let period_frames = pcm.hw_params_current()?.get_period_size()?;
-    let mut buf = vec![0i16; period_frames as usize];
-    loop {
-        if let Err(err) = io.readi(&mut buf) {
-            eprintln!("Erro na captura: {}", err);
-            handle_xrun(err, &pcm)?;
-            continue;
-        }
-
-        for &sample in buf.iter() {
-            let _ = tx.try_send(sample as f64 / i16::MAX as f64);
-        }
-    }
-}
-
-pub fn play_audio(pcm: PCM, rx: Receiver<f64>) -> Result<(), Error> {
-    let io = pcm.io_i16()?;
-    let period_frames = pcm.hw_params_current()?.get_period_size()?;
-    let mut buf = vec![0i16; (period_frames as usize) * 2];
-    loop {
-        // Preenche o buffer com as amostras recebidas
-        for sample in buf.iter_mut() {
-            let val = match rx.recv() {
-                Ok(s) => s,
-                Err(_) => return Ok(()), // canal fechado -> fim do áudio
-            };
-            *sample = (val.clamp(-1.0, 1.0) * i16::MAX as f64) as i16;
-            dbg!(*sample);
-        }
-
-        // Escreve no dispositivo
-        match io.writei(&buf) {
-            Ok(_) => (),
-            Err(err) => {
-                eprintln!("Erro no playback: {}", err);
-                handle_xrun(err, &pcm)?;
-            }
-        }
-    }
-}
-
 pub fn playback(capture_pcm: PCM, playback_pcm: PCM, tx: Sender<f64>) -> Result<(), Error> {
     let cap_io = capture_pcm.io_i16()?;
     let play_io = playback_pcm.io_i16()?;
