@@ -11,13 +11,13 @@ const FFT_FREQ_RESOLUTION: f64 = SAMPLE_RATE / BUFFER_SIZE as f64;
 // Buffer time = BUFFER_SIZE / f = 42,67 ms
 
 pub struct AudioApp {
-    rx: Receiver<f64>,
+    rx: Receiver<i16>,
     buffer: VecDeque<f64>,
     buffer_size: usize,
 }
 
 impl AudioApp {
-    pub fn new(rx: Receiver<f64>) -> Self {
+    pub fn new(rx: Receiver<i16>) -> Self {
         Self {
             rx,
             buffer: VecDeque::with_capacity(BUFFER_SIZE),
@@ -59,7 +59,7 @@ impl eframe::App for AudioApp {
             if self.buffer.len() >= self.buffer_size {
                 self.buffer.pop_front(); // descarta o mais antigo
             }
-            self.buffer.push_back(sample);
+            self.buffer.push_back(sample as f64 / i16::MAX as f64);
         }
 
         egui::CentralPanel::default().show(ctx, |ui| {

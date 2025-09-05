@@ -3,6 +3,8 @@
 
 mod capture;
 mod gui;
+mod pedal_chain;
+mod ring_buffer;
 
 use crossbeam::channel::bounded;
 use std::error::Error;

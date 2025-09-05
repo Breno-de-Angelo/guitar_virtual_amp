@@ -56,7 +56,7 @@ pub fn init_device(device_config: AudioConfig) -> Result<PCM, Box<dyn std::error
     Ok(pcm)
 }
 
-pub fn playback(capture_pcm: PCM, playback_pcm: PCM, tx: Sender<f64>) -> Result<(), Error> {
+pub fn playback(capture_pcm: PCM, playback_pcm: PCM, tx: Sender<i16>) -> Result<(), Error> {
     let cap_io = capture_pcm.io_i16()?;
     let play_io = playback_pcm.io_i16()?;
 
@@ -75,7 +75,7 @@ pub fn playback(capture_pcm: PCM, playback_pcm: PCM, tx: Sender<f64>) -> Result<
         for (i, &sample) in in_buf.iter().enumerate() {
             out_buf[i * 2] = sample;
             out_buf[i * 2 + 1] = sample;
-            let _ = tx.try_send(sample as f64 / i16::MAX as f64);
+            let _ = tx.try_send(sample);
         }
 
         match play_io.writei(&out_buf) {
