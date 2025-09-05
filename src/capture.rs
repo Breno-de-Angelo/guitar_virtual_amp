@@ -2,76 +2,101 @@ use alsa::{
     Direction, Error, PCM, ValueOr,
     pcm::{Access, Format, HwParams},
 };
-use crossbeam::channel::Sender;
+use crossbeam::channel::{Receiver, Sender};
+
+#[derive(PartialEq, Eq, Debug, Clone, Copy)]
+pub enum IOSelect {
+    INPUT,
+    OUTPUT,
+}
 
 pub struct AudioConfig {
     pub device_name: String,
+    pub io_select: IOSelect,
     pub channels: u32,
     pub sample_rate: u32,
     pub period_size: i64,
     pub buffer_size: i64,
 }
 
-pub fn init_capture(
-    capture_config: AudioConfig,
-    playback_config: AudioConfig,
-) -> Result<(PCM, PCM), Box<dyn std::error::Error>> {
-    let capture_pcm = PCM::new(
-        capture_config.device_name.as_str(),
-        Direction::Capture,
-        false,
-    )
-    .map_err(|e| {
+pub fn init_device(device_config: AudioConfig) -> Result<PCM, Box<dyn std::error::Error>> {
+    let dir = if device_config.io_select == IOSelect::INPUT {
+        Direction::Capture
+    } else {
+        Direction::Playback
+    };
+    let pcm = PCM::new(device_config.device_name.as_str(), dir, false).map_err(|e| {
         format!(
             "Falha ao abrir PCM '{}': {}",
-            capture_config.device_name.as_str(),
+            device_config.device_name.as_str(),
             e
         )
     })?;
-    let playback_pcm = PCM::new(&playback_config.device_name, Direction::Playback, false)
-        .or_else(|_| PCM::new("default", Direction::Playback, false))
-        .or_else(|_| PCM::new("pulse", Direction::Playback, false))
-        .map_err(|e| format!("Falha ao abrir dispositivo de playback: {}", e))?;
 
     {
-        let hwp = HwParams::any(&capture_pcm)?;
+        let hwp = HwParams::any(&pcm)?;
         hwp.set_access(Access::RWInterleaved)?;
         hwp.set_format(Format::s16())?;
-        hwp.set_channels(capture_config.channels)?;
-        hwp.set_rate(capture_config.sample_rate, ValueOr::Nearest)?;
-        hwp.set_period_size(capture_config.period_size, ValueOr::Nearest)?;
-        hwp.set_buffer_size(capture_config.buffer_size)?;
-        capture_pcm.hw_params(&hwp)?;
+        hwp.set_channels(device_config.channels)?;
+        hwp.set_rate(device_config.sample_rate, ValueOr::Nearest)?;
+        hwp.set_period_size(device_config.period_size, ValueOr::Nearest)?;
+        hwp.set_buffer_size(device_config.buffer_size)?;
+        pcm.hw_params(&hwp)?;
     }
 
     {
-        let hwp = HwParams::any(&playback_pcm)?;
-        hwp.set_access(Access::RWInterleaved)?;
-        hwp.set_format(Format::s16())?;
-        hwp.set_channels(playback_config.channels)?;
-        hwp.set_rate(playback_config.sample_rate, ValueOr::Nearest)?;
-        hwp.set_period_size(playback_config.period_size, ValueOr::Nearest)?;
-        hwp.set_buffer_size(playback_config.buffer_size)?;
-        playback_pcm.hw_params(&hwp)?;
-    }
-
-    {
-        let swp = capture_pcm.sw_params_current()?;
-        swp.set_start_threshold(1)?;
+        let swp = pcm.sw_params_current()?;
+        if device_config.io_select == IOSelect::OUTPUT {
+            swp.set_start_threshold(1)?;
+        }
         swp.set_avail_min(1)?;
-        capture_pcm.sw_params(&swp)?;
+        pcm.sw_params(&swp)?;
     }
 
-    {
-        let swp = playback_pcm.sw_params_current()?;
-        swp.set_avail_min(1)?;
-        playback_pcm.sw_params(&swp)?;
+    Ok(pcm)
+}
+
+pub fn capture(pcm: PCM, tx: Sender<f64>) -> Result<(), Error> {
+    let io = pcm.io_i16()?;
+    let period_frames = pcm.hw_params_current()?.get_period_size()?;
+    let mut buf = vec![0i16; period_frames as usize];
+    loop {
+        if let Err(err) = io.readi(&mut buf) {
+            eprintln!("Erro na captura: {}", err);
+            handle_xrun(err, &pcm)?;
+            continue;
+        }
+
+        for &sample in buf.iter() {
+            let _ = tx.try_send(sample as f64 / i16::MAX as f64);
+        }
     }
+}
 
-    capture_pcm.prepare()?;
-    playback_pcm.prepare()?;
+pub fn play_audio(pcm: PCM, rx: Receiver<f64>) -> Result<(), Error> {
+    let io = pcm.io_i16()?;
+    let period_frames = pcm.hw_params_current()?.get_period_size()?;
+    let mut buf = vec![0i16; (period_frames as usize) * 2];
+    loop {
+        // Preenche o buffer com as amostras recebidas
+        for sample in buf.iter_mut() {
+            let val = match rx.recv() {
+                Ok(s) => s,
+                Err(_) => return Ok(()), // canal fechado -> fim do áudio
+            };
+            *sample = (val.clamp(-1.0, 1.0) * i16::MAX as f64) as i16;
+            dbg!(*sample);
+        }
 
-    Ok((capture_pcm, playback_pcm))
+        // Escreve no dispositivo
+        match io.writei(&buf) {
+            Ok(_) => (),
+            Err(err) => {
+                eprintln!("Erro no playback: {}", err);
+                handle_xrun(err, &pcm)?;
+            }
+        }
+    }
 }
 
 pub fn playback(capture_pcm: PCM, playback_pcm: PCM, tx: Sender<f64>) -> Result<(), Error> {

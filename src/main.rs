@@ -13,22 +13,25 @@ const BUFFER_SIZE: usize = 1024;
 fn main() -> Result<(), Box<dyn Error>> {
     let (tx, rx) = bounded(BUFFER_SIZE);
 
-    let (capture_pcm, playback_pcm) = capture::init_capture(
-        capture::AudioConfig {
-            device_name: String::from("hw:2,0"),
-            channels: 1,
-            sample_rate: 48000,
-            period_size: 256,
-            buffer_size: 1024,
-        },
-        capture::AudioConfig {
-            device_name: String::from("default"),
-            channels: 2,
-            sample_rate: 48000,
-            period_size: 256,
-            buffer_size: 1024,
-        },
-    )?;
+    let capture_pcm = capture::init_device(capture::AudioConfig {
+        device_name: String::from("hw:2,0"),
+        io_select: capture::IOSelect::INPUT,
+        channels: 1,
+        sample_rate: 48000,
+        period_size: 256,
+        buffer_size: 1024,
+    })?;
+    let playback_pcm = capture::init_device(capture::AudioConfig {
+        device_name: String::from("default"),
+        io_select: capture::IOSelect::OUTPUT,
+        channels: 2,
+        sample_rate: 48000,
+        period_size: 256,
+        buffer_size: 1024,
+    })?;
+
+    // thread::spawn(|| capture::capture(capture_pcm, tx));
+    // thread::spawn(|| capture::play_audio(playback_pcm, rx));
     thread::spawn(|| {
         println!("Thread de áudio iniciada.");
         if let Err(e) = capture::playback(capture_pcm, playback_pcm, tx) {
