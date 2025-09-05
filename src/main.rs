@@ -30,8 +30,6 @@ fn main() -> Result<(), Box<dyn Error>> {
         buffer_size: 1024,
     })?;
 
-    // thread::spawn(|| capture::capture(capture_pcm, tx));
-    // thread::spawn(|| capture::play_audio(playback_pcm, rx));
     thread::spawn(|| {
         println!("Thread de áudio iniciada.");
         if let Err(e) = capture::playback(capture_pcm, playback_pcm, tx) {
