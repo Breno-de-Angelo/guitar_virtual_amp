@@ -21,6 +21,7 @@ where
         }
     }
 
+    #[allow(dead_code)]
     pub fn push(&mut self, item: T) {
         if self.len >= N {
             self.arr[self.start] = item;
@@ -35,12 +36,77 @@ where
         RingBufferIter::new(&self)
     }
 
+    #[allow(dead_code)]
     pub fn last(&self) -> &T {
         &self.arr[(self.start + self.len - 1) % N]
     }
 
+    #[allow(dead_code)]
     pub fn len(&self) -> usize {
         self.len
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn new_buffer_is_empty() {
+        let rb: RingBuffer<4, i32> = RingBuffer::new();
+        assert_eq!(rb.len(), 0);
+    }
+
+    #[test]
+    fn push_within_capacity() {
+        let mut rb: RingBuffer<4, i32> = RingBuffer::new();
+        rb.push(10);
+        rb.push(20);
+        assert_eq!(rb.len(), 2);
+        assert_eq!(*rb.last(), 20);
+
+        let collected: Vec<_> = rb.iter().copied().collect();
+        assert_eq!(collected, vec![10, 20]);
+    }
+
+    #[test]
+    fn push_exact_capacity() {
+        let mut rb: RingBuffer<3, i32> = RingBuffer::new();
+        rb.push(1);
+        rb.push(2);
+        rb.push(3);
+        assert_eq!(rb.len(), 3);
+        assert_eq!(*rb.last(), 3);
+
+        let collected: Vec<_> = rb.iter().copied().collect();
+        assert_eq!(collected, vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn push_over_capacity_overwrites_oldest() {
+        let mut rb: RingBuffer<3, i32> = RingBuffer::new();
+        rb.push(1);
+        rb.push(2);
+        rb.push(3);
+        rb.push(4); // overwrites 1
+        assert_eq!(rb.len(), 3);
+        assert_eq!(*rb.last(), 4);
+
+        let collected: Vec<_> = rb.iter().copied().collect();
+        assert_eq!(collected, vec![2, 3, 4]);
+    }
+
+    #[test]
+    fn multiple_overwrites_keep_order() {
+        let mut rb: RingBuffer<3, i32> = RingBuffer::new();
+        for i in 1..=6 {
+            rb.push(i);
+        }
+        assert_eq!(rb.len(), 3);
+        assert_eq!(*rb.last(), 6);
+
+        let collected: Vec<_> = rb.iter().copied().collect();
+        assert_eq!(collected, vec![4, 5, 6]);
     }
 }
 
@@ -103,12 +169,16 @@ where
     T: Default + Copy,
 {
     fn next_back(&mut self) -> Option<Self::Item> {
-        let r = if self.index >= 0 {
+        let r = if self.index < self.ring_buffer.len {
             Some(&self.ring_buffer[self.index])
         } else {
             None
         };
-        self.index -= 1;
+        if self.index == 0 {
+            self.index = self.ring_buffer.len;
+        } else {
+            self.index -= 1;
+        }
         r
     }
 }

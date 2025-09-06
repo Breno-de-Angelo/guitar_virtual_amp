@@ -34,7 +34,12 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     thread::spawn(|| {
         println!("Thread de áudio iniciada.");
-        if let Err(e) = capture::playback(capture_pcm, playback_pcm, tx) {
+        let mut pedal_chain = pedal_chain::PedalChain::new();
+        pedal_chain
+            .add_pedal(Box::new(pedal_chain::Reverb::new(1.0)))
+            .add_pedal(Box::new(pedal_chain::Amp::new(2.0)));
+
+        if let Err(e) = capture::playback(capture_pcm, playback_pcm, tx, pedal_chain) {
             eprintln!("Erro na thread de áudio: {}", e);
         }
     });

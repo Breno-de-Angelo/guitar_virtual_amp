@@ -2,7 +2,9 @@ use alsa::{
     Direction, Error, PCM, ValueOr,
     pcm::{Access, Format, HwParams},
 };
-use crossbeam::channel::{Receiver, Sender};
+use crossbeam::channel::Sender;
+
+use crate::pedal_chain;
 
 #[derive(PartialEq, Eq, Debug, Clone, Copy)]
 pub enum IOSelect {
@@ -56,7 +58,12 @@ pub fn init_device(device_config: AudioConfig) -> Result<PCM, Box<dyn std::error
     Ok(pcm)
 }
 
-pub fn playback(capture_pcm: PCM, playback_pcm: PCM, tx: Sender<i16>) -> Result<(), Error> {
+pub fn playback(
+    capture_pcm: PCM,
+    playback_pcm: PCM,
+    tx: Sender<i16>,
+    pedal_chain: pedal_chain::PedalChain,
+) -> Result<(), Error> {
     let cap_io = capture_pcm.io_i16()?;
     let play_io = playback_pcm.io_i16()?;
 
@@ -73,9 +80,10 @@ pub fn playback(capture_pcm: PCM, playback_pcm: PCM, tx: Sender<i16>) -> Result<
         }
 
         for (i, &sample) in in_buf.iter().enumerate() {
-            out_buf[i * 2] = sample;
-            out_buf[i * 2 + 1] = sample;
-            let _ = tx.try_send(sample);
+            let processed_sample = pedal_chain.process_sample(sample);
+            out_buf[i * 2] = processed_sample;
+            out_buf[i * 2 + 1] = processed_sample;
+            let _ = tx.try_send(processed_sample);
         }
 
         match play_io.writei(&out_buf) {
