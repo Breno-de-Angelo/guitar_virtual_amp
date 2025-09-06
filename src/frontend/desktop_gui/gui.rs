@@ -1,11 +1,12 @@
 use crossbeam::channel::{Receiver, Sender};
 use eframe::egui;
 use egui_plot::{Line, Plot, PlotPoints};
-use num_complex::Complex;
-use rustfft::FftPlanner;
 use std::collections::VecDeque;
 
-use crate::shared::pedals::{AmpParams, PedalDescription, ReverbParams};
+use crate::{
+    frontend::desktop_gui::lib::fft::compute_fft,
+    shared::pedals::{AmpParams, PedalDescription, ReverbParams},
+};
 
 const BUFFER_SIZE: usize = 2048;
 const SAMPLE_RATE: f64 = 48000.0;
@@ -16,7 +17,6 @@ pub struct AudioApp {
     pub audio_rx: Receiver<i16>,
     pub control_tx: Sender<Vec<PedalDescription>>,
     buffer: VecDeque<f64>,
-    buffer_size: usize,
     pedal_chain: Vec<PedalDescription>,
 }
 
@@ -26,32 +26,8 @@ impl AudioApp {
             audio_rx,
             control_tx,
             buffer: VecDeque::with_capacity(BUFFER_SIZE),
-            buffer_size: BUFFER_SIZE,
             pedal_chain: Vec::new(),
         }
-    }
-
-    fn compute_fft(&self) -> Vec<f64> {
-        let n = self.buffer.len().next_power_of_two(); // tamanho da FFT
-        if n == 0 {
-            return Vec::new();
-        }
-
-        let mut planner = FftPlanner::new();
-        let fft = planner.plan_fft_forward(n);
-
-        let mut input: Vec<Complex<f64>> = self
-            .buffer
-            .iter()
-            .cloned()
-            .map(|x| Complex { re: x, im: 0.0 })
-            .collect();
-        input.resize(n, Complex { re: 0.0, im: 0.0 });
-
-        let mut spectrum = input.clone();
-        fft.process(&mut spectrum);
-
-        spectrum[..n / 2].iter().map(|c| c.norm()).collect()
     }
 }
 
@@ -59,7 +35,7 @@ impl eframe::App for AudioApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         // Consumes samples
         while let Ok(sample) = self.audio_rx.try_recv() {
-            if self.buffer.len() >= self.buffer_size {
+            if self.buffer.len() >= BUFFER_SIZE {
                 self.buffer.pop_front();
             }
             self.buffer.push_back(sample as f64 / i16::MAX as f64);
@@ -100,8 +76,8 @@ impl eframe::App for AudioApp {
                     ui.allocate_ui_with_layout(
                         egui::vec2(available.x, available.y * 0.8),
                         egui::Layout::top_down(egui::Align::Min),
-                        |ui| {
-                            self.pedal_chain.iter_mut().for_each(|&mut pedal| {
+                        |_ui| {
+                            self.pedal_chain.iter_mut().for_each(|&mut _pedal| {
                                 // ui.add()
                             });
                         },
@@ -146,7 +122,7 @@ impl eframe::App for AudioApp {
                     egui::vec2(available.x, half_height),
                     egui::Layout::top_down(egui::Align::Min),
                     |ui| {
-                        let spectrum = self.compute_fft();
+                        let spectrum = compute_fft(&self.buffer);
                         let fft_points: PlotPoints = spectrum
                             .iter()
                             .enumerate()
