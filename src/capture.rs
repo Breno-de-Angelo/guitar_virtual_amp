@@ -2,9 +2,9 @@ use alsa::{
     Direction, Error, PCM, ValueOr,
     pcm::{Access, Format, HwParams},
 };
-use crossbeam::channel::Sender;
+use crossbeam::channel::{Receiver, Sender};
 
-use crate::pedal_chain;
+use crate::pedal_chain::{self, Amp, Reverb};
 
 #[derive(PartialEq, Eq, Debug, Clone, Copy)]
 pub enum IOSelect {
@@ -19,6 +19,11 @@ pub struct AudioConfig {
     pub sample_rate: u32,
     pub period_size: i64,
     pub buffer_size: i64,
+}
+
+pub enum ControlMsg {
+    AddAmp(f32),
+    AddReverb(f32),
 }
 
 pub fn init_device(device_config: AudioConfig) -> Result<PCM, Box<dyn std::error::Error>> {
@@ -61,8 +66,8 @@ pub fn init_device(device_config: AudioConfig) -> Result<PCM, Box<dyn std::error
 pub fn playback(
     capture_pcm: PCM,
     playback_pcm: PCM,
-    tx: Sender<i16>,
-    pedal_chain: pedal_chain::PedalChain,
+    audio_tx: Sender<i16>,
+    control_rx: Receiver<ControlMsg>,
 ) -> Result<(), Error> {
     let cap_io = capture_pcm.io_i16()?;
     let play_io = playback_pcm.io_i16()?;
@@ -71,6 +76,8 @@ pub fn playback(
     let out_period_frames = playback_pcm.hw_params_current()?.get_period_size()?;
     let mut in_buf = vec![0i16; in_period_frames as usize];
     let mut out_buf = vec![0i16; (out_period_frames as usize) * 2];
+
+    let mut pedal_chain = pedal_chain::PedalChain::new();
 
     loop {
         if let Err(err) = cap_io.readi(&mut in_buf) {
@@ -83,7 +90,7 @@ pub fn playback(
             let processed_sample = pedal_chain.process_sample(sample);
             out_buf[i * 2] = processed_sample;
             out_buf[i * 2 + 1] = processed_sample;
-            let _ = tx.try_send(processed_sample);
+            let _ = audio_tx.try_send(processed_sample);
         }
 
         match play_io.writei(&out_buf) {
@@ -91,6 +98,13 @@ pub fn playback(
             Err(err) => {
                 eprintln!("Erro no playback: {}", err);
                 handle_xrun(err, &playback_pcm)?;
+            }
+        }
+
+        for msg in control_rx.try_iter() {
+            match msg {
+                ControlMsg::AddReverb(val) => pedal_chain.add_pedal(Box::new(Reverb::new(val))),
+                ControlMsg::AddAmp(val) => pedal_chain.add_pedal(Box::new(Amp::new(val))),
             }
         }
     }

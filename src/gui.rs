@@ -1,9 +1,11 @@
-use crossbeam::channel::Receiver;
+use crossbeam::channel::{Receiver, Sender};
 use eframe::egui;
 use egui_plot::{Line, Plot, PlotPoints};
 use num_complex::Complex;
 use rustfft::FftPlanner;
 use std::collections::VecDeque;
+
+use crate::capture::ControlMsg;
 
 const BUFFER_SIZE: usize = 2048;
 const SAMPLE_RATE: f64 = 48000.0;
@@ -11,15 +13,17 @@ const FFT_FREQ_RESOLUTION: f64 = SAMPLE_RATE / BUFFER_SIZE as f64;
 // Buffer time = BUFFER_SIZE / f = 42,67 ms
 
 pub struct AudioApp {
-    rx: Receiver<i16>,
+    audio_rx: Receiver<i16>,
+    control_tx: Sender<ControlMsg>,
     buffer: VecDeque<f64>,
     buffer_size: usize,
 }
 
 impl AudioApp {
-    pub fn new(rx: Receiver<i16>) -> Self {
+    pub fn new(audio_rx: Receiver<i16>, control_tx: Sender<ControlMsg>) -> Self {
         Self {
-            rx,
+            audio_rx,
+            control_tx,
             buffer: VecDeque::with_capacity(BUFFER_SIZE),
             buffer_size: BUFFER_SIZE,
         }
@@ -55,7 +59,7 @@ impl AudioApp {
 impl eframe::App for AudioApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         // Consome novos samples do canal
-        while let Ok(sample) = self.rx.try_recv() {
+        while let Ok(sample) = self.audio_rx.try_recv() {
             if self.buffer.len() >= self.buffer_size {
                 self.buffer.pop_front(); // descarta o mais antigo
             }
@@ -101,6 +105,10 @@ impl eframe::App for AudioApp {
                 .show(ui, |plot_ui| {
                     plot_ui.line(Line::new("FFT", fft_points));
                 });
+
+            if ui.button("Add AMP with gain 2.0").clicked() {
+                self.control_tx.send(ControlMsg::AddAmp(2.0)).unwrap();
+            }
         });
 
         // força redesenho contínuo
