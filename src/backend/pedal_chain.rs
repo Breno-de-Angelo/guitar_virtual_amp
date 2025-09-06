@@ -1,10 +1,7 @@
-use crate::ring_buffer;
-
-#[derive(Copy, Clone)]
-pub enum PedalDescription {
-    Amp(AmpParams),
-    Reverb(ReverbParams),
-}
+use crate::{
+    backend::ring_buffer::RingBuffer,
+    shared::pedals::{AmpParams, PedalDescription, ReverbParams},
+};
 
 pub trait Pedal {
     fn apply_effect(&mut self, input: i16) -> i16;
@@ -25,11 +22,9 @@ impl PedalChain {
                 .iter()
                 .map(|&pedal_description| match pedal_description {
                     PedalDescription::Reverb(params) => {
-                        Box::new(Reverb::from_params(params)) as Box<dyn Pedal>
+                        Box::new(Reverb::new(params)) as Box<dyn Pedal>
                     }
-                    PedalDescription::Amp(params) => {
-                        Box::new(Amp::from_params(params)) as Box<dyn Pedal>
-                    }
+                    PedalDescription::Amp(params) => Box::new(Amp::new(params)) as Box<dyn Pedal>,
                 })
                 .collect(),
         }
@@ -47,38 +42,21 @@ impl PedalChain {
     }
 }
 
+const REVERB_DELTA_SAMPLE: usize = 2048;
 pub struct Reverb {
-    buffer: ring_buffer::RingBuffer<65536, i16>,
+    buffer: RingBuffer<65536, i16>,
     params: ReverbParams,
 }
 
-#[derive(Copy, Clone)]
-pub struct ReverbParams {
-    feedback: f32,
-}
-
-impl ReverbParams {
-    pub fn new(feedback: f32) -> Self {
-        Self { feedback }
-    }
-}
-
 impl Reverb {
-    // pub fn new(feedback: f32) -> Self {
-    //     Self {
-    //         buffer: ring_buffer::RingBuffer::new(),
-    //         params: ReverbParams { feedback },
-    //     }
-    // }
-    pub fn from_params(params: ReverbParams) -> Self {
+    pub fn new(params: ReverbParams) -> Self {
         Self {
-            buffer: ring_buffer::RingBuffer::new(),
+            buffer: RingBuffer::new(),
             params,
         }
     }
 }
 
-const REVERB_DELTA_SAMPLE: usize = 2048;
 impl Pedal for Reverb {
     fn apply_effect(&mut self, input: i16) -> i16 {
         self.buffer.push(input);
@@ -97,24 +75,8 @@ pub struct Amp {
     params: AmpParams,
 }
 
-#[derive(Copy, Clone)]
-pub struct AmpParams {
-    gain: f32,
-}
-
-impl AmpParams {
-    pub fn new(gain: f32) -> Self {
-        Self { gain }
-    }
-}
-
 impl Amp {
-    // pub fn new(gain: f32) -> Self {
-    //     Self {
-    //         params: AmpParams { gain },
-    //     }
-    // }
-    pub fn from_params(params: AmpParams) -> Self {
+    pub fn new(params: AmpParams) -> Self {
         Self { params }
     }
 }

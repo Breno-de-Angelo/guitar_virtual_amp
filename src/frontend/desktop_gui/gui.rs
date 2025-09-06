@@ -5,7 +5,7 @@ use num_complex::Complex;
 use rustfft::FftPlanner;
 use std::collections::VecDeque;
 
-use crate::pedal_chain::{AmpParams, PedalDescription, ReverbParams};
+use crate::shared::pedals::{AmpParams, PedalDescription, ReverbParams};
 
 const BUFFER_SIZE: usize = 2048;
 const SAMPLE_RATE: f64 = 48000.0;
@@ -67,27 +67,46 @@ impl eframe::App for AudioApp {
 
         // Side panel for buttons
         egui::SidePanel::right("controls")
-            .resizable(false) // largura fixa
+            .resizable(true)
             .min_width(120.0)
             .show(ctx, |ui| {
                 ui.heading("Controls");
                 ui.separator();
 
-                let mut pedal_chain_updated = false;
-                if ui.button("Add AMP").clicked() {
-                    pedal_chain_updated = true;
-                    self.pedal_chain
-                        .push(PedalDescription::Amp(AmpParams::new(2.0)));
-                }
-                if ui.button("Add Reverb").clicked() {
-                    pedal_chain_updated = true;
-                    self.pedal_chain
-                        .push(PedalDescription::Reverb(ReverbParams::new(0.8)));
-                }
+                ui.vertical(|ui| {
+                    let available = ui.available_size();
 
-                if pedal_chain_updated {
-                    self.control_tx.send(self.pedal_chain.clone()).unwrap();
-                }
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(available.x, available.y * 0.2),
+                        egui::Layout::top_down(egui::Align::Min),
+                        |ui| {
+                            let mut pedal_chain_updated = false;
+                            if ui.button("Add AMP").clicked() {
+                                pedal_chain_updated = true;
+                                self.pedal_chain
+                                    .push(PedalDescription::Amp(AmpParams::new(2.0)));
+                            }
+                            if ui.button("Add Reverb").clicked() {
+                                pedal_chain_updated = true;
+                                self.pedal_chain
+                                    .push(PedalDescription::Reverb(ReverbParams::new(0.8)));
+                            }
+
+                            if pedal_chain_updated {
+                                self.control_tx.send(self.pedal_chain.clone()).unwrap();
+                            }
+                        },
+                    );
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(available.x, available.y * 0.8),
+                        egui::Layout::top_down(egui::Align::Min),
+                        |ui| {
+                            self.pedal_chain.iter_mut().for_each(|&mut pedal| {
+                                // ui.add()
+                            });
+                        },
+                    );
+                })
             });
 
         // Central panel for graphs

@@ -4,7 +4,7 @@ use alsa::{
 };
 use crossbeam::channel::{Receiver, Sender};
 
-use crate::pedal_chain::{self, PedalDescription};
+use crate::{backend::pedal_chain::PedalChain, shared::pedals::PedalDescription};
 
 #[derive(PartialEq, Eq, Debug, Clone, Copy)]
 pub enum IOSelect {
@@ -72,7 +72,7 @@ pub fn playback(
     let mut in_buf = vec![0i16; in_period_frames as usize];
     let mut out_buf = vec![0i16; (out_period_frames as usize) * 2];
 
-    let mut pedal_chain = pedal_chain::PedalChain::new();
+    let mut pedal_chain = PedalChain::new();
 
     loop {
         if let Err(err) = cap_io.readi(&mut in_buf) {
@@ -97,7 +97,7 @@ pub fn playback(
         }
 
         for msg in control_rx.try_iter() {
-            pedal_chain = pedal_chain::PedalChain::from_description(msg);
+            pedal_chain = PedalChain::from_description(msg);
         }
     }
 }
