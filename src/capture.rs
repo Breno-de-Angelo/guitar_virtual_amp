@@ -4,7 +4,7 @@ use alsa::{
 };
 use crossbeam::channel::{Receiver, Sender};
 
-use crate::pedal_chain::{self, Amp, Reverb};
+use crate::pedal_chain::{self, PedalDescription};
 
 #[derive(PartialEq, Eq, Debug, Clone, Copy)]
 pub enum IOSelect {
@@ -19,11 +19,6 @@ pub struct AudioConfig {
     pub sample_rate: u32,
     pub period_size: i64,
     pub buffer_size: i64,
-}
-
-pub enum ControlMsg {
-    AddAmp(f32),
-    AddReverb(f32),
 }
 
 pub fn init_device(device_config: AudioConfig) -> Result<PCM, Box<dyn std::error::Error>> {
@@ -67,7 +62,7 @@ pub fn playback(
     capture_pcm: PCM,
     playback_pcm: PCM,
     audio_tx: Sender<i16>,
-    control_rx: Receiver<ControlMsg>,
+    control_rx: Receiver<Vec<PedalDescription>>,
 ) -> Result<(), Error> {
     let cap_io = capture_pcm.io_i16()?;
     let play_io = playback_pcm.io_i16()?;
@@ -102,10 +97,7 @@ pub fn playback(
         }
 
         for msg in control_rx.try_iter() {
-            match msg {
-                ControlMsg::AddReverb(val) => pedal_chain.add_pedal(Box::new(Reverb::new(val))),
-                ControlMsg::AddAmp(val) => pedal_chain.add_pedal(Box::new(Amp::new(val))),
-            }
+            pedal_chain = pedal_chain::PedalChain::from_description(msg);
         }
     }
 }

@@ -32,6 +32,7 @@ where
         }
     }
 
+    #[allow(dead_code)]
     pub fn iter(&self) -> RingBufferIter<N, T> {
         RingBufferIter::new(&self)
     }
@@ -141,6 +142,7 @@ pub struct RingBufferIter<'a, const N: usize, T: 'a> {
 }
 
 impl<'a, const N: usize, T: 'a> RingBufferIter<'a, N, T> {
+    #[allow(dead_code)]
     pub fn new(ring_buffer: &'a RingBuffer<N, T>) -> Self {
         RingBufferIter {
             ring_buffer,
