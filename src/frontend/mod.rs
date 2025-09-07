@@ -1,1 +1,3 @@
-pub mod desktop_gui;
+pub mod gui;
+mod lib;
+mod ui;

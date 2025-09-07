@@ -4,8 +4,11 @@ use egui_plot::{Line, Plot, PlotPoints};
 use std::collections::VecDeque;
 
 use crate::{
-    frontend::desktop_gui::lib::fft::compute_fft,
-    shared::pedals::{AmpParams, PedalDescription, ReverbParams},
+    frontend::{
+        lib::fft::compute_fft,
+        ui::pedals::{PedalAction, render_pedal_ui},
+    },
+    shared::pedals::{AmpParams, LowPassParams, PedalDescription, ReverbParams},
 };
 
 const BUFFER_SIZE: usize = 2048;
@@ -41,6 +44,8 @@ impl eframe::App for AudioApp {
             self.buffer.push_back(sample as f64 / i16::MAX as f64);
         }
 
+        let mut pedal_chain_updated = false;
+
         // Side panel for buttons
         egui::SidePanel::right("controls")
             .resizable(true)
@@ -56,7 +61,6 @@ impl eframe::App for AudioApp {
                         egui::vec2(available.x, available.y * 0.2),
                         egui::Layout::top_down(egui::Align::Min),
                         |ui| {
-                            let mut pedal_chain_updated = false;
                             if ui.button("Add AMP").clicked() {
                                 pedal_chain_updated = true;
                                 self.pedal_chain
@@ -67,19 +71,35 @@ impl eframe::App for AudioApp {
                                 self.pedal_chain
                                     .push(PedalDescription::Reverb(ReverbParams::new(0.8)));
                             }
-
-                            if pedal_chain_updated {
-                                self.control_tx.send(self.pedal_chain.clone()).unwrap();
+                            if ui.button("Add Low Pass").clicked() {
+                                pedal_chain_updated = true;
+                                self.pedal_chain
+                                    .push(PedalDescription::LowPass(LowPassParams::new(8000.0)));
                             }
                         },
                     );
                     ui.allocate_ui_with_layout(
                         egui::vec2(available.x, available.y * 0.8),
                         egui::Layout::top_down(egui::Align::Min),
-                        |_ui| {
-                            self.pedal_chain.iter_mut().for_each(|&mut _pedal| {
-                                // ui.add()
-                            });
+                        |ui| {
+                            let mut to_remove = Vec::new();
+                            for (i, pedal) in self.pedal_chain.iter_mut().enumerate() {
+                                match render_pedal_ui(ui, pedal) {
+                                    PedalAction::None => {}
+                                    PedalAction::Updated => {
+                                        pedal_chain_updated = true;
+                                    }
+                                    PedalAction::Deleted => {
+                                        to_remove.push(i);
+                                        pedal_chain_updated = true;
+                                    }
+                                }
+                            }
+
+                            // Remove pedais do fim pro início pra não invalidar índices
+                            for i in to_remove.into_iter().rev() {
+                                self.pedal_chain.remove(i);
+                            }
                         },
                     );
                 })
@@ -137,6 +157,10 @@ impl eframe::App for AudioApp {
                     },
                 );
             });
+
+            if pedal_chain_updated {
+                self.control_tx.send(self.pedal_chain.clone()).unwrap();
+            }
         });
 
         ctx.request_repaint();

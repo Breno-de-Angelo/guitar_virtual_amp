@@ -11,7 +11,7 @@ use std::thread;
 
 use crate::{
     backend::capture::{AudioConfig, IOSelect, init_device, playback},
-    frontend::desktop_gui::gui::AudioApp,
+    frontend::gui::AudioApp,
 };
 
 const BUFFER_SIZE: usize = 1024;
