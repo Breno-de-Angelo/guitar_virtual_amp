@@ -2,7 +2,10 @@ use std::f32::consts::{E, PI};
 
 use crate::{
     backend::ring_buffer::RingBuffer,
-    shared::pedals::{AmpParams, DelayParams, LowPassParams, PedalDescription, ReverbParams},
+    shared::{
+        config::GLOBAL_CONFIG,
+        pedals::{AmpParams, DelayParams, LowPassParams, PedalDescription, ReverbParams},
+    },
 };
 
 pub trait Pedal {
@@ -85,7 +88,7 @@ impl Delay {
     pub fn new(params: DelayParams) -> Self {
         Self {
             buffer: RingBuffer::new(),
-            delay_samples: (params.delay * 48000.0) as usize,
+            delay_samples: (params.delay * GLOBAL_CONFIG.sample_rate) as usize,
             params,
         }
     }
@@ -131,7 +134,7 @@ impl LowPass {
     pub fn new(params: LowPassParams) -> Self {
         Self {
             last_sample: 0.0,
-            alpha: f32::powf(E, -2.0 * PI * params.frequency / 48000.0),
+            alpha: f32::powf(E, -2.0 * PI * params.frequency / GLOBAL_CONFIG.sample_rate),
         }
     }
 }

@@ -12,6 +12,7 @@ use std::thread;
 use crate::{
     backend::capture::{AudioConfig, IOSelect, init_device, playback},
     frontend::gui::AudioApp,
+    shared::config::GLOBAL_CONFIG,
 };
 
 const BUFFER_SIZE: usize = 1024;
@@ -24,17 +25,17 @@ fn main() -> Result<(), Box<dyn Error>> {
         device_name: String::from("hw:2,0"),
         io_select: IOSelect::INPUT,
         channels: 1,
-        sample_rate: 48000,
-        period_size: 256,
-        buffer_size: 1024,
+        sample_rate: GLOBAL_CONFIG.sample_rate as u32,
+        period_size: GLOBAL_CONFIG.period_size as i64,
+        buffer_size: GLOBAL_CONFIG.buffer_size as i64,
     })?;
     let playback_pcm = init_device(AudioConfig {
         device_name: String::from("default"),
         io_select: IOSelect::OUTPUT,
         channels: 2,
-        sample_rate: 48000,
-        period_size: 256,
-        buffer_size: 1024,
+        sample_rate: GLOBAL_CONFIG.sample_rate as u32,
+        period_size: GLOBAL_CONFIG.period_size as i64,
+        buffer_size: GLOBAL_CONFIG.buffer_size as i64,
     })?;
 
     thread::spawn(|| {

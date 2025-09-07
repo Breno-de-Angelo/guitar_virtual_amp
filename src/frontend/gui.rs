@@ -9,12 +9,11 @@ use crate::{
         lib::fft::compute_fft,
         ui::pedals::{PedalAction, render_pedal_ui},
     },
-    shared::pedals::PedalDescription,
+    shared::{config::GLOBAL_CONFIG, pedals::PedalDescription},
 };
 
 const BUFFER_SIZE: usize = 2048;
-const SAMPLE_RATE: f64 = 48000.0;
-const FFT_FREQ_RESOLUTION: f64 = SAMPLE_RATE / BUFFER_SIZE as f64;
+const FFT_FREQ_RESOLUTION: f64 = GLOBAL_CONFIG.sample_rate as f64 / BUFFER_SIZE as f64;
 // Buffer time = BUFFER_SIZE / f = 42,67 ms
 
 pub struct AudioApp {
