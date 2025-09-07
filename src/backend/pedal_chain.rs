@@ -2,7 +2,7 @@ use std::f32::consts::{E, PI};
 
 use crate::{
     backend::ring_buffer::RingBuffer,
-    shared::pedals::{AmpParams, LowPassParams, PedalDescription, ReverbParams},
+    shared::pedals::{AmpParams, DelayParams, LowPassParams, PedalDescription, ReverbParams},
 };
 
 pub trait Pedal {
@@ -30,14 +30,13 @@ impl PedalChain {
                     PedalDescription::LowPass(params) => {
                         Box::new(LowPass::new(params)) as Box<dyn Pedal>
                     }
+                    PedalDescription::Delay(params) => {
+                        Box::new(Delay::new(params)) as Box<dyn Pedal>
+                    }
                 })
                 .collect(),
         }
     }
-
-    // pub fn add_pedal(&mut self, pedal: Box<dyn Pedal>) {
-    //     self.pedals.push(pedal);
-    // }
 
     pub fn process_sample(&mut self, mut sample: i16) -> i16 {
         for pedal in &mut self.pedals {
@@ -72,6 +71,36 @@ impl Pedal for Reverb {
         };
         let output =
             (input as f32 + delayed as f32 * self.params.feedback).clamp(-32768.0, 32767.0) as i16;
+        output
+    }
+}
+
+pub struct Delay {
+    buffer: RingBuffer<65536, i16>,
+    delay_samples: usize,
+    params: DelayParams,
+}
+
+impl Delay {
+    pub fn new(params: DelayParams) -> Self {
+        Self {
+            buffer: RingBuffer::new(),
+            delay_samples: (params.delay * 48000.0) as usize,
+            params,
+        }
+    }
+}
+
+impl Pedal for Delay {
+    fn apply_effect(&mut self, input: i16) -> i16 {
+        self.buffer.push(input);
+        let delayed = if self.buffer.len() >= self.delay_samples {
+            self.buffer[self.buffer.len() - self.delay_samples]
+        } else {
+            0
+        };
+        let output =
+            (input as f32 + delayed as f32 * self.params.gain).clamp(-32768.0, 32767.0) as i16;
         output
     }
 }

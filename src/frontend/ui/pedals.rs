@@ -1,6 +1,8 @@
 use eframe::egui::{Slider, Ui};
 
-use crate::shared::pedals::{AmpParams, LowPassParams, PedalDescription, ReverbParams};
+use crate::shared::pedals::{
+    AmpParams, DelayParams, LowPassParams, PedalDescription, ReverbParams,
+};
 
 pub enum PedalAction {
     None,
@@ -16,6 +18,7 @@ pub fn render_pedal_ui(ui: &mut Ui, pedal: &mut PedalDescription) -> PedalAction
         } else {
             let updated = match pedal {
                 PedalDescription::Amp(params) => amp_ui(ui, params),
+                PedalDescription::Delay(params) => delay_ui(ui, params),
                 PedalDescription::Reverb(params) => reverb_ui(ui, params),
                 PedalDescription::LowPass(params) => low_pass_ui(ui, params),
             };
@@ -34,6 +37,16 @@ fn amp_ui(ui: &mut Ui, params: &mut AmpParams) -> bool {
         ui.label("Amp");
         let slider = ui.add(Slider::new(&mut params.gain, 0.0..=5.0).text("Gain"));
         slider.changed()
+    })
+    .inner
+}
+
+fn delay_ui(ui: &mut Ui, params: &mut DelayParams) -> bool {
+    ui.group(|ui| {
+        ui.label("Delay");
+        let delay_slider = ui.add(Slider::new(&mut params.delay, 0.0..=1.0).text("Delay"));
+        let gain_slider = ui.add(Slider::new(&mut params.gain, 0.0..=1.0).text("Gain"));
+        delay_slider.changed() || gain_slider.changed()
     })
     .inner
 }

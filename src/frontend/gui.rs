@@ -2,13 +2,14 @@ use crossbeam::channel::{Receiver, Sender};
 use eframe::egui;
 use egui_plot::{Line, Plot, PlotPoints};
 use std::collections::VecDeque;
+use strum::IntoEnumIterator;
 
 use crate::{
     frontend::{
         lib::fft::compute_fft,
         ui::pedals::{PedalAction, render_pedal_ui},
     },
-    shared::pedals::{AmpParams, LowPassParams, PedalDescription, ReverbParams},
+    shared::pedals::PedalDescription,
 };
 
 const BUFFER_SIZE: usize = 2048;
@@ -61,20 +62,11 @@ impl eframe::App for AudioApp {
                         egui::vec2(available.x, available.y * 0.2),
                         egui::Layout::top_down(egui::Align::Min),
                         |ui| {
-                            if ui.button("Add AMP").clicked() {
-                                pedal_chain_updated = true;
-                                self.pedal_chain
-                                    .push(PedalDescription::Amp(AmpParams::new(2.0)));
-                            }
-                            if ui.button("Add Reverb").clicked() {
-                                pedal_chain_updated = true;
-                                self.pedal_chain
-                                    .push(PedalDescription::Reverb(ReverbParams::new(0.8)));
-                            }
-                            if ui.button("Add Low Pass").clicked() {
-                                pedal_chain_updated = true;
-                                self.pedal_chain
-                                    .push(PedalDescription::LowPass(LowPassParams::new(8000.0)));
+                            for pedal in PedalDescription::iter() {
+                                if ui.button(String::from("Add ") + pedal.name()).clicked() {
+                                    pedal_chain_updated = true;
+                                    self.pedal_chain.push(pedal);
+                                }
                             }
                         },
                     );
