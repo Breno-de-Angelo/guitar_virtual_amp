@@ -52,11 +52,21 @@ fn delay_ui(ui: &mut Ui, params: &mut DelayParams) -> bool {
     .inner
 }
 
-fn reverb_ui(ui: &mut Ui, params: &mut ReverbParams) -> bool {
+pub fn reverb_ui(ui: &mut Ui, params: &mut ReverbParams) -> bool {
     ui.group(|ui| {
         ui.label("Reverb");
-        let slider = ui.add(Slider::new(&mut params.feedback, 0.0..=1.0).text("Feedback"));
-        slider.changed()
+
+        let mut changed = false;
+
+        let room_slider = ui.add(Slider::new(&mut params.room_size, 0.0..=0.99).text("Room Size"));
+        let mix_slider = ui.add(Slider::new(&mut params.mix, 0.0..=1.0).text("Mix"));
+        let damping_slider = ui.add(Slider::new(&mut params.damping, 0.0..=0.99).text("Damping"));
+
+        changed |= room_slider.changed();
+        changed |= mix_slider.changed();
+        changed |= damping_slider.changed();
+
+        changed
     })
     .inner
 }

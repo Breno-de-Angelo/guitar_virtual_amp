@@ -23,12 +23,18 @@ impl PedalDescription {
 
 #[derive(Copy, Clone)]
 pub struct ReverbParams {
-    pub feedback: f32,
+    pub room_size: f32, // Feedback / duração do reverb (0.0 a 0.99)
+    pub mix: f32,       // 0.0 = só dry, 1.0 = só wet
+    pub damping: f32,   // Decaimento das altas frequências (0.0 a 0.99)
 }
 
 impl Default for ReverbParams {
     fn default() -> Self {
-        Self { feedback: 0.5 }
+        Self {
+            room_size: 0.5,
+            mix: 0.3,
+            damping: 0.3,
+        }
     }
 }
 
