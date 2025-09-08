@@ -6,6 +6,7 @@ pub enum PedalDescription {
     Delay(DelayParams),
     Reverb(ReverbParams),
     LowPass(LowPassParams),
+    Flanger(FlangerParams),
 }
 
 impl PedalDescription {
@@ -15,6 +16,7 @@ impl PedalDescription {
             PedalDescription::Delay(_) => "Delay",
             PedalDescription::Reverb(_) => "Reverb",
             PedalDescription::LowPass(_) => "Low Pass",
+            PedalDescription::Flanger(_) => "Flanger",
         }
     }
 }
@@ -62,6 +64,23 @@ impl Default for DelayParams {
     fn default() -> Self {
         Self {
             delay: 0.1,
+            gain: 0.5,
+        }
+    }
+}
+
+#[derive(Copy, Clone)]
+pub struct FlangerParams {
+    pub delay_range: f32,
+    pub delay_rate: f32,
+    pub gain: f32,
+}
+
+impl Default for FlangerParams {
+    fn default() -> Self {
+        Self {
+            delay_range: 2.0,
+            delay_rate: 0.5,
             gain: 0.5,
         }
     }

@@ -1,7 +1,7 @@
 use eframe::egui::{Slider, Ui};
 
 use crate::shared::pedals::{
-    AmpParams, DelayParams, LowPassParams, PedalDescription, ReverbParams,
+    AmpParams, DelayParams, FlangerParams, LowPassParams, PedalDescription, ReverbParams,
 };
 
 pub enum PedalAction {
@@ -21,6 +21,7 @@ pub fn render_pedal_ui(ui: &mut Ui, pedal: &mut PedalDescription) -> PedalAction
                 PedalDescription::Delay(params) => delay_ui(ui, params),
                 PedalDescription::Reverb(params) => reverb_ui(ui, params),
                 PedalDescription::LowPass(params) => low_pass_ui(ui, params),
+                PedalDescription::Flanger(params) => flanger_ui(ui, params),
             };
             if updated {
                 PedalAction::Updated
@@ -44,7 +45,7 @@ fn amp_ui(ui: &mut Ui, params: &mut AmpParams) -> bool {
 fn delay_ui(ui: &mut Ui, params: &mut DelayParams) -> bool {
     ui.group(|ui| {
         ui.label("Delay");
-        let delay_slider = ui.add(Slider::new(&mut params.delay, 0.0..=1.0).text("Delay"));
+        let delay_slider = ui.add(Slider::new(&mut params.delay, 0.0..=1.0).text("Delay (s)"));
         let gain_slider = ui.add(Slider::new(&mut params.gain, 0.0..=1.0).text("Gain"));
         delay_slider.changed() || gain_slider.changed()
     })
@@ -63,8 +64,22 @@ fn reverb_ui(ui: &mut Ui, params: &mut ReverbParams) -> bool {
 fn low_pass_ui(ui: &mut Ui, params: &mut LowPassParams) -> bool {
     ui.group(|ui| {
         ui.label("Low Pass");
-        let slider = ui.add(Slider::new(&mut params.frequency, 50.0..=10_000.0).text("Frequency"));
+        let slider =
+            ui.add(Slider::new(&mut params.frequency, 50.0..=10_000.0).text("Frequency (Hz)"));
         slider.changed()
+    })
+    .inner
+}
+
+fn flanger_ui(ui: &mut Ui, params: &mut FlangerParams) -> bool {
+    ui.group(|ui| {
+        ui.label("Low Pass");
+        let delay_range_slider =
+            ui.add(Slider::new(&mut params.delay_range, 0.0..=10.0).text("Delay Range (ms)"));
+        let delay_rate_slider =
+            ui.add(Slider::new(&mut params.delay_rate, 0.0..=5.0).text("Delay Rate (Hz)"));
+        let gain_slider = ui.add(Slider::new(&mut params.gain, 0.0..=1.0).text("Gain"));
+        delay_range_slider.changed() || delay_rate_slider.changed() || gain_slider.changed()
     })
     .inner
 }
