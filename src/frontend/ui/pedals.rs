@@ -42,12 +42,29 @@ fn amp_ui(ui: &mut Ui, params: &mut AmpParams) -> bool {
     .inner
 }
 
-fn delay_ui(ui: &mut Ui, params: &mut DelayParams) -> bool {
+pub fn delay_ui(ui: &mut Ui, params: &mut DelayParams) -> bool {
     ui.group(|ui| {
         ui.label("Delay");
-        let delay_slider = ui.add(Slider::new(&mut params.delay, 0.0..=1.0).text("Delay (s)"));
+
+        let mut changed = false;
+
+        let delay_slider =
+            ui.add(Slider::new(&mut params.delay_ms, 1.0..=2000.0).text("Delay (ms)"));
         let gain_slider = ui.add(Slider::new(&mut params.gain, 0.0..=1.0).text("Gain"));
-        delay_slider.changed() || gain_slider.changed()
+        let feedback_slider =
+            ui.add(Slider::new(&mut params.feedback, 0.0..=0.99).text("Feedback"));
+        let mix_slider = ui.add(Slider::new(&mut params.mix, 0.0..=1.0).text("Mix"));
+        let taps_slider = ui.add(Slider::new(&mut params.taps, 1..=8).text("Taps"));
+        let damping_slider = ui.add(Slider::new(&mut params.damping, 0.0..=0.99).text("Damping"));
+
+        changed |= delay_slider.changed();
+        changed |= gain_slider.changed();
+        changed |= feedback_slider.changed();
+        changed |= mix_slider.changed();
+        changed |= taps_slider.changed();
+        changed |= damping_slider.changed();
+
+        changed
     })
     .inner
 }

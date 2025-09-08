@@ -4,31 +4,55 @@ use crate::{
 };
 
 pub struct Delay {
-    buffer: RingBuffer<65536, i16>,
-    delay_samples: usize,
+    buffer: RingBuffer<65536, f32>,
     params: DelayParams,
+    delay_samples: usize,
+    last_feedback: f32,
 }
 
 impl Delay {
     pub fn new(params: DelayParams) -> Self {
+        let delay_samples = ((params.delay_ms / 1000.0) * GLOBAL_CONFIG.sample_rate as f32)
+            .round()
+            .max(1.0) as usize;
+
         Self {
             buffer: RingBuffer::new(),
-            delay_samples: (params.delay * GLOBAL_CONFIG.sample_rate) as usize,
             params,
+            delay_samples,
+            last_feedback: 0.0,
         }
     }
 }
 
 impl Pedal for Delay {
     fn apply_effect(&mut self, input: i16) -> i16 {
-        self.buffer.push(input);
-        let delayed = if self.buffer.len() >= self.delay_samples {
-            self.buffer[self.buffer.len() - self.delay_samples]
-        } else {
-            0
-        };
-        let output =
-            (input as f32 + delayed as f32 * self.params.gain).clamp(-32768.0, 32767.0) as i16;
-        output
+        let input_f = input as f32;
+
+        // Multi-tap: somar taps com múltiplos do delay principal
+        let mut delayed_sum = 0.0_f32;
+        for tap in 1..=self.params.taps {
+            let tap_delay = self.delay_samples * tap;
+            if self.buffer.len() >= tap_delay {
+                delayed_sum += self.buffer[self.buffer.len() - tap_delay];
+            }
+        }
+        delayed_sum *= self.params.gain / self.params.taps as f32;
+
+        // Feedback com filtro passa-baixa (damping)
+        let feedback_sample = delayed_sum * self.params.feedback;
+        let filtered_feedback = self.last_feedback * (1.0 - self.params.damping)
+            + feedback_sample * self.params.damping;
+        self.last_feedback = filtered_feedback;
+
+        // Escrever no buffer
+        self.buffer.push(input_f + filtered_feedback);
+
+        // Mix wet/dry
+        let wet = self.params.mix.clamp(0.0, 1.0);
+        let dry = 1.0 - wet;
+        let out_f = input_f * dry + delayed_sum * wet;
+
+        out_f.clamp(-32768.0, 32767.0) as i16
     }
 }

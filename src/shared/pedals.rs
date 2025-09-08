@@ -62,15 +62,23 @@ impl Default for LowPassParams {
 
 #[derive(Copy, Clone)]
 pub struct DelayParams {
-    pub delay: f32,
-    pub gain: f32,
+    pub delay_ms: f32, // tempo do delay principal em ms
+    pub feedback: f32, // quanto do sinal volta ao buffer (0.0 a 0.99)
+    pub gain: f32,     // volume do delay na saída (0.0 a 1.0)
+    pub mix: f32,      // wet/dry mix (0.0 dry, 1.0 wet)
+    pub taps: usize,   // número de ecos (taps)
+    pub damping: f32,  // filtro passa-baixa no feedback (0.0 a 1.0)
 }
 
 impl Default for DelayParams {
     fn default() -> Self {
         Self {
-            delay: 0.1,
-            gain: 0.5,
+            delay_ms: 500.0,
+            feedback: 0.5,
+            gain: 0.8,
+            mix: 0.5,
+            taps: 4,
+            damping: 0.3,
         }
     }
 }
