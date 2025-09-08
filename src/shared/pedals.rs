@@ -8,6 +8,7 @@ pub enum PedalDescription {
     LowPass(LowPassParams),
     Flanger(FlangerParams),
     WahWah(WahWahParams),
+    Distortion(DistortionParams),
 }
 
 impl PedalDescription {
@@ -19,6 +20,7 @@ impl PedalDescription {
             PedalDescription::LowPass(_) => "Low Pass",
             PedalDescription::Flanger(_) => "Flanger",
             PedalDescription::WahWah(_) => "WahWah",
+            PedalDescription::Distortion(_) => "Distortion",
         }
     }
 }
@@ -119,6 +121,27 @@ impl Default for WahWahParams {
             mix: 0.5,
             lfo_rate: 2.0,
             lfo_depth: 0.5,
+        }
+    }
+}
+
+#[derive(Copy, Clone)]
+pub struct DistortionParams {
+    pub drive: f32,        // Amount of distortion/saturation (0.0 to 10.0)
+    pub tone: f32,         // Tone control - high frequency rolloff (0.0 to 1.0)
+    pub level: f32,        // Output level (0.0 to 2.0)
+    pub mix: f32,          // Wet/dry mix (0.0 dry, 1.0 wet)
+    pub bias: f32,         // DC bias offset (-1.0 to 1.0)
+}
+
+impl Default for DistortionParams {
+    fn default() -> Self {
+        Self {
+            drive: 3.0,
+            tone: 0.5,
+            level: 0.8,
+            mix: 0.7,
+            bias: 0.0,
         }
     }
 }

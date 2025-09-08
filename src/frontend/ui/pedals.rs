@@ -1,7 +1,7 @@
 use eframe::egui::{Slider, Ui};
 
 use crate::shared::pedals::{
-    AmpParams, DelayParams, FlangerParams, LowPassParams, PedalDescription, ReverbParams, WahWahParams,
+    AmpParams, DelayParams, DistortionParams, FlangerParams, LowPassParams, PedalDescription, ReverbParams, WahWahParams,
 };
 
 pub enum PedalAction {
@@ -23,6 +23,7 @@ pub fn render_pedal_ui(ui: &mut Ui, pedal: &mut PedalDescription) -> PedalAction
                 PedalDescription::LowPass(params) => low_pass_ui(ui, params),
                 PedalDescription::Flanger(params) => flanger_ui(ui, params),
                 PedalDescription::WahWah(params) => wah_wah_ui(ui, params),
+                PedalDescription::Distortion(params) => distortion_ui(ui, params),
             };
             if updated {
                 PedalAction::Updated
@@ -129,6 +130,29 @@ fn wah_wah_ui(ui: &mut Ui, params: &mut WahWahParams) -> bool {
         changed |= mix_slider.changed();
         changed |= lfo_rate_slider.changed();
         changed |= lfo_depth_slider.changed();
+
+        changed
+    })
+    .inner
+}
+
+fn distortion_ui(ui: &mut Ui, params: &mut DistortionParams) -> bool {
+    ui.group(|ui| {
+        ui.label("Distortion");
+
+        let mut changed = false;
+
+        let drive_slider = ui.add(Slider::new(&mut params.drive, 0.0..=10.0).text("Drive"));
+        let tone_slider = ui.add(Slider::new(&mut params.tone, 0.0..=1.0).text("Tone"));
+        let level_slider = ui.add(Slider::new(&mut params.level, 0.0..=2.0).text("Level"));
+        let mix_slider = ui.add(Slider::new(&mut params.mix, 0.0..=1.0).text("Mix"));
+        let bias_slider = ui.add(Slider::new(&mut params.bias, -1.0..=1.0).text("Bias"));
+
+        changed |= drive_slider.changed();
+        changed |= tone_slider.changed();
+        changed |= level_slider.changed();
+        changed |= mix_slider.changed();
+        changed |= bias_slider.changed();
 
         changed
     })

@@ -1,6 +1,6 @@
 use crate::{
     backend::pedals::{
-        amp::Amp, delay::Delay, flanger::Flanger, low_pass::LowPass, reverb::Reverb, wah_wah::WahWah,
+        amp::Amp, delay::Delay, distortion::Distortion, flanger::Flanger, low_pass::LowPass, reverb::Reverb, wah_wah::WahWah,
     },
     shared::pedals::PedalDescription,
 };
@@ -38,6 +38,9 @@ impl PedalChain {
                     }
                     PedalDescription::WahWah(params) => {
                         Box::new(WahWah::new(params)) as Box<dyn Pedal>
+                    }
+                    PedalDescription::Distortion(params) => {
+                        Box::new(Distortion::new(params)) as Box<dyn Pedal>
                     }
                 })
                 .collect(),
