@@ -4,7 +4,7 @@ use alsa::{
 };
 use crossbeam::channel::{Receiver, Sender};
 
-use crate::{backend::pedal_chain::PedalChain, shared::pedals::PedalDescription};
+use crate::{backend::pedals::pedal::PedalChain, shared::pedals::PedalDescription};
 
 #[derive(PartialEq, Eq, Debug, Clone, Copy)]
 pub enum IOSelect {

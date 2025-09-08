@@ -1,4 +1,4 @@
 pub mod capture;
-mod dsp;
-pub mod pedal_chain;
+pub mod dsp;
+pub mod pedals;
 mod ring_buffer;

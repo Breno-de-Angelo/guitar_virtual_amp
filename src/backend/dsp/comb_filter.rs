@@ -1,6 +1,5 @@
 use crate::backend::ring_buffer::RingBuffer;
 
-/// Comb filter com realimentação e damping (filtro passa-baixa no feedback).
 pub struct CombFilter {
     buf: RingBuffer<65536, f32>,
     delay_len: usize,
@@ -33,37 +32,6 @@ impl CombFilter {
 
         let output = delayed;
         let into_delay = input + self.filter_store * self.feedback;
-        self.buf.push(into_delay);
-
-        output
-    }
-}
-
-/// Allpass filter para espalhar reflexões.
-pub struct Allpass {
-    buf: RingBuffer<65536, f32>,
-    delay_len: usize,
-    feedback: f32,
-}
-
-impl Allpass {
-    pub fn new(delay_len: usize, feedback: f32) -> Self {
-        Self {
-            buf: RingBuffer::new(),
-            delay_len: delay_len.max(1),
-            feedback,
-        }
-    }
-
-    pub fn process(&mut self, input: f32) -> f32 {
-        let delayed = if self.buf.len() > self.delay_len {
-            self.buf[self.buf.len() - 1 - self.delay_len]
-        } else {
-            0.0
-        };
-
-        let output = delayed - self.feedback * input;
-        let into_delay = input + self.feedback * output;
         self.buf.push(into_delay);
 
         output
