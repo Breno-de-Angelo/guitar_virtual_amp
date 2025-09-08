@@ -1,7 +1,7 @@
 use eframe::egui::{Slider, Ui};
 
 use crate::shared::pedals::{
-    AmpParams, DelayParams, FlangerParams, LowPassParams, PedalDescription, ReverbParams,
+    AmpParams, DelayParams, FlangerParams, LowPassParams, PedalDescription, ReverbParams, WahWahParams,
 };
 
 pub enum PedalAction {
@@ -22,6 +22,7 @@ pub fn render_pedal_ui(ui: &mut Ui, pedal: &mut PedalDescription) -> PedalAction
                 PedalDescription::Reverb(params) => reverb_ui(ui, params),
                 PedalDescription::LowPass(params) => low_pass_ui(ui, params),
                 PedalDescription::Flanger(params) => flanger_ui(ui, params),
+                PedalDescription::WahWah(params) => wah_wah_ui(ui, params),
             };
             if updated {
                 PedalAction::Updated
@@ -100,13 +101,36 @@ fn low_pass_ui(ui: &mut Ui, params: &mut LowPassParams) -> bool {
 
 fn flanger_ui(ui: &mut Ui, params: &mut FlangerParams) -> bool {
     ui.group(|ui| {
-        ui.label("Low Pass");
+        ui.label("Flanger");
         let delay_range_slider =
             ui.add(Slider::new(&mut params.delay_range, 0.0..=10.0).text("Delay Range (ms)"));
         let delay_rate_slider =
             ui.add(Slider::new(&mut params.delay_rate, 0.0..=5.0).text("Delay Rate (Hz)"));
         let gain_slider = ui.add(Slider::new(&mut params.gain, 0.0..=1.0).text("Gain"));
         delay_range_slider.changed() || delay_rate_slider.changed() || gain_slider.changed()
+    })
+    .inner
+}
+
+fn wah_wah_ui(ui: &mut Ui, params: &mut WahWahParams) -> bool {
+    ui.group(|ui| {
+        ui.label("WahWah");
+
+        let mut changed = false;
+
+        let frequency_slider = ui.add(Slider::new(&mut params.frequency, 100.0..=8000.0).text("Frequency (Hz)"));
+        let resonance_slider = ui.add(Slider::new(&mut params.resonance, 0.1..=10.0).text("Resonance"));
+        let mix_slider = ui.add(Slider::new(&mut params.mix, 0.0..=1.0).text("Mix"));
+        let lfo_rate_slider = ui.add(Slider::new(&mut params.lfo_rate, 0.1..=10.0).text("LFO Rate (Hz)"));
+        let lfo_depth_slider = ui.add(Slider::new(&mut params.lfo_depth, 0.0..=1.0).text("LFO Depth"));
+
+        changed |= frequency_slider.changed();
+        changed |= resonance_slider.changed();
+        changed |= mix_slider.changed();
+        changed |= lfo_rate_slider.changed();
+        changed |= lfo_depth_slider.changed();
+
+        changed
     })
     .inner
 }

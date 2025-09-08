@@ -7,6 +7,7 @@ pub enum PedalDescription {
     Reverb(ReverbParams),
     LowPass(LowPassParams),
     Flanger(FlangerParams),
+    WahWah(WahWahParams),
 }
 
 impl PedalDescription {
@@ -17,6 +18,7 @@ impl PedalDescription {
             PedalDescription::Reverb(_) => "Reverb",
             PedalDescription::LowPass(_) => "Low Pass",
             PedalDescription::Flanger(_) => "Flanger",
+            PedalDescription::WahWah(_) => "WahWah",
         }
     }
 }
@@ -96,6 +98,27 @@ impl Default for FlangerParams {
             delay_range: 2.0,
             delay_rate: 0.5,
             gain: 0.5,
+        }
+    }
+}
+
+#[derive(Copy, Clone)]
+pub struct WahWahParams {
+    pub frequency: f32,    // Center frequency of the wah filter (Hz)
+    pub resonance: f32,    // Q factor / resonance (0.1 to 10.0)
+    pub mix: f32,          // Wet/dry mix (0.0 dry, 1.0 wet)
+    pub lfo_rate: f32,     // LFO rate for auto-wah (Hz)
+    pub lfo_depth: f32,    // LFO depth (0.0 to 1.0)
+}
+
+impl Default for WahWahParams {
+    fn default() -> Self {
+        Self {
+            frequency: 1000.0,
+            resonance: 2.0,
+            mix: 0.5,
+            lfo_rate: 2.0,
+            lfo_depth: 0.5,
         }
     }
 }
