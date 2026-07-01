@@ -1,0 +1,15 @@
+[package]
+name = "guitar_desktop"
+version = "0.1.0"
+edition = "2024"
+default-run = "guitar_desktop"
+
+[[bin]]
+name = "test_device_switch"
+path = "src/test_device_switch.rs"
+
+[dependencies]
+guitar_core = { path = "../guitar_core" }
+eframe = "0.32.1"
+crossbeam = "0.8.4"
+cpal = "0.18"

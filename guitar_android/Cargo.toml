@@ -1,0 +1,35 @@
+[package]
+name = "guitar_android"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+guitar_core = { path = "../guitar_core" }
+eframe = { version = "0.32.1", default-features = false, features = ["android-native-activity", "glow", "default_fonts"] }
+crossbeam = "0.8.4"
+log = "0.4"
+
+[target.'cfg(target_os = "android")'.dependencies]
+android-activity = { version = "0.6", features = ["native-activity"] }
+android_logger = "0.14"
+
+[package.metadata.android]
+package = "com.breno.guitar_virtual_amp"
+apk_name = "guitar_virtual_amp"
+build_targets = [ "armv7-linux-androideabi" ]
+
+[package.metadata.android.sdk]
+min_sdk_version = 26
+target_sdk_version = 35
+
+[[package.metadata.android.uses_permission]]
+name = "android.permission.RECORD_AUDIO"
+
+[package.metadata.android.signing.release]
+path = "/home/breno/.android/debug.keystore"
+keystore_password = "android"
+key_alias = "androiddebugkey"
+key_password = "android"

@@ -5,7 +5,7 @@ use crate::{
     shared::pedals::PedalDescription,
 };
 
-pub trait Pedal {
+pub trait Pedal: Send {
     fn apply_effect(&mut self, input: i16) -> i16;
 }
 
