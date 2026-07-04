@@ -424,6 +424,9 @@ fn cabinet_ui(ui: &mut Ui, params: &mut CabinetParams) -> bool {
 
         let mut changed = false;
 
+        // `rfd` (native file picker) has no Android backend, so Android falls
+        // back to a plain text field for entering the IR's on-device path.
+        #[cfg(not(target_os = "android"))]
         ui.horizontal(|ui| {
             if ui.button("Load IR...").clicked() {
                 if let Some(path) = rfd::FileDialog::new()
@@ -434,12 +437,19 @@ fn cabinet_ui(ui: &mut Ui, params: &mut CabinetParams) -> bool {
                     changed = true;
                 }
             }
-            let loaded = params
-                .ir_path
-                .as_deref()
-                .unwrap_or("No IR loaded");
+            let loaded = params.ir_path.as_deref().unwrap_or("No IR loaded");
             ui.label(loaded);
         });
+
+        #[cfg(target_os = "android")]
+        {
+            let mut path = params.ir_path.clone().unwrap_or_default();
+            ui.label("IR file path:");
+            if ui.text_edit_singleline(&mut path).changed() {
+                params.ir_path = if path.is_empty() { None } else { Some(path) };
+                changed = true;
+            }
+        }
 
         let mix_slider = ui.add(Slider::new(&mut params.mix, 0.0..=1.0).text("Mix"));
         changed |= mix_slider.changed();

@@ -17,4 +17,10 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 dirs = "5.0"
 hound = "3.5"
+
+# rfd has no Android backend at all (it only supports desktop/web toolkits),
+# so it must not be built for the Android target or `cargo apk build` fails
+# at compile time. `cabinet_ui` falls back to a plain text field for the IR
+# path on Android instead of a native file picker.
+[target.'cfg(not(target_os = "android"))'.dependencies]
 rfd = "0.15"
