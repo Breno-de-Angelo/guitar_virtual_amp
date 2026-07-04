@@ -17,6 +17,7 @@ pub enum PedalDescription {
     Eq(EqParams),
     Phaser(PhaserParams),
     Octaver(OctaverParams),
+    PitchShift(PitchShifterParams),
 }
 
 impl PedalDescription {
@@ -36,6 +37,7 @@ impl PedalDescription {
             PedalDescription::Eq(_) => "EQ",
             PedalDescription::Phaser(_) => "Phaser",
             PedalDescription::Octaver(_) => "Octaver",
+            PedalDescription::PitchShift(_) => "Pitch Shifter",
         }
     }
 }
@@ -157,6 +159,23 @@ impl Default for DistortionParams {
             level: 0.8,
             mix: 0.7,
             bias: 0.0,
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PitchShifterParams {
+    pub semitones: f32,     // Pitch shift amount in semitones (-12.0 to +12.0), 0.0 = no shift
+    pub mix: f32,           // Wet/dry mix (0.0 dry, 1.0 wet)
+    pub grain_size_ms: f32, // Overlap-add grain/window size in ms (~50-100ms typical)
+}
+
+impl Default for PitchShifterParams {
+    fn default() -> Self {
+        Self {
+            semitones: 0.0,
+            mix: 0.5,
+            grain_size_ms: 80.0,
         }
     }
 }

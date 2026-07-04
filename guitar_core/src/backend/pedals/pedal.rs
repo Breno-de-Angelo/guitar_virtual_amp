@@ -2,7 +2,8 @@ use crate::{
     backend::pedals::{
         amp::Amp, chorus::Chorus, compressor::Compressor, delay::Delay, distortion::Distortion,
         eq::EqPedal, flanger::Flanger, low_pass::LowPass, noise_gate::NoiseGate,
-        octaver::Octaver, phaser::Phaser, reverb::Reverb, tremolo::Tremolo, wah_wah::WahWah,
+        octaver::Octaver, phaser::Phaser, pitch_shifter::PitchShifter, reverb::Reverb,
+        tremolo::Tremolo, wah_wah::WahWah,
     },
     shared::pedals::PedalDescription,
 };
@@ -70,6 +71,9 @@ impl PedalChain {
                     }
                     PedalDescription::Octaver(params) => {
                         Box::new(Octaver::new(params)) as Box<dyn Pedal>
+                    }
+                    PedalDescription::PitchShift(params) => {
+                        Box::new(PitchShifter::new(params)) as Box<dyn Pedal>
                     }
                 })
                 .collect(),

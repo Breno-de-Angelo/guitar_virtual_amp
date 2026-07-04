@@ -3,7 +3,7 @@ use eframe::egui::{Slider, Ui};
 use crate::shared::pedals::{
     AmpParams, ChorusParams, CompressorParams, DelayParams, DistortionParams, EqParams,
     FlangerParams, LowPassParams, NoiseGateParams, OctaverParams, PedalDescription, PhaserParams,
-    ReverbParams, TremoloParams, WahWahParams,
+    PitchShifterParams, ReverbParams, TremoloParams, WahWahParams,
 };
 
 pub enum PedalAction {
@@ -33,6 +33,7 @@ pub fn render_pedal_ui(ui: &mut Ui, pedal: &mut PedalDescription) -> PedalAction
                 PedalDescription::Eq(params) => eq_ui(ui, params),
                 PedalDescription::Phaser(params) => phaser_ui(ui, params),
                 PedalDescription::Octaver(params) => octaver_ui(ui, params),
+                PedalDescription::PitchShift(params) => pitch_shifter_ui(ui, params),
             };
             if updated {
                 PedalAction::Updated
@@ -139,6 +140,24 @@ fn wah_wah_ui(ui: &mut Ui, params: &mut WahWahParams) -> bool {
         changed |= mix_slider.changed();
         changed |= lfo_rate_slider.changed();
         changed |= lfo_depth_slider.changed();
+
+        changed
+    })
+    .inner
+}
+
+fn pitch_shifter_ui(ui: &mut Ui, params: &mut PitchShifterParams) -> bool {
+    ui.group(|ui| {
+        ui.label("Pitch Shifter");
+
+        let mut changed = false;
+
+        let semitones_slider =
+            ui.add(Slider::new(&mut params.semitones, -12.0..=12.0).text("Semitones"));
+        let mix_slider = ui.add(Slider::new(&mut params.mix, 0.0..=1.0).text("Mix"));
+
+        changed |= semitones_slider.changed();
+        changed |= mix_slider.changed();
 
         changed
     })

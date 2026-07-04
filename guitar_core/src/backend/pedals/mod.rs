@@ -10,6 +10,7 @@ mod noise_gate;
 mod octaver;
 pub mod pedal;
 mod phaser;
+mod pitch_shifter;
 mod reverb;
 mod tremolo;
 mod wah_wah;
