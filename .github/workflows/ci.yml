@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-test-lint:
+    name: Build, test, and lint (workspace, excluding guitar_android)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo registry and target directory
+        uses: Swatinem/rust-cache@v2
+
+      # NOTE: `cargo fmt --all -- --check` currently fails against the existing
+      # codebase (pre-existing formatting violations unrelated to this change).
+      # Per policy, we don't reformat the whole codebase as a side effect of
+      # adding CI, so the fmt-check step is intentionally omitted for now.
+      # Once the codebase is brought into `cargo fmt` compliance, re-add:
+      #   - name: Check formatting
+      #     run: cargo fmt --all -- --check
+
+      - name: Build (workspace, excluding guitar_android)
+        run: cargo build --workspace --exclude guitar_android
+
+      - name: Test (workspace, excluding guitar_android)
+        run: cargo test --workspace --exclude guitar_android
+
+      - name: Clippy (workspace, excluding guitar_android)
+        run: cargo clippy --workspace --exclude guitar_android -- -D warnings

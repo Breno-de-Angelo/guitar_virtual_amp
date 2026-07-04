@@ -12,7 +12,7 @@ pub struct Delay {
 
 impl Delay {
     pub fn new(params: DelayParams) -> Self {
-        let delay_samples = ((params.delay_ms / 1000.0) * GLOBAL_CONFIG.sample_rate as f32)
+        let delay_samples = ((params.delay_ms / 1000.0) * GLOBAL_CONFIG.sample_rate)
             .round()
             .max(1.0) as usize;
 

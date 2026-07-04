@@ -13,6 +13,12 @@ pub struct PedalChain {
     pedals: Vec<Box<dyn Pedal>>,
 }
 
+impl Default for PedalChain {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PedalChain {
     pub fn new() -> Self {
         PedalChain { pedals: Vec::new() }

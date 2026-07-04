@@ -34,7 +34,7 @@ where
 
     #[allow(dead_code)]
     pub fn iter(&self) -> RingBufferIter<N, T> {
-        RingBufferIter::new(&self)
+        RingBufferIter::new(self)
     }
 
     #[allow(dead_code)]
