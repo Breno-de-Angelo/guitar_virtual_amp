@@ -1,8 +1,8 @@
 use eframe::egui::{Slider, Ui};
 
 use crate::shared::pedals::{
-    AmpParams, DelayParams, DistortionParams, FlangerParams, LowPassParams, NoiseGateParams, PedalDescription, ReverbParams,
-    WahWahParams,
+    AmpParams, CompressorParams, DelayParams, DistortionParams, FlangerParams, LowPassParams,
+    NoiseGateParams, PedalDescription, ReverbParams, WahWahParams,
 };
 
 pub enum PedalAction {
@@ -26,6 +26,7 @@ pub fn render_pedal_ui(ui: &mut Ui, pedal: &mut PedalDescription) -> PedalAction
                 PedalDescription::WahWah(params) => wah_wah_ui(ui, params),
                 PedalDescription::Distortion(params) => distortion_ui(ui, params),
                 PedalDescription::NoiseGate(params) => noise_gate_ui(ui, params),
+                PedalDescription::Compressor(params) => compressor_ui(ui, params),
             };
             if updated {
                 PedalAction::Updated
@@ -179,6 +180,33 @@ fn noise_gate_ui(ui: &mut Ui, params: &mut NoiseGateParams) -> bool {
         changed |= attack_slider.changed();
         changed |= release_slider.changed();
         changed |= hold_slider.changed();
+
+        changed
+    })
+    .inner
+}
+
+fn compressor_ui(ui: &mut Ui, params: &mut CompressorParams) -> bool {
+    ui.group(|ui| {
+        ui.label("Compressor");
+
+        let mut changed = false;
+
+        let threshold_slider =
+            ui.add(Slider::new(&mut params.threshold, 0.0..=1.0).text("Threshold"));
+        let ratio_slider = ui.add(Slider::new(&mut params.ratio, 1.0..=20.0).text("Ratio"));
+        let attack_slider =
+            ui.add(Slider::new(&mut params.attack_ms, 0.1..=100.0).text("Attack (ms)"));
+        let release_slider =
+            ui.add(Slider::new(&mut params.release_ms, 1.0..=1000.0).text("Release (ms)"));
+        let makeup_gain_slider =
+            ui.add(Slider::new(&mut params.makeup_gain, 0.0..=5.0).text("Makeup Gain"));
+
+        changed |= threshold_slider.changed();
+        changed |= ratio_slider.changed();
+        changed |= attack_slider.changed();
+        changed |= release_slider.changed();
+        changed |= makeup_gain_slider.changed();
 
         changed
     })

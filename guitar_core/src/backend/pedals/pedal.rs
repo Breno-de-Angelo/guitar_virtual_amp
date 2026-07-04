@@ -1,7 +1,7 @@
 use crate::{
     backend::pedals::{
-        amp::Amp, delay::Delay, distortion::Distortion, flanger::Flanger, low_pass::LowPass,
-        noise_gate::NoiseGate, reverb::Reverb, wah_wah::WahWah,
+        amp::Amp, compressor::Compressor, delay::Delay, distortion::Distortion, flanger::Flanger,
+        low_pass::LowPass, noise_gate::NoiseGate, reverb::Reverb, wah_wah::WahWah,
     },
     shared::pedals::PedalDescription,
 };
@@ -51,6 +51,9 @@ impl PedalChain {
                     }
                     PedalDescription::NoiseGate(params) => {
                         Box::new(NoiseGate::new(params)) as Box<dyn Pedal>
+                    }
+                    PedalDescription::Compressor(params) => {
+                        Box::new(Compressor::new(params)) as Box<dyn Pedal>
                     }
                 })
                 .collect(),
