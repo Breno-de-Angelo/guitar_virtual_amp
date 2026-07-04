@@ -9,6 +9,7 @@ pub enum PedalDescription {
     Flanger(FlangerParams),
     WahWah(WahWahParams),
     Distortion(DistortionParams),
+    Compressor(CompressorParams),
 }
 
 impl PedalDescription {
@@ -21,6 +22,7 @@ impl PedalDescription {
             PedalDescription::Flanger(_) => "Flanger",
             PedalDescription::WahWah(_) => "WahWah",
             PedalDescription::Distortion(_) => "Distortion",
+            PedalDescription::Compressor(_) => "Compressor",
         }
     }
 }
@@ -142,6 +144,27 @@ impl Default for DistortionParams {
             level: 0.8,
             mix: 0.7,
             bias: 0.0,
+        }
+    }
+}
+
+#[derive(Copy, Clone)]
+pub struct CompressorParams {
+    pub threshold: f32,   // Linear amplitude above which gain reduction kicks in (0.0 to 1.0)
+    pub ratio: f32,       // Compression ratio (1.0 = no compression, 4.0 = 4:1, etc.)
+    pub attack_ms: f32,   // Envelope attack time in ms (how fast gain reduction engages)
+    pub release_ms: f32,  // Envelope release time in ms (how fast gain reduction recovers)
+    pub makeup_gain: f32, // Linear gain applied after compression to restore overall level
+}
+
+impl Default for CompressorParams {
+    fn default() -> Self {
+        Self {
+            threshold: 0.5,
+            ratio: 4.0,
+            attack_ms: 5.0,
+            release_ms: 100.0,
+            makeup_gain: 1.5,
         }
     }
 }

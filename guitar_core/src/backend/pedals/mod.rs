@@ -1,4 +1,5 @@
 mod amp;
+mod compressor;
 mod delay;
 mod distortion;
 mod flanger;
