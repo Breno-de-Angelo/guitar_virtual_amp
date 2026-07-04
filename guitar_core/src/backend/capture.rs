@@ -1,5 +1,5 @@
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use crossbeam::channel::{bounded, Sender};
+use crossbeam::channel::{bounded, Receiver, Sender};
 use crate::backend::pedals::pedal::PedalChain;
 use crate::shared::pedals::PedalDescription;
 use crate::shared::config::GLOBAL_CONFIG;
@@ -9,6 +9,11 @@ pub struct AudioSetup {
     pub output_stream: cpal::Stream,
     pub input_tx: Sender<i16>,
     pub pedal_tx: Sender<Vec<PedalDescription>>,
+    // Kept around so the output stream can be rebuilt on a different device later
+    // (see `switch_output_device`) with the same processing pipeline.
+    pub input_rx: Receiver<i16>,
+    pub pedal_rx: Receiver<Vec<PedalDescription>>,
+    pub audio_tx: Sender<i16>,
 }
 
 pub fn start_audio_processing(
@@ -75,22 +80,53 @@ pub fn start_audio_processing(
     // Canal para passar atualizações de pedais para a thread de reprodução
     let (pedal_tx, pedal_rx) = bounded::<Vec<PedalDescription>>(8);
 
-    // Construção do Stream de Reprodução (Output)
-    let output_sample_format = output_config.sample_format();
-    let output_stream_config = output_config.config();
-    let output_channels = output_stream_config.channels;
+    let output_stream = build_output_stream(
+        &output_device,
+        output_config,
+        input_rx.clone(),
+        audio_tx.clone(),
+        pedal_rx.clone(),
+        Vec::new(),
+    )?;
 
-    let mut pedal_chain = PedalChain::new();
+    output_stream.play()?;
 
-    let output_stream = match output_sample_format {
-        cpal::SampleFormat::I16 => output_device.build_output_stream(
-            output_stream_config,
+    Ok(AudioSetup {
+        input_stream,
+        output_stream,
+        input_tx,
+        pedal_tx,
+        input_rx,
+        pedal_rx,
+        audio_tx,
+    })
+}
+
+/// Builds the output stream: drains pedal-chain updates, pulls processed samples off
+/// `input_rx`, and forwards the result to `audio_tx` for visualization.
+fn build_output_stream(
+    device: &cpal::Device,
+    config: cpal::SupportedStreamConfig,
+    input_rx: Receiver<i16>,
+    audio_tx: Sender<i16>,
+    pedal_rx: Receiver<Vec<PedalDescription>>,
+    initial_pedals: Vec<PedalDescription>,
+) -> Result<cpal::Stream, Box<dyn std::error::Error>> {
+    let sample_format = config.sample_format();
+    let stream_config = config.config();
+    let channels = stream_config.channels;
+
+    let mut pedal_chain = PedalChain::from_description(initial_pedals);
+
+    let stream = match sample_format {
+        cpal::SampleFormat::I16 => device.build_output_stream(
+            stream_config,
             move |data: &mut [i16], _| {
                 for msg in pedal_rx.try_iter() {
                     pedal_chain = PedalChain::from_description(msg);
                 }
 
-                for frame in data.chunks_mut(output_channels as usize) {
+                for frame in data.chunks_mut(channels as usize) {
                     let processed = if let Ok(in_sample) = input_rx.try_recv() {
                         let out_sample = pedal_chain.process_sample(in_sample);
                         let _ = audio_tx.try_send(out_sample);
@@ -107,14 +143,14 @@ pub fn start_audio_processing(
             |err| eprintln!("Erro no output stream (I16): {}", err),
             None
         )?,
-        cpal::SampleFormat::F32 => output_device.build_output_stream(
-            output_stream_config,
+        cpal::SampleFormat::F32 => device.build_output_stream(
+            stream_config,
             move |data: &mut [f32], _| {
                 for msg in pedal_rx.try_iter() {
                     pedal_chain = PedalChain::from_description(msg);
                 }
 
-                for frame in data.chunks_mut(output_channels as usize) {
+                for frame in data.chunks_mut(channels as usize) {
                     let processed_i16 = if let Ok(in_sample) = input_rx.try_recv() {
                         let out_sample = pedal_chain.process_sample(in_sample);
                         let _ = audio_tx.try_send(out_sample);
@@ -135,14 +171,33 @@ pub fn start_audio_processing(
         _ => return Err("Formato de amostra de saída não suportado pelo CPAL".into()),
     };
 
-    output_stream.play()?;
+    Ok(stream)
+}
 
-    Ok(AudioSetup {
-        input_stream,
-        output_stream,
-        input_tx,
-        pedal_tx,
-    })
+/// Finds the named output device, builds a fresh output stream for it (seeded with
+/// `initial_pedals` so the pedal chain doesn't reset to empty), and starts it playing.
+pub fn switch_output_device(
+    device_name: &str,
+    input_rx: Receiver<i16>,
+    audio_tx: Sender<i16>,
+    pedal_rx: Receiver<Vec<PedalDescription>>,
+    initial_pedals: Vec<PedalDescription>,
+) -> Result<cpal::Stream, String> {
+    let host = cpal::default_host();
+    let devices = host.output_devices().map_err(|e| e.to_string())?;
+    let device = devices
+        .into_iter()
+        .find(|d| d.to_string() == device_name)
+        .ok_or_else(|| "Dispositivo de saída não encontrado".to_string())?;
+
+    let target_sample_rate = GLOBAL_CONFIG.sample_rate as u32;
+    let config = find_best_config(&device, target_sample_rate, false).map_err(|e| e.to_string())?;
+
+    let stream = build_output_stream(&device, config, input_rx, audio_tx, pedal_rx, initial_pedals)
+        .map_err(|e| e.to_string())?;
+
+    stream.play().map_err(|e| e.to_string())?;
+    Ok(stream)
 }
 
 pub fn find_best_config(

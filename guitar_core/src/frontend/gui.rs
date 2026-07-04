@@ -7,7 +7,7 @@ use std::collections::VecDeque;
 use strum::IntoEnumIterator;
 
 use crate::{
-    backend::capture::{AudioSetup, find_best_config},
+    backend::capture::{AudioSetup, find_best_config, switch_output_device},
     frontend::{
         lib::fft::compute_fft,
         ui::pedals::{PedalAction, render_pedal_ui},
@@ -36,6 +36,23 @@ fn is_valid_input_device(name: &str) -> bool {
     true
 }
 
+fn is_valid_output_device(name: &str) -> bool {
+    let name_lower = name.to_lowercase();
+    if name_lower.contains("discard")
+        || name_lower.contains("rate converter")
+        || name_lower.contains("speex")
+        || name_lower.contains("upmix")
+        || name_lower.contains("downmix")
+        || name_lower.contains("plugin")
+        || name_lower.contains("jack")
+        || name_lower.contains("open sound system")
+        || name_lower.contains("oss")
+    {
+        return false;
+    }
+    true
+}
+
 pub struct AudioApp {
     pub audio_rx: Receiver<i16>,
     pub pedal_tx: Sender<Vec<PedalDescription>>,
@@ -44,10 +61,19 @@ pub struct AudioApp {
     available_inputs: Vec<String>,
     selected_input: String,
     input_stream: Option<cpal::Stream>,
-    _output_stream: cpal::Stream,
     input_tx: Sender<i16>,
     switching_rx: Option<Receiver<Result<cpal::Stream, String>>>,
     refreshing_devices_rx: Option<Receiver<Vec<String>>>,
+    available_outputs: Vec<String>,
+    selected_output: String,
+    output_stream: Option<cpal::Stream>,
+    // Clones of the audio-processing pipeline handles, kept so a new output stream
+    // can be rebuilt on demand when the user picks a different output device.
+    output_input_rx: Receiver<i16>,
+    output_pedal_rx: Receiver<Vec<PedalDescription>>,
+    output_audio_tx: Sender<i16>,
+    switching_output_rx: Option<Receiver<Result<cpal::Stream, String>>>,
+    refreshing_output_devices_rx: Option<Receiver<Vec<String>>>,
 }
 
 impl AudioApp {
@@ -73,6 +99,25 @@ impl AudioApp {
             available_inputs.push(selected_input.clone());
         }
 
+        let mut available_outputs = host.output_devices()
+            .map(|devs| {
+                let mut list: Vec<String> = devs.into_iter()
+                    .map(|d| d.to_string())
+                    .filter(|name| is_valid_output_device(name))
+                    .collect();
+                list.sort();
+                list.dedup();
+                list
+            })
+            .unwrap_or_default();
+        let selected_output = host.default_output_device()
+            .map(|d| d.to_string())
+            .unwrap_or_default();
+
+        if !selected_output.is_empty() && !available_outputs.contains(&selected_output) {
+            available_outputs.push(selected_output.clone());
+        }
+
         Self {
             audio_rx,
             pedal_tx: setup.pedal_tx,
@@ -81,10 +126,17 @@ impl AudioApp {
             available_inputs,
             selected_input,
             input_stream: Some(setup.input_stream),
-            _output_stream: setup.output_stream,
             input_tx: setup.input_tx,
             switching_rx: None,
             refreshing_devices_rx: None,
+            available_outputs,
+            selected_output,
+            output_stream: Some(setup.output_stream),
+            output_input_rx: setup.input_rx,
+            output_pedal_rx: setup.pedal_rx,
+            output_audio_tx: setup.audio_tx,
+            switching_output_rx: None,
+            refreshing_output_devices_rx: None,
         }
     }
 }
@@ -123,6 +175,31 @@ impl eframe::App for AudioApp {
                     self.available_inputs.push(self.selected_input.clone());
                 }
                 self.refreshing_devices_rx = None;
+            }
+        }
+
+        if let Some(ref rx) = self.switching_output_rx {
+            if let Ok(res) = rx.try_recv() {
+                match res {
+                    Ok(stream) => {
+                        self.output_stream = Some(stream);
+                        println!("Dispositivo de saída alterado com sucesso de forma assíncrona.");
+                    }
+                    Err(e) => {
+                        eprintln!("Erro ao alterar dispositivo de saída: {}", e);
+                    }
+                }
+                self.switching_output_rx = None;
+            }
+        }
+
+        if let Some(ref rx) = self.refreshing_output_devices_rx {
+            if let Ok(list) = rx.try_recv() {
+                self.available_outputs = list;
+                if !self.selected_output.is_empty() && !self.available_outputs.contains(&self.selected_output) {
+                    self.available_outputs.push(self.selected_output.clone());
+                }
+                self.refreshing_output_devices_rx = None;
             }
         }
 
@@ -232,6 +309,69 @@ impl eframe::App for AudioApp {
                             let _ = tx.send(list);
                         });
                         self.refreshing_devices_rx = Some(rx);
+                    }
+                });
+                ui.separator();
+
+                ui.heading("Output Device");
+
+                ui.horizontal(|ui| {
+                    if self.switching_output_rx.is_some() {
+                        ui.colored_label(egui::Color32::YELLOW, "Conectando...");
+                    } else {
+                        egui::ComboBox::new("output_source_select", "")
+                            .selected_text(&self.selected_output)
+                            .show_ui(ui, |ui| {
+                                for output in &self.available_outputs {
+                                    if ui.selectable_value(&mut self.selected_output, output.clone(), output).changed() {
+                                        // Para o stream anterior imediatamente
+                                        self.output_stream = None;
+
+                                        // Dispara a troca em background
+                                        let (tx, rx) = crossbeam::channel::bounded(1);
+                                        let selected_output = self.selected_output.clone();
+                                        let input_rx = self.output_input_rx.clone();
+                                        let audio_tx = self.output_audio_tx.clone();
+                                        let pedal_rx = self.output_pedal_rx.clone();
+                                        let initial_pedals = self.pedal_chain.clone();
+
+                                        std::thread::spawn(move || {
+                                            let res = switch_output_device(
+                                                &selected_output,
+                                                input_rx,
+                                                audio_tx,
+                                                pedal_rx,
+                                                initial_pedals,
+                                            );
+                                            let _ = tx.send(res);
+                                        });
+
+                                        self.switching_output_rx = Some(rx);
+                                    }
+                                }
+                            });
+                    }
+
+                    if self.refreshing_output_devices_rx.is_some() {
+                        ui.colored_label(egui::Color32::LIGHT_BLUE, "🔄");
+                    } else if ui.button("🔄").on_hover_text("Atualizar lista de dispositivos").clicked() {
+                        let (tx, rx) = crossbeam::channel::bounded(1);
+                        std::thread::spawn(move || {
+                            let host = cpal::default_host();
+                            let list = host.output_devices()
+                                .map(|devs| {
+                                    let mut l: Vec<String> = devs.into_iter()
+                                        .map(|d| d.to_string())
+                                        .filter(|name| is_valid_output_device(name))
+                                        .collect();
+                                    l.sort();
+                                    l.dedup();
+                                    l
+                                })
+                                .unwrap_or_default();
+                            let _ = tx.send(list);
+                        });
+                        self.refreshing_output_devices_rx = Some(rx);
                     }
                 });
                 ui.separator();
