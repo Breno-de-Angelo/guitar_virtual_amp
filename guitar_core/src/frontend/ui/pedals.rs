@@ -1,9 +1,10 @@
-use eframe::egui::{Slider, Ui};
+use eframe::egui::{ComboBox, Slider, Ui};
 
 use crate::shared::pedals::{
-    AmpParams, ChorusParams, CompressorParams, DelayParams, DistortionParams, EqParams,
-    FlangerParams, LooperCommand, LooperParams, LowPassParams, NoiseGateParams, OctaverParams,
-    PedalDescription, PhaserParams, PitchShifterParams, ReverbParams, TremoloParams, WahWahParams,
+    AmpParams, AmpVoicing, ChorusParams, CompressorParams, DelayParams, DistortionParams,
+    EqParams, FlangerParams, LooperCommand, LooperParams, LowPassParams, NoiseGateParams,
+    OctaverParams, PedalDescription, PhaserParams, PitchShifterParams, ReverbParams,
+    TremoloParams, WahWahParams,
 };
 
 pub enum PedalAction {
@@ -49,8 +50,38 @@ pub fn render_pedal_ui(ui: &mut Ui, pedal: &mut PedalDescription) -> PedalAction
 fn amp_ui(ui: &mut Ui, params: &mut AmpParams) -> bool {
     ui.group(|ui| {
         ui.label("Amp");
-        let slider = ui.add(Slider::new(&mut params.gain, 0.0..=5.0).text("Gain"));
-        slider.changed()
+
+        let mut changed = false;
+
+        let gain_slider = ui.add(Slider::new(&mut params.gain, 0.0..=5.0).text("Gain"));
+        changed |= gain_slider.changed();
+
+        let voicing_response = ComboBox::from_label("Voicing")
+            .selected_text(format!("{:?}", params.voicing))
+            .show_ui(ui, |ui| {
+                let mut voicing_changed = false;
+                voicing_changed |= ui
+                    .selectable_value(&mut params.voicing, AmpVoicing::Clean, "Clean")
+                    .changed();
+                voicing_changed |= ui
+                    .selectable_value(&mut params.voicing, AmpVoicing::Crunch, "Crunch")
+                    .changed();
+                voicing_changed |= ui
+                    .selectable_value(&mut params.voicing, AmpVoicing::Lead, "Lead")
+                    .changed();
+                voicing_changed
+            });
+        changed |= voicing_response.inner.unwrap_or(false);
+
+        let bass_slider = ui.add(Slider::new(&mut params.bass, -12.0..=12.0).text("Bass (dB)"));
+        let mid_slider = ui.add(Slider::new(&mut params.mid, -12.0..=12.0).text("Mid (dB)"));
+        let treble_slider =
+            ui.add(Slider::new(&mut params.treble, -12.0..=12.0).text("Treble (dB)"));
+        changed |= bass_slider.changed();
+        changed |= mid_slider.changed();
+        changed |= treble_slider.changed();
+
+        changed
     })
     .inner
 }

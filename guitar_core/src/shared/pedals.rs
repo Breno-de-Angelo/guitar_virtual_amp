@@ -61,14 +61,51 @@ impl Default for ReverbParams {
     }
 }
 
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AmpVoicing {
+    Clean,
+    Crunch,
+    Lead,
+}
+
 #[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AmpParams {
     pub gain: f32,
+    #[serde(default = "default_amp_voicing")]
+    pub voicing: AmpVoicing,
+    #[serde(default = "default_amp_bass")]
+    pub bass: f32,
+    #[serde(default = "default_amp_mid")]
+    pub mid: f32,
+    #[serde(default = "default_amp_treble")]
+    pub treble: f32,
+}
+
+fn default_amp_voicing() -> AmpVoicing {
+    AmpVoicing::Clean
+}
+
+fn default_amp_bass() -> f32 {
+    0.0
+}
+
+fn default_amp_mid() -> f32 {
+    0.0
+}
+
+fn default_amp_treble() -> f32 {
+    0.0
 }
 
 impl Default for AmpParams {
     fn default() -> Self {
-        Self { gain: 1.0 }
+        Self {
+            gain: 1.0,
+            voicing: default_amp_voicing(),
+            bass: default_amp_bass(),
+            mid: default_amp_mid(),
+            treble: default_amp_treble(),
+        }
     }
 }
 
@@ -408,7 +445,10 @@ mod tests {
     #[test]
     fn pedal_chain_round_trips_through_json() {
         let chain: Vec<PedalDescription> = vec![
-            PedalDescription::Amp(AmpParams { gain: 2.5 }),
+            PedalDescription::Amp(AmpParams {
+                gain: 2.5,
+                ..Default::default()
+            }),
             PedalDescription::Delay(DelayParams::default()),
             PedalDescription::Distortion(DistortionParams::default()),
             PedalDescription::WahWah(WahWahParams::default()),

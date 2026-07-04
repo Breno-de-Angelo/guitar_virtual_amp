@@ -104,7 +104,10 @@ mod tests {
             name: "Test Preset".to_string(),
             author: Some("Breno".to_string()),
             pedals: vec![
-                PedalDescription::Amp(AmpParams { gain: 1.5 }),
+                PedalDescription::Amp(AmpParams {
+                    gain: 1.5,
+                    ..Default::default()
+                }),
                 PedalDescription::Delay(DelayParams::default()),
             ],
             tags: vec!["clean".to_string(), "test".to_string()],
