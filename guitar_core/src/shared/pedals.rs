@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use strum_macros::EnumIter;
 
-#[derive(Copy, Clone, Debug, PartialEq, EnumIter, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, EnumIter, Serialize, Deserialize)]
 pub enum PedalDescription {
     Amp(AmpParams),
     Delay(DelayParams),
@@ -19,6 +19,7 @@ pub enum PedalDescription {
     Octaver(OctaverParams),
     PitchShift(PitchShifterParams),
     Looper(LooperParams),
+    Cabinet(CabinetParams),
 }
 
 impl PedalDescription {
@@ -40,6 +41,7 @@ impl PedalDescription {
             PedalDescription::Octaver(_) => "Octaver",
             PedalDescription::PitchShift(_) => "Pitch Shifter",
             PedalDescription::Looper(_) => "Looper",
+            PedalDescription::Cabinet(_) => "Cabinet",
         }
     }
 }
@@ -246,6 +248,25 @@ impl Default for LooperParams {
         Self {
             max_loop_seconds: 30.0,
             command: LooperCommand::Idle,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct CabinetParams {
+    /// Path to a `.wav` impulse response file, loaded (and re-loaded on every
+    /// chain rebuild) by the `Cabinet` pedal's constructor. `None` means no IR
+    /// is loaded, in which case the pedal passes audio through unchanged.
+    pub ir_path: Option<String>,
+    /// Wet/dry mix (0.0 dry/bypassed tone, 1.0 fully cabinet-voiced).
+    pub mix: f32,
+}
+
+impl Default for CabinetParams {
+    fn default() -> Self {
+        Self {
+            ir_path: None,
+            mix: 1.0,
         }
     }
 }

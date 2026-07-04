@@ -1,9 +1,9 @@
 use crate::{
     backend::pedals::{
-        amp::Amp, chorus::Chorus, compressor::Compressor, delay::Delay, distortion::Distortion,
-        eq::EqPedal, flanger::Flanger, looper::Looper, low_pass::LowPass, noise_gate::NoiseGate,
-        octaver::Octaver, phaser::Phaser, pitch_shifter::PitchShifter, reverb::Reverb,
-        tremolo::Tremolo, wah_wah::WahWah,
+        amp::Amp, cabinet::Cabinet, chorus::Chorus, compressor::Compressor, delay::Delay,
+        distortion::Distortion, eq::EqPedal, flanger::Flanger, looper::Looper, low_pass::LowPass,
+        noise_gate::NoiseGate, octaver::Octaver, phaser::Phaser, pitch_shifter::PitchShifter,
+        reverb::Reverb, tremolo::Tremolo, wah_wah::WahWah,
     },
     shared::pedals::PedalDescription,
 };
@@ -30,8 +30,8 @@ impl PedalChain {
     pub fn from_description(description: Vec<PedalDescription>) -> Self {
         PedalChain {
             pedals: description
-                .iter()
-                .map(|&pedal_description| match pedal_description {
+                .into_iter()
+                .map(|pedal_description| match pedal_description {
                     PedalDescription::Reverb(params) => {
                         Box::new(Reverb::new(params)) as Box<dyn Pedal>
                     }
@@ -77,6 +77,9 @@ impl PedalChain {
                     }
                     PedalDescription::Looper(params) => {
                         Box::new(Looper::new(params)) as Box<dyn Pedal>
+                    }
+                    PedalDescription::Cabinet(params) => {
+                        Box::new(Cabinet::new(params)) as Box<dyn Pedal>
                     }
                 })
                 .collect(),

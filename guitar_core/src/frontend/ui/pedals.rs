@@ -1,10 +1,10 @@
 use eframe::egui::{ComboBox, Slider, Ui};
 
 use crate::shared::pedals::{
-    AmpParams, AmpVoicing, ChorusParams, CompressorParams, DelayParams, DistortionParams,
-    EqParams, FlangerParams, LooperCommand, LooperParams, LowPassParams, NoiseGateParams,
-    OctaverParams, PedalDescription, PhaserParams, PitchShifterParams, ReverbParams,
-    TremoloParams, WahWahParams,
+    AmpParams, AmpVoicing, CabinetParams, ChorusParams, CompressorParams, DelayParams,
+    DistortionParams, EqParams, FlangerParams, LooperCommand, LooperParams, LowPassParams,
+    NoiseGateParams, OctaverParams, PedalDescription, PhaserParams, PitchShifterParams,
+    ReverbParams, TremoloParams, WahWahParams,
 };
 
 pub enum PedalAction {
@@ -36,6 +36,7 @@ pub fn render_pedal_ui(ui: &mut Ui, pedal: &mut PedalDescription) -> PedalAction
                 PedalDescription::Octaver(params) => octaver_ui(ui, params),
                 PedalDescription::PitchShift(params) => pitch_shifter_ui(ui, params),
                 PedalDescription::Looper(params) => looper_ui(ui, params),
+                PedalDescription::Cabinet(params) => cabinet_ui(ui, params),
             };
             if updated {
                 PedalAction::Updated
@@ -411,6 +412,37 @@ fn looper_ui(ui: &mut Ui, params: &mut LooperParams) -> bool {
             Slider::new(&mut params.max_loop_seconds, 1.0..=60.0).text("Max Loop Length (s)"),
         );
         changed |= max_loop_slider.changed();
+
+        changed
+    })
+    .inner
+}
+
+fn cabinet_ui(ui: &mut Ui, params: &mut CabinetParams) -> bool {
+    ui.group(|ui| {
+        ui.label("Cabinet");
+
+        let mut changed = false;
+
+        ui.horizontal(|ui| {
+            if ui.button("Load IR...").clicked() {
+                if let Some(path) = rfd::FileDialog::new()
+                    .add_filter("WAV", &["wav"])
+                    .pick_file()
+                {
+                    params.ir_path = Some(path.display().to_string());
+                    changed = true;
+                }
+            }
+            let loaded = params
+                .ir_path
+                .as_deref()
+                .unwrap_or("No IR loaded");
+            ui.label(loaded);
+        });
+
+        let mix_slider = ui.add(Slider::new(&mut params.mix, 0.0..=1.0).text("Mix"));
+        changed |= mix_slider.changed();
 
         changed
     })

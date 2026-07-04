@@ -1,4 +1,5 @@
 mod amp;
+mod cabinet;
 mod chorus;
 mod compressor;
 mod delay;
