@@ -14,6 +14,7 @@ pub enum PedalDescription {
     Compressor(CompressorParams),
     Tremolo(TremoloParams),
     Chorus(ChorusParams),
+    Eq(EqParams),
 }
 
 impl PedalDescription {
@@ -30,6 +31,7 @@ impl PedalDescription {
             PedalDescription::Compressor(_) => "Compressor",
             PedalDescription::Tremolo(_) => "Tremolo",
             PedalDescription::Chorus(_) => "Chorus",
+            PedalDescription::Eq(_) => "EQ",
         }
     }
 }
@@ -151,6 +153,23 @@ impl Default for DistortionParams {
             level: 0.8,
             mix: 0.7,
             bias: 0.0,
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct EqParams {
+    pub low_gain_db: f32,  // Bass shelf gain (~100Hz), -12.0 to +12.0 dB
+    pub mid_gain_db: f32,  // Mid peak gain (~1000Hz), -12.0 to +12.0 dB
+    pub high_gain_db: f32, // Treble shelf gain (~5000Hz), -12.0 to +12.0 dB
+}
+
+impl Default for EqParams {
+    fn default() -> Self {
+        Self {
+            low_gain_db: 0.0,
+            mid_gain_db: 0.0,
+            high_gain_db: 0.0,
         }
     }
 }

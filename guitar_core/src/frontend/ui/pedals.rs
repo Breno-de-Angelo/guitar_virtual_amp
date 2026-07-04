@@ -1,8 +1,9 @@
 use eframe::egui::{Slider, Ui};
 
 use crate::shared::pedals::{
-    AmpParams, ChorusParams, CompressorParams, DelayParams, DistortionParams, FlangerParams,
-    LowPassParams, NoiseGateParams, PedalDescription, ReverbParams, TremoloParams, WahWahParams,
+    AmpParams, ChorusParams, CompressorParams, DelayParams, DistortionParams, EqParams,
+    FlangerParams, LowPassParams, NoiseGateParams, PedalDescription, ReverbParams, TremoloParams,
+    WahWahParams,
 };
 
 pub enum PedalAction {
@@ -29,6 +30,7 @@ pub fn render_pedal_ui(ui: &mut Ui, pedal: &mut PedalDescription) -> PedalAction
                 PedalDescription::Compressor(params) => compressor_ui(ui, params),
                 PedalDescription::Tremolo(params) => tremolo_ui(ui, params),
                 PedalDescription::Chorus(params) => chorus_ui(ui, params),
+                PedalDescription::Eq(params) => eq_ui(ui, params),
             };
             if updated {
                 PedalAction::Updated
@@ -247,6 +249,25 @@ fn chorus_ui(ui: &mut Ui, params: &mut ChorusParams) -> bool {
         changed |= depth_slider.changed();
         changed |= rate_slider.changed();
         changed |= mix_slider.changed();
+
+        changed
+    })
+    .inner
+}
+
+fn eq_ui(ui: &mut Ui, params: &mut EqParams) -> bool {
+    ui.group(|ui| {
+        ui.label("EQ");
+
+        let mut changed = false;
+
+        let low_slider = ui.add(Slider::new(&mut params.low_gain_db, -12.0..=12.0).text("Low (dB)"));
+        let mid_slider = ui.add(Slider::new(&mut params.mid_gain_db, -12.0..=12.0).text("Mid (dB)"));
+        let high_slider = ui.add(Slider::new(&mut params.high_gain_db, -12.0..=12.0).text("High (dB)"));
+
+        changed |= low_slider.changed();
+        changed |= mid_slider.changed();
+        changed |= high_slider.changed();
 
         changed
     })

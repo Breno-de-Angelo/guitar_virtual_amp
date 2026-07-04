@@ -3,6 +3,7 @@ mod chorus;
 mod compressor;
 mod delay;
 mod distortion;
+mod eq;
 mod flanger;
 mod low_pass;
 mod noise_gate;
