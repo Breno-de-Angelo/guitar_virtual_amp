@@ -5,6 +5,7 @@ mod delay;
 mod distortion;
 mod eq;
 mod flanger;
+mod looper;
 mod low_pass;
 mod noise_gate;
 mod octaver;

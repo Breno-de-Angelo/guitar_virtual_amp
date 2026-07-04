@@ -2,8 +2,8 @@ use eframe::egui::{Slider, Ui};
 
 use crate::shared::pedals::{
     AmpParams, ChorusParams, CompressorParams, DelayParams, DistortionParams, EqParams,
-    FlangerParams, LowPassParams, NoiseGateParams, OctaverParams, PedalDescription, PhaserParams,
-    PitchShifterParams, ReverbParams, TremoloParams, WahWahParams,
+    FlangerParams, LooperCommand, LooperParams, LowPassParams, NoiseGateParams, OctaverParams,
+    PedalDescription, PhaserParams, PitchShifterParams, ReverbParams, TremoloParams, WahWahParams,
 };
 
 pub enum PedalAction {
@@ -34,6 +34,7 @@ pub fn render_pedal_ui(ui: &mut Ui, pedal: &mut PedalDescription) -> PedalAction
                 PedalDescription::Phaser(params) => phaser_ui(ui, params),
                 PedalDescription::Octaver(params) => octaver_ui(ui, params),
                 PedalDescription::PitchShift(params) => pitch_shifter_ui(ui, params),
+                PedalDescription::Looper(params) => looper_ui(ui, params),
             };
             if updated {
                 PedalAction::Updated
@@ -330,6 +331,55 @@ fn octaver_ui(ui: &mut Ui, params: &mut OctaverParams) -> bool {
         changed |= octave_mix_slider.changed();
         changed |= dry_mix_slider.changed();
         changed |= tone_slider.changed();
+
+        changed
+    })
+    .inner
+}
+
+fn looper_ui(ui: &mut Ui, params: &mut LooperParams) -> bool {
+    ui.group(|ui| {
+        ui.label("Looper");
+
+        let mut changed = false;
+
+        let status = match params.command {
+            LooperCommand::Idle => "Idle",
+            LooperCommand::Record => "Recording",
+            LooperCommand::Play => "Playing",
+            LooperCommand::Overdub => "Overdubbing",
+            LooperCommand::Stop => "Stopped",
+            LooperCommand::Clear => "Idle",
+        };
+        ui.label(format!("Status: {status}"));
+
+        ui.horizontal(|ui| {
+            if ui.button("Record").clicked() {
+                params.command = LooperCommand::Record;
+                changed = true;
+            }
+            if ui.button("Play").clicked() {
+                params.command = LooperCommand::Play;
+                changed = true;
+            }
+            if ui.button("Overdub").clicked() {
+                params.command = LooperCommand::Overdub;
+                changed = true;
+            }
+            if ui.button("Stop").clicked() {
+                params.command = LooperCommand::Stop;
+                changed = true;
+            }
+            if ui.button("Clear").clicked() {
+                params.command = LooperCommand::Clear;
+                changed = true;
+            }
+        });
+
+        let max_loop_slider = ui.add(
+            Slider::new(&mut params.max_loop_seconds, 1.0..=60.0).text("Max Loop Length (s)"),
+        );
+        changed |= max_loop_slider.changed();
 
         changed
     })
