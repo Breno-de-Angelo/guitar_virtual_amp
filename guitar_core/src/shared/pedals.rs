@@ -1,6 +1,7 @@
+use serde::{Deserialize, Serialize};
 use strum_macros::EnumIter;
 
-#[derive(Copy, Clone, EnumIter)]
+#[derive(Copy, Clone, EnumIter, Serialize, Deserialize)]
 pub enum PedalDescription {
     Amp(AmpParams),
     Delay(DelayParams),
@@ -25,7 +26,7 @@ impl PedalDescription {
     }
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Serialize, Deserialize)]
 pub struct ReverbParams {
     pub room_size: f32, // Feedback / duração do reverb (0.0 a 0.99)
     pub mix: f32,       // 0.0 = só dry, 1.0 = só wet
@@ -42,7 +43,7 @@ impl Default for ReverbParams {
     }
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Serialize, Deserialize)]
 pub struct AmpParams {
     pub gain: f32,
 }
@@ -53,7 +54,7 @@ impl Default for AmpParams {
     }
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Serialize, Deserialize)]
 pub struct LowPassParams {
     pub frequency: f32,
 }
@@ -64,7 +65,7 @@ impl Default for LowPassParams {
     }
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Serialize, Deserialize)]
 pub struct DelayParams {
     pub delay_ms: f32, // tempo do delay principal em ms
     pub feedback: f32, // quanto do sinal volta ao buffer (0.0 a 0.99)
@@ -87,7 +88,7 @@ impl Default for DelayParams {
     }
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Serialize, Deserialize)]
 pub struct FlangerParams {
     pub delay_range: f32,
     pub delay_rate: f32,
@@ -104,7 +105,7 @@ impl Default for FlangerParams {
     }
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Serialize, Deserialize)]
 pub struct WahWahParams {
     pub frequency: f32,    // Center frequency of the wah filter (Hz)
     pub resonance: f32,    // Q factor / resonance (0.1 to 10.0)
@@ -125,7 +126,7 @@ impl Default for WahWahParams {
     }
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Serialize, Deserialize)]
 pub struct DistortionParams {
     pub drive: f32,        // Amount of distortion/saturation (0.0 to 10.0)
     pub tone: f32,         // Tone control - high frequency rolloff (0.0 to 1.0)
@@ -142,6 +143,74 @@ impl Default for DistortionParams {
             level: 0.8,
             mix: 0.7,
             bias: 0.0,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn assert_pedal_eq(a: &PedalDescription, b: &PedalDescription) {
+        match (a, b) {
+            (PedalDescription::Amp(a), PedalDescription::Amp(b)) => {
+                assert_eq!(a.gain, b.gain);
+            }
+            (PedalDescription::Delay(a), PedalDescription::Delay(b)) => {
+                assert_eq!(a.delay_ms, b.delay_ms);
+                assert_eq!(a.feedback, b.feedback);
+                assert_eq!(a.gain, b.gain);
+                assert_eq!(a.mix, b.mix);
+                assert_eq!(a.taps, b.taps);
+                assert_eq!(a.damping, b.damping);
+            }
+            (PedalDescription::Reverb(a), PedalDescription::Reverb(b)) => {
+                assert_eq!(a.room_size, b.room_size);
+                assert_eq!(a.mix, b.mix);
+                assert_eq!(a.damping, b.damping);
+            }
+            (PedalDescription::LowPass(a), PedalDescription::LowPass(b)) => {
+                assert_eq!(a.frequency, b.frequency);
+            }
+            (PedalDescription::Flanger(a), PedalDescription::Flanger(b)) => {
+                assert_eq!(a.delay_range, b.delay_range);
+                assert_eq!(a.delay_rate, b.delay_rate);
+                assert_eq!(a.gain, b.gain);
+            }
+            (PedalDescription::WahWah(a), PedalDescription::WahWah(b)) => {
+                assert_eq!(a.frequency, b.frequency);
+                assert_eq!(a.resonance, b.resonance);
+                assert_eq!(a.mix, b.mix);
+                assert_eq!(a.lfo_rate, b.lfo_rate);
+                assert_eq!(a.lfo_depth, b.lfo_depth);
+            }
+            (PedalDescription::Distortion(a), PedalDescription::Distortion(b)) => {
+                assert_eq!(a.drive, b.drive);
+                assert_eq!(a.tone, b.tone);
+                assert_eq!(a.level, b.level);
+                assert_eq!(a.mix, b.mix);
+                assert_eq!(a.bias, b.bias);
+            }
+            _ => panic!("pedal variant mismatch"),
+        }
+    }
+
+    #[test]
+    fn pedal_chain_round_trips_through_json() {
+        let chain: Vec<PedalDescription> = vec![
+            PedalDescription::Amp(AmpParams { gain: 2.5 }),
+            PedalDescription::Delay(DelayParams::default()),
+            PedalDescription::Distortion(DistortionParams::default()),
+            PedalDescription::WahWah(WahWahParams::default()),
+        ];
+
+        let json = serde_json::to_string(&chain).expect("serialize chain");
+        let round_tripped: Vec<PedalDescription> =
+            serde_json::from_str(&json).expect("deserialize chain");
+
+        assert_eq!(round_tripped.len(), chain.len());
+        for (original, restored) in chain.iter().zip(round_tripped.iter()) {
+            assert_pedal_eq(original, restored);
         }
     }
 }
