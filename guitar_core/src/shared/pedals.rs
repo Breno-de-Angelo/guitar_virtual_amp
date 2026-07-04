@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use strum_macros::EnumIter;
 
-#[derive(Copy, Clone, EnumIter, Serialize, Deserialize)]
+#[derive(Copy, Clone, Debug, PartialEq, EnumIter, Serialize, Deserialize)]
 pub enum PedalDescription {
     Amp(AmpParams),
     Delay(DelayParams),
@@ -26,7 +26,7 @@ impl PedalDescription {
     }
 }
 
-#[derive(Copy, Clone, Serialize, Deserialize)]
+#[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ReverbParams {
     pub room_size: f32, // Feedback / duração do reverb (0.0 a 0.99)
     pub mix: f32,       // 0.0 = só dry, 1.0 = só wet
@@ -43,7 +43,7 @@ impl Default for ReverbParams {
     }
 }
 
-#[derive(Copy, Clone, Serialize, Deserialize)]
+#[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AmpParams {
     pub gain: f32,
 }
@@ -54,7 +54,7 @@ impl Default for AmpParams {
     }
 }
 
-#[derive(Copy, Clone, Serialize, Deserialize)]
+#[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct LowPassParams {
     pub frequency: f32,
 }
@@ -65,7 +65,7 @@ impl Default for LowPassParams {
     }
 }
 
-#[derive(Copy, Clone, Serialize, Deserialize)]
+#[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct DelayParams {
     pub delay_ms: f32, // tempo do delay principal em ms
     pub feedback: f32, // quanto do sinal volta ao buffer (0.0 a 0.99)
@@ -88,7 +88,7 @@ impl Default for DelayParams {
     }
 }
 
-#[derive(Copy, Clone, Serialize, Deserialize)]
+#[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct FlangerParams {
     pub delay_range: f32,
     pub delay_rate: f32,
@@ -105,7 +105,7 @@ impl Default for FlangerParams {
     }
 }
 
-#[derive(Copy, Clone, Serialize, Deserialize)]
+#[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct WahWahParams {
     pub frequency: f32,    // Center frequency of the wah filter (Hz)
     pub resonance: f32,    // Q factor / resonance (0.1 to 10.0)
@@ -126,7 +126,7 @@ impl Default for WahWahParams {
     }
 }
 
-#[derive(Copy, Clone, Serialize, Deserialize)]
+#[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct DistortionParams {
     pub drive: f32,        // Amount of distortion/saturation (0.0 to 10.0)
     pub tone: f32,         // Tone control - high frequency rolloff (0.0 to 1.0)
