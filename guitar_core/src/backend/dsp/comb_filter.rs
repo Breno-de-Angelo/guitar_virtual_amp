@@ -1,7 +1,7 @@
 use crate::backend::ring_buffer::RingBuffer;
 
 pub struct CombFilter {
-    buf: RingBuffer<65536, f32>,
+    buf: RingBuffer<f32>,
     delay_len: usize,
     feedback: f32,
     damp1: f32,
@@ -12,7 +12,7 @@ pub struct CombFilter {
 impl CombFilter {
     pub fn new(delay_len: usize, feedback: f32, damping: f32) -> Self {
         Self {
-            buf: RingBuffer::new(),
+            buf: RingBuffer::new(65536),
             delay_len: delay_len.max(1),
             feedback,
             damp1: damping.clamp(0.0, 0.999),

@@ -6,7 +6,7 @@ use crate::{
 };
 
 pub struct Flanger {
-    buffer: RingBuffer<65536, i16>,
+    buffer: RingBuffer<i16>,
     flange_angle: f32,
     omega: f32,
     params: FlangerParams,
@@ -15,7 +15,7 @@ pub struct Flanger {
 impl Flanger {
     pub fn new(params: FlangerParams) -> Self {
         Self {
-            buffer: RingBuffer::new(),
+            buffer: RingBuffer::new(65536),
             flange_angle: 0.0,
             omega: 2.0 * PI * params.delay_rate,
             params,

@@ -3,19 +3,22 @@ use std::{
     ops::{Add, Index, IndexMut},
 };
 
-pub struct RingBuffer<const N: usize, T> {
-    arr: [T; N],
+pub struct RingBuffer<T> {
+    buf: Vec<T>,
+    capacity: usize,
     start: usize,
     len: usize,
 }
 
-impl<const N: usize, T> RingBuffer<N, T>
+impl<T> RingBuffer<T>
 where
     T: Copy + Default + Debug + Display,
 {
-    pub fn new() -> Self {
+    pub fn new(capacity: usize) -> Self {
+        let capacity = capacity.max(1);
         Self {
-            arr: [T::default(); N],
+            buf: vec![T::default(); capacity],
+            capacity,
             start: 0,
             len: 0,
         }
@@ -23,23 +26,23 @@ where
 
     #[allow(dead_code)]
     pub fn push(&mut self, item: T) {
-        if self.len >= N {
-            self.arr[self.start] = item;
-            self.start = (self.start + 1) % N;
+        if self.len >= self.capacity {
+            self.buf[self.start] = item;
+            self.start = (self.start + 1) % self.capacity;
         } else {
-            self.arr[(self.start + self.len) % N] = item;
+            self.buf[(self.start + self.len) % self.capacity] = item;
             self.len += 1;
         }
     }
 
     #[allow(dead_code)]
-    pub fn iter(&self) -> RingBufferIter<N, T> {
+    pub fn iter(&self) -> RingBufferIter<T> {
         RingBufferIter::new(self)
     }
 
     #[allow(dead_code)]
     pub fn last(&self) -> &T {
-        &self.arr[(self.start + self.len - 1) % N]
+        &self.buf[(self.start + self.len - 1) % self.capacity]
     }
 
     #[allow(dead_code)]
@@ -54,13 +57,13 @@ mod tests {
 
     #[test]
     fn new_buffer_is_empty() {
-        let rb: RingBuffer<4, i32> = RingBuffer::new();
+        let rb: RingBuffer<i32> = RingBuffer::new(4);
         assert_eq!(rb.len(), 0);
     }
 
     #[test]
     fn push_within_capacity() {
-        let mut rb: RingBuffer<4, i32> = RingBuffer::new();
+        let mut rb: RingBuffer<i32> = RingBuffer::new(4);
         rb.push(10);
         rb.push(20);
         assert_eq!(rb.len(), 2);
@@ -72,7 +75,7 @@ mod tests {
 
     #[test]
     fn push_exact_capacity() {
-        let mut rb: RingBuffer<3, i32> = RingBuffer::new();
+        let mut rb: RingBuffer<i32> = RingBuffer::new(3);
         rb.push(1);
         rb.push(2);
         rb.push(3);
@@ -85,7 +88,7 @@ mod tests {
 
     #[test]
     fn push_over_capacity_overwrites_oldest() {
-        let mut rb: RingBuffer<3, i32> = RingBuffer::new();
+        let mut rb: RingBuffer<i32> = RingBuffer::new(3);
         rb.push(1);
         rb.push(2);
         rb.push(3);
@@ -99,7 +102,7 @@ mod tests {
 
     #[test]
     fn multiple_overwrites_keep_order() {
-        let mut rb: RingBuffer<3, i32> = RingBuffer::new();
+        let mut rb: RingBuffer<i32> = RingBuffer::new(3);
         for i in 1..=6 {
             rb.push(i);
         }
@@ -111,46 +114,44 @@ mod tests {
     }
 }
 
-impl<T, const N: usize> Index<usize> for RingBuffer<N, T>
+impl<T> Index<usize> for RingBuffer<T>
 where
-    [T]: Index<usize>,
     T: Default + Copy,
 {
-    type Output = <[T] as Index<usize>>::Output;
+    type Output = T;
 
     #[inline]
     fn index(&self, index: usize) -> &Self::Output {
-        &self.arr[(self.start + index) % N]
+        &self.buf[(self.start + index) % self.capacity]
     }
 }
 
-impl<T, const N: usize> IndexMut<usize> for RingBuffer<N, T>
+impl<T> IndexMut<usize> for RingBuffer<T>
 where
-    [T]: Index<usize>,
     T: Default + Copy,
     usize: Add<usize>,
 {
     #[inline]
     fn index_mut(&mut self, index: usize) -> &mut Self::Output {
-        &mut self.arr[(self.start + index) % N]
+        &mut self.buf[(self.start + index) % self.capacity]
     }
 }
 
-pub struct RingBufferIter<'a, const N: usize, T: 'a> {
-    ring_buffer: &'a RingBuffer<N, T>,
+pub struct RingBufferIter<'a, T: 'a> {
+    ring_buffer: &'a RingBuffer<T>,
     index: usize,
 }
 
-impl<'a, const N: usize, T: 'a> RingBufferIter<'a, N, T> {
+impl<'a, T: 'a> RingBufferIter<'a, T> {
     #[allow(dead_code)]
-    pub fn new(ring_buffer: &'a RingBuffer<N, T>) -> Self {
+    pub fn new(ring_buffer: &'a RingBuffer<T>) -> Self {
         RingBufferIter {
             ring_buffer,
             index: 0,
         }
     }
 }
-impl<'a, const N: usize, T> Iterator for RingBufferIter<'a, N, T>
+impl<'a, T> Iterator for RingBufferIter<'a, T>
 where
     T: Default + Copy,
 {
@@ -166,7 +167,7 @@ where
         r
     }
 }
-impl<'a, const N: usize, T> DoubleEndedIterator for RingBufferIter<'a, N, T>
+impl<'a, T> DoubleEndedIterator for RingBufferIter<'a, T>
 where
     T: Default + Copy,
 {

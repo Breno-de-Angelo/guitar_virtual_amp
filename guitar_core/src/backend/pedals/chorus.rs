@@ -6,7 +6,7 @@ use crate::{
 };
 
 pub struct Chorus {
-    buffer: RingBuffer<65536, i16>,
+    buffer: RingBuffer<i16>,
     lfo_phase: f32,
     omega: f32,
     params: ChorusParams,
@@ -15,7 +15,7 @@ pub struct Chorus {
 impl Chorus {
     pub fn new(params: ChorusParams) -> Self {
         Self {
-            buffer: RingBuffer::new(),
+            buffer: RingBuffer::new(65536),
             lfo_phase: 0.0,
             omega: 2.0 * PI * params.rate_hz,
             params,

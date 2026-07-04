@@ -1,7 +1,7 @@
 use crate::backend::ring_buffer::RingBuffer;
 
 pub struct Allpass {
-    buf: RingBuffer<65536, f32>,
+    buf: RingBuffer<f32>,
     delay_len: usize,
     feedback: f32,
 }
@@ -9,7 +9,7 @@ pub struct Allpass {
 impl Allpass {
     pub fn new(delay_len: usize, feedback: f32) -> Self {
         Self {
-            buf: RingBuffer::new(),
+            buf: RingBuffer::new(65536),
             delay_len: delay_len.max(1),
             feedback,
         }

@@ -4,7 +4,7 @@ use crate::{
 };
 
 pub struct Delay {
-    buffer: RingBuffer<65536, f32>,
+    buffer: RingBuffer<f32>,
     params: DelayParams,
     delay_samples: usize,
     last_feedback: f32,
@@ -17,7 +17,7 @@ impl Delay {
             .max(1.0) as usize;
 
         Self {
-            buffer: RingBuffer::new(),
+            buffer: RingBuffer::new(65536),
             params,
             delay_samples,
             last_feedback: 0.0,

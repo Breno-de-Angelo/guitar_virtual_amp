@@ -24,7 +24,7 @@ const HISTORY_CAPACITY: usize = 16384;
 /// between them so that as one pointer approaches a jump (window -> 0) the
 /// other is near the middle of its grain (window -> 1), hiding the click.
 pub struct PitchShifter {
-    buffer: RingBuffer<HISTORY_CAPACITY, f32>,
+    buffer: RingBuffer<f32>,
     params: PitchShifterParams,
     pitch_ratio: f32,
     grain_size: f32,
@@ -44,7 +44,7 @@ impl PitchShifter {
             .clamp(2.0, (HISTORY_CAPACITY - 8) as f32);
 
         Self {
-            buffer: RingBuffer::new(),
+            buffer: RingBuffer::new(HISTORY_CAPACITY),
             params,
             pitch_ratio,
             grain_size,
