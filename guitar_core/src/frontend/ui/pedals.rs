@@ -1,7 +1,8 @@
 use eframe::egui::{Slider, Ui};
 
 use crate::shared::pedals::{
-    AmpParams, DelayParams, DistortionParams, FlangerParams, LowPassParams, PedalDescription, ReverbParams, WahWahParams,
+    AmpParams, DelayParams, DistortionParams, FlangerParams, LowPassParams, NoiseGateParams, PedalDescription, ReverbParams,
+    WahWahParams,
 };
 
 pub enum PedalAction {
@@ -24,6 +25,7 @@ pub fn render_pedal_ui(ui: &mut Ui, pedal: &mut PedalDescription) -> PedalAction
                 PedalDescription::Flanger(params) => flanger_ui(ui, params),
                 PedalDescription::WahWah(params) => wah_wah_ui(ui, params),
                 PedalDescription::Distortion(params) => distortion_ui(ui, params),
+                PedalDescription::NoiseGate(params) => noise_gate_ui(ui, params),
             };
             if updated {
                 PedalAction::Updated
@@ -153,6 +155,30 @@ fn distortion_ui(ui: &mut Ui, params: &mut DistortionParams) -> bool {
         changed |= level_slider.changed();
         changed |= mix_slider.changed();
         changed |= bias_slider.changed();
+
+        changed
+    })
+    .inner
+}
+
+fn noise_gate_ui(ui: &mut Ui, params: &mut NoiseGateParams) -> bool {
+    ui.group(|ui| {
+        ui.label("Noise Gate");
+
+        let mut changed = false;
+
+        let threshold_slider =
+            ui.add(Slider::new(&mut params.threshold, 0.0..=0.5).text("Threshold"));
+        let attack_slider =
+            ui.add(Slider::new(&mut params.attack_ms, 0.1..=50.0).text("Attack (ms)"));
+        let release_slider =
+            ui.add(Slider::new(&mut params.release_ms, 1.0..=1000.0).text("Release (ms)"));
+        let hold_slider = ui.add(Slider::new(&mut params.hold_ms, 0.0..=500.0).text("Hold (ms)"));
+
+        changed |= threshold_slider.changed();
+        changed |= attack_slider.changed();
+        changed |= release_slider.changed();
+        changed |= hold_slider.changed();
 
         changed
     })
