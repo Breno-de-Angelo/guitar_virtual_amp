@@ -9,6 +9,7 @@ pub enum PedalDescription {
     Flanger(FlangerParams),
     WahWah(WahWahParams),
     Distortion(DistortionParams),
+    Looper(LooperParams),
 }
 
 impl PedalDescription {
@@ -21,6 +22,7 @@ impl PedalDescription {
             PedalDescription::Flanger(_) => "Flanger",
             PedalDescription::WahWah(_) => "WahWah",
             PedalDescription::Distortion(_) => "Distortion",
+            PedalDescription::Looper(_) => "Looper",
         }
     }
 }
@@ -142,6 +144,54 @@ impl Default for DistortionParams {
             level: 0.8,
             mix: 0.7,
             bias: 0.0,
+        }
+    }
+}
+
+/// Transport command for the Looper pedal. Sent from the UI (buttons, not a
+/// slider) through `LooperParams::command` so it round-trips over the existing
+/// `PedalDescription` update channel like any other parameter.
+#[derive(Copy, Clone, PartialEq, Eq, Default)]
+pub enum LooperCommand {
+    /// Pass audio through unchanged; no recording/playback happening.
+    #[default]
+    Idle,
+    /// Record incoming audio into the loop buffer while passing it through dry.
+    Record,
+    /// Play the recorded buffer back on a loop.
+    Play,
+    /// Play the recorded buffer back on a loop while mixing in and writing back
+    /// (layering) the live input at the current playback position.
+    Overdub,
+    /// Stop transport (see `Looper::apply_effect` doc comment for exact
+    /// stopped-state audio behavior).
+    Stop,
+    /// Empty the recorded buffer and reset playback position.
+    Clear,
+}
+
+/// NOTE: because `PedalChain` is rebuilt wholesale from `Vec<PedalDescription>`
+/// on every chain edit (see CLAUDE.md's "Pedal chain" architecture notes), this
+/// looper's recorded buffer is lost whenever ANY pedal in the chain changes, not
+/// just this one -- moving the transport command (Record/Play/Overdub/Stop/Clear)
+/// live is a limitation of the current single-shot chain-rebuild architecture.
+/// This is tracked as a known limitation for a future architectural revisit
+/// (e.g. giving pedals a way to receive in-place parameter updates instead of a
+/// full rebuild), not something to silently work around here.
+#[derive(Copy, Clone)]
+pub struct LooperParams {
+    /// Capacity of the loop buffer, in seconds. Determines how long a loop can be
+    /// before older audio would need to be discarded/truncated.
+    pub max_loop_seconds: f32,
+    /// Current transport command, set by the UI's transport buttons.
+    pub command: LooperCommand,
+}
+
+impl Default for LooperParams {
+    fn default() -> Self {
+        Self {
+            max_loop_seconds: 30.0,
+            command: LooperCommand::Idle,
         }
     }
 }
