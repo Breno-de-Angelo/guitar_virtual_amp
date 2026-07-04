@@ -7,4 +7,5 @@ mod low_pass;
 mod noise_gate;
 pub mod pedal;
 mod reverb;
+mod tremolo;
 mod wah_wah;

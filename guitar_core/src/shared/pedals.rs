@@ -12,6 +12,7 @@ pub enum PedalDescription {
     Distortion(DistortionParams),
     NoiseGate(NoiseGateParams),
     Compressor(CompressorParams),
+    Tremolo(TremoloParams),
 }
 
 impl PedalDescription {
@@ -26,6 +27,7 @@ impl PedalDescription {
             PedalDescription::Distortion(_) => "Distortion",
             PedalDescription::NoiseGate(_) => "Noise Gate",
             PedalDescription::Compressor(_) => "Compressor",
+            PedalDescription::Tremolo(_) => "Tremolo",
         }
     }
 }
@@ -147,6 +149,21 @@ impl Default for DistortionParams {
             level: 0.8,
             mix: 0.7,
             bias: 0.0,
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct TremoloParams {
+    pub rate_hz: f32, // LFO frequency (0.5 to 10.0 Hz)
+    pub depth: f32,   // 0.0 = no effect, 1.0 = full modulation down to silence
+}
+
+impl Default for TremoloParams {
+    fn default() -> Self {
+        Self {
+            rate_hz: 5.0,
+            depth: 0.5,
         }
     }
 }

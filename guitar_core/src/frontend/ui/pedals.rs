@@ -2,7 +2,7 @@ use eframe::egui::{Slider, Ui};
 
 use crate::shared::pedals::{
     AmpParams, CompressorParams, DelayParams, DistortionParams, FlangerParams, LowPassParams,
-    NoiseGateParams, PedalDescription, ReverbParams, WahWahParams,
+    NoiseGateParams, PedalDescription, ReverbParams, TremoloParams, WahWahParams,
 };
 
 pub enum PedalAction {
@@ -27,6 +27,7 @@ pub fn render_pedal_ui(ui: &mut Ui, pedal: &mut PedalDescription) -> PedalAction
                 PedalDescription::Distortion(params) => distortion_ui(ui, params),
                 PedalDescription::NoiseGate(params) => noise_gate_ui(ui, params),
                 PedalDescription::Compressor(params) => compressor_ui(ui, params),
+                PedalDescription::Tremolo(params) => tremolo_ui(ui, params),
             };
             if updated {
                 PedalAction::Updated
@@ -207,6 +208,23 @@ fn compressor_ui(ui: &mut Ui, params: &mut CompressorParams) -> bool {
         changed |= attack_slider.changed();
         changed |= release_slider.changed();
         changed |= makeup_gain_slider.changed();
+
+        changed
+    })
+    .inner
+}
+
+fn tremolo_ui(ui: &mut Ui, params: &mut TremoloParams) -> bool {
+    ui.group(|ui| {
+        ui.label("Tremolo");
+
+        let mut changed = false;
+
+        let rate_slider = ui.add(Slider::new(&mut params.rate_hz, 0.5..=10.0).text("Rate (Hz)"));
+        let depth_slider = ui.add(Slider::new(&mut params.depth, 0.0..=1.0).text("Depth"));
+
+        changed |= rate_slider.changed();
+        changed |= depth_slider.changed();
 
         changed
     })
