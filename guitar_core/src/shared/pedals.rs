@@ -15,6 +15,7 @@ pub enum PedalDescription {
     Tremolo(TremoloParams),
     Chorus(ChorusParams),
     Eq(EqParams),
+    Phaser(PhaserParams),
 }
 
 impl PedalDescription {
@@ -32,6 +33,7 @@ impl PedalDescription {
             PedalDescription::Tremolo(_) => "Tremolo",
             PedalDescription::Chorus(_) => "Chorus",
             PedalDescription::Eq(_) => "EQ",
+            PedalDescription::Phaser(_) => "Phaser",
         }
     }
 }
@@ -188,6 +190,25 @@ impl Default for ChorusParams {
             delay_ms: 20.0,
             depth_ms: 5.0,
             rate_hz: 1.0,
+            mix: 0.5,
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PhaserParams {
+    pub rate_hz: f32,  // LFO sweep rate (Hz)
+    pub depth: f32,    // How much the LFO sweeps the all-pass center frequency (0.0 to 1.0)
+    pub feedback: f32, // Resonance feeding filtered signal back for a stronger effect (0.0 to 0.95)
+    pub mix: f32,      // Wet/dry mix (0.0 dry, 1.0 wet)
+}
+
+impl Default for PhaserParams {
+    fn default() -> Self {
+        Self {
+            rate_hz: 0.5,
+            depth: 0.7,
+            feedback: 0.3,
             mix: 0.5,
         }
     }

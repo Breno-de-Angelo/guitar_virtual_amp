@@ -15,6 +15,14 @@ impl Allpass {
         }
     }
 
+    pub fn set_delay_len(&mut self, delay_len: usize) {
+        self.delay_len = delay_len.max(1);
+    }
+
+    pub fn set_feedback(&mut self, feedback: f32) {
+        self.feedback = feedback;
+    }
+
     pub fn process(&mut self, input: f32) -> f32 {
         let delayed = if self.buf.len() > self.delay_len {
             self.buf[self.buf.len() - 1 - self.delay_len]

@@ -8,6 +8,7 @@ mod flanger;
 mod low_pass;
 mod noise_gate;
 pub mod pedal;
+mod phaser;
 mod reverb;
 mod tremolo;
 mod wah_wah;
