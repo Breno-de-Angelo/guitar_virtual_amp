@@ -390,7 +390,7 @@ pub fn start_audio_processing_multi(
                 for frame in data.chunks(input_channels as usize) {
                     let samples = extract_channels(frame, channel_count);
                     if !samples.is_empty() {
-                        let _ = input_tx_clone.send(samples);
+                        let _ = input_tx_clone.try_send(samples);
                     }
                 }
             },
@@ -406,7 +406,7 @@ pub fn start_audio_processing_multi(
                         .map(|sample| (sample.clamp(-1.0, 1.0) * i16::MAX as f32) as i16)
                         .collect();
                     if !samples.is_empty() {
-                        let _ = input_tx_clone.send(samples);
+                        let _ = input_tx_clone.try_send(samples);
                     }
                 }
             },
