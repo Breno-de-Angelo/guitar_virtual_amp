@@ -10,6 +10,7 @@ pub enum PedalDescription {
     Flanger(FlangerParams),
     WahWah(WahWahParams),
     Distortion(DistortionParams),
+    NoiseGate(NoiseGateParams),
 }
 
 impl PedalDescription {
@@ -22,6 +23,7 @@ impl PedalDescription {
             PedalDescription::Flanger(_) => "Flanger",
             PedalDescription::WahWah(_) => "WahWah",
             PedalDescription::Distortion(_) => "Distortion",
+            PedalDescription::NoiseGate(_) => "Noise Gate",
         }
     }
 }
@@ -143,6 +145,25 @@ impl Default for DistortionParams {
             level: 0.8,
             mix: 0.7,
             bias: 0.0,
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct NoiseGateParams {
+    pub threshold: f32, // Linear amplitude below which the gate closes (0.0 to 1.0)
+    pub attack_ms: f32, // How fast the gate opens once the signal rises above threshold
+    pub release_ms: f32, // How fast the gate closes once the signal drops below threshold (after hold)
+    pub hold_ms: f32, // How long to stay open after dropping below threshold before releasing
+}
+
+impl Default for NoiseGateParams {
+    fn default() -> Self {
+        Self {
+            threshold: 0.02,
+            attack_ms: 1.0,
+            release_ms: 100.0,
+            hold_ms: 50.0,
         }
     }
 }
