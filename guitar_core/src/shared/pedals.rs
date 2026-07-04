@@ -9,6 +9,7 @@ pub enum PedalDescription {
     Flanger(FlangerParams),
     WahWah(WahWahParams),
     Distortion(DistortionParams),
+    Octaver(OctaverParams),
 }
 
 impl PedalDescription {
@@ -21,6 +22,7 @@ impl PedalDescription {
             PedalDescription::Flanger(_) => "Flanger",
             PedalDescription::WahWah(_) => "WahWah",
             PedalDescription::Distortion(_) => "Distortion",
+            PedalDescription::Octaver(_) => "Octaver",
         }
     }
 }
@@ -142,6 +144,23 @@ impl Default for DistortionParams {
             level: 0.8,
             mix: 0.7,
             bias: 0.0,
+        }
+    }
+}
+
+#[derive(Copy, Clone)]
+pub struct OctaverParams {
+    pub octave_down_mix: f32, // how much of the octave-down (rectified) signal to mix in (0.0 to 1.0)
+    pub dry_mix: f32,        // how much of the original dry signal to keep (0.0 to 1.0)
+    pub tone: f32,           // low-pass tone control on the octave-down signal (0.0 to 1.0)
+}
+
+impl Default for OctaverParams {
+    fn default() -> Self {
+        Self {
+            octave_down_mix: 0.5,
+            dry_mix: 0.7,
+            tone: 0.5,
         }
     }
 }
