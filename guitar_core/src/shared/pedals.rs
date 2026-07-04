@@ -9,6 +9,7 @@ pub enum PedalDescription {
     Flanger(FlangerParams),
     WahWah(WahWahParams),
     Distortion(DistortionParams),
+    Chorus(ChorusParams),
 }
 
 impl PedalDescription {
@@ -21,6 +22,7 @@ impl PedalDescription {
             PedalDescription::Flanger(_) => "Flanger",
             PedalDescription::WahWah(_) => "WahWah",
             PedalDescription::Distortion(_) => "Distortion",
+            PedalDescription::Chorus(_) => "Chorus",
         }
     }
 }
@@ -142,6 +144,25 @@ impl Default for DistortionParams {
             level: 0.8,
             mix: 0.7,
             bias: 0.0,
+        }
+    }
+}
+
+#[derive(Copy, Clone)]
+pub struct ChorusParams {
+    pub delay_ms: f32, // base delay time (ms)
+    pub depth_ms: f32, // how much the LFO modulates the delay time (ms)
+    pub rate_hz: f32,  // LFO rate (Hz)
+    pub mix: f32,      // wet/dry mix (0.0 dry, 1.0 wet)
+}
+
+impl Default for ChorusParams {
+    fn default() -> Self {
+        Self {
+            delay_ms: 20.0,
+            depth_ms: 5.0,
+            rate_hz: 1.0,
+            mix: 0.5,
         }
     }
 }

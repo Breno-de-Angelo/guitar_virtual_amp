@@ -1,7 +1,7 @@
 use eframe::egui::{Slider, Ui};
 
 use crate::shared::pedals::{
-    AmpParams, DelayParams, DistortionParams, FlangerParams, LowPassParams, PedalDescription, ReverbParams, WahWahParams,
+    AmpParams, ChorusParams, DelayParams, DistortionParams, FlangerParams, LowPassParams, PedalDescription, ReverbParams, WahWahParams,
 };
 
 pub enum PedalAction {
@@ -24,6 +24,7 @@ pub fn render_pedal_ui(ui: &mut Ui, pedal: &mut PedalDescription) -> PedalAction
                 PedalDescription::Flanger(params) => flanger_ui(ui, params),
                 PedalDescription::WahWah(params) => wah_wah_ui(ui, params),
                 PedalDescription::Distortion(params) => distortion_ui(ui, params),
+                PedalDescription::Chorus(params) => chorus_ui(ui, params),
             };
             if updated {
                 PedalAction::Updated
@@ -153,6 +154,27 @@ fn distortion_ui(ui: &mut Ui, params: &mut DistortionParams) -> bool {
         changed |= level_slider.changed();
         changed |= mix_slider.changed();
         changed |= bias_slider.changed();
+
+        changed
+    })
+    .inner
+}
+
+fn chorus_ui(ui: &mut Ui, params: &mut ChorusParams) -> bool {
+    ui.group(|ui| {
+        ui.label("Chorus");
+
+        let mut changed = false;
+
+        let delay_slider = ui.add(Slider::new(&mut params.delay_ms, 5.0..=40.0).text("Delay (ms)"));
+        let depth_slider = ui.add(Slider::new(&mut params.depth_ms, 0.0..=15.0).text("Depth (ms)"));
+        let rate_slider = ui.add(Slider::new(&mut params.rate_hz, 0.1..=5.0).text("Rate (Hz)"));
+        let mix_slider = ui.add(Slider::new(&mut params.mix, 0.0..=1.0).text("Mix"));
+
+        changed |= delay_slider.changed();
+        changed |= depth_slider.changed();
+        changed |= rate_slider.changed();
+        changed |= mix_slider.changed();
 
         changed
     })
