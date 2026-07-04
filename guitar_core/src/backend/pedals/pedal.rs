@@ -1,8 +1,8 @@
 use crate::{
     backend::pedals::{
         amp::Amp, chorus::Chorus, compressor::Compressor, delay::Delay, distortion::Distortion,
-        eq::EqPedal, flanger::Flanger, low_pass::LowPass, noise_gate::NoiseGate, phaser::Phaser,
-        reverb::Reverb, tremolo::Tremolo, wah_wah::WahWah,
+        eq::EqPedal, flanger::Flanger, low_pass::LowPass, noise_gate::NoiseGate,
+        octaver::Octaver, phaser::Phaser, reverb::Reverb, tremolo::Tremolo, wah_wah::WahWah,
     },
     shared::pedals::PedalDescription,
 };
@@ -67,6 +67,9 @@ impl PedalChain {
                     }
                     PedalDescription::Phaser(params) => {
                         Box::new(Phaser::new(params)) as Box<dyn Pedal>
+                    }
+                    PedalDescription::Octaver(params) => {
+                        Box::new(Octaver::new(params)) as Box<dyn Pedal>
                     }
                 })
                 .collect(),

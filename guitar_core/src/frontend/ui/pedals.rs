@@ -2,8 +2,8 @@ use eframe::egui::{Slider, Ui};
 
 use crate::shared::pedals::{
     AmpParams, ChorusParams, CompressorParams, DelayParams, DistortionParams, EqParams,
-    FlangerParams, LowPassParams, NoiseGateParams, PedalDescription, PhaserParams, ReverbParams,
-    TremoloParams, WahWahParams,
+    FlangerParams, LowPassParams, NoiseGateParams, OctaverParams, PedalDescription, PhaserParams,
+    ReverbParams, TremoloParams, WahWahParams,
 };
 
 pub enum PedalAction {
@@ -32,6 +32,7 @@ pub fn render_pedal_ui(ui: &mut Ui, pedal: &mut PedalDescription) -> PedalAction
                 PedalDescription::Chorus(params) => chorus_ui(ui, params),
                 PedalDescription::Eq(params) => eq_ui(ui, params),
                 PedalDescription::Phaser(params) => phaser_ui(ui, params),
+                PedalDescription::Octaver(params) => octaver_ui(ui, params),
             };
             if updated {
                 PedalAction::Updated
@@ -290,6 +291,26 @@ fn phaser_ui(ui: &mut Ui, params: &mut PhaserParams) -> bool {
         changed |= depth_slider.changed();
         changed |= feedback_slider.changed();
         changed |= mix_slider.changed();
+
+        changed
+    })
+    .inner
+}
+
+fn octaver_ui(ui: &mut Ui, params: &mut OctaverParams) -> bool {
+    ui.group(|ui| {
+        ui.label("Octaver");
+
+        let mut changed = false;
+
+        let octave_mix_slider =
+            ui.add(Slider::new(&mut params.octave_down_mix, 0.0..=1.0).text("Octave Mix"));
+        let dry_mix_slider = ui.add(Slider::new(&mut params.dry_mix, 0.0..=1.0).text("Dry Mix"));
+        let tone_slider = ui.add(Slider::new(&mut params.tone, 0.0..=1.0).text("Tone"));
+
+        changed |= octave_mix_slider.changed();
+        changed |= dry_mix_slider.changed();
+        changed |= tone_slider.changed();
 
         changed
     })

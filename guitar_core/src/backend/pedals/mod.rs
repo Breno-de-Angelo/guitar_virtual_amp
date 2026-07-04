@@ -7,6 +7,7 @@ mod eq;
 mod flanger;
 mod low_pass;
 mod noise_gate;
+mod octaver;
 pub mod pedal;
 mod phaser;
 mod reverb;
