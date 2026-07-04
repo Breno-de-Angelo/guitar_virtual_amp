@@ -9,6 +9,7 @@ pub enum PedalDescription {
     Flanger(FlangerParams),
     WahWah(WahWahParams),
     Distortion(DistortionParams),
+    Phaser(PhaserParams),
 }
 
 impl PedalDescription {
@@ -21,6 +22,7 @@ impl PedalDescription {
             PedalDescription::Flanger(_) => "Flanger",
             PedalDescription::WahWah(_) => "WahWah",
             PedalDescription::Distortion(_) => "Distortion",
+            PedalDescription::Phaser(_) => "Phaser",
         }
     }
 }
@@ -142,6 +144,25 @@ impl Default for DistortionParams {
             level: 0.8,
             mix: 0.7,
             bias: 0.0,
+        }
+    }
+}
+
+#[derive(Copy, Clone)]
+pub struct PhaserParams {
+    pub rate_hz: f32,  // LFO sweep rate (Hz)
+    pub depth: f32,    // How much the LFO sweeps the all-pass center frequency (0.0 to 1.0)
+    pub feedback: f32, // Resonance feeding filtered signal back for a stronger effect (0.0 to 0.95)
+    pub mix: f32,      // Wet/dry mix (0.0 dry, 1.0 wet)
+}
+
+impl Default for PhaserParams {
+    fn default() -> Self {
+        Self {
+            rate_hz: 0.5,
+            depth: 0.7,
+            feedback: 0.3,
+            mix: 0.5,
         }
     }
 }
