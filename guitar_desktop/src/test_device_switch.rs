@@ -20,7 +20,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Canal receptor de áudio em background para evitar buffer cheio
     thread::spawn(move || {
-        while let Ok(_) = audio_rx.recv() {
+        while audio_rx.recv().is_ok() {
             // Apenas descarta as amostras recebidas
         }
     });

@@ -40,7 +40,7 @@ impl Distortion {
     fn apply_distortion(&self, input: f32) -> f32 {
         let biased = (input + self.params.bias).clamp(-1.0, 1.0);
 
-        let distorted = if self.params.drive < 2.0 {
+        if self.params.drive < 2.0 {
             self.soft_clip(biased)
         } else if self.params.drive < 5.0 {
             let soft = self.soft_clip(biased);
@@ -49,9 +49,7 @@ impl Distortion {
             soft * (1.0 - mix) + hard * mix
         } else {
             self.hard_clip(biased)
-        };
-
-        distorted
+        }
     }
 }
 

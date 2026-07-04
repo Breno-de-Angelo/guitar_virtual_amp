@@ -22,7 +22,6 @@ impl LowPass {
 impl Pedal for LowPass {
     fn apply_effect(&mut self, input: i16) -> i16 {
         let sample = self.last_sample * self.alpha + input as f32 * (1.0 - self.alpha);
-        let output = sample.clamp(-32768.0, 32767.0) as i16;
-        output
+        sample.clamp(-32768.0, 32767.0) as i16
     }
 }
