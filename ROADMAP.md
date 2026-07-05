@@ -21,7 +21,7 @@ Status snapshot as of 2026-07-04 (see CLAUDE.md for full architecture):
 - Full serde support on `PedalDescription`/params, a `Preset` file format
   (`shared/preset.rs`) with save/load/list/delete/rename, a 20-entry factory preset pack
   (`guitar_core/assets/presets/factory/`), optional `song`/`artist` metadata on presets
-  (the seam Phase 4's social layer will build on), and import/export via `rfd` native
+  (the seam Phase 5's social layer will build on), and import/export via `rfd` native
   dialogs (desktop) / manual path entry (Android, where `rfd` has no backend).
 - CI (`.github/workflows/ci.yml`) runs build/test/clippy/fmt. Android targets both
   `armv7-linux-androideabi` and `aarch64-linux-android`.
@@ -53,94 +53,153 @@ and merge each before starting tasks that depend on it.
 
 Fully parallel; can be dispatched now.
 
-- **3.1 [P] MIDI / footswitch control** — bind MIDI CC/PC messages (via `midir` crate) to
-  pedal bypass toggles and preset switching, so a physical MIDI footswitch can drive the
-  app hands-free like a real pedalboard. This is a major differentiator for "feels like
-  hardware."
-- **3.2 [P] Per-pedal bypass (true/soft bypass toggle)** — currently every pedal in the
+- **3.1 [P] Per-pedal bypass (true/soft bypass toggle)** — currently every pedal in the
   chain always processes; add an `enabled: bool` to each pedal/description and a bypass
   button in the UI, without removing the pedal from the chain (matches real pedalboard
   workflow of stomping a switch instead of unplugging a pedal).
-- **3.3 [P] Latency/CPU meter overlay** — surfaces the measurements already computed in
+- **3.2 [P] Latency/CPU meter overlay** — surfaces the measurements already computed in
   `backend/capture.rs` (`AudioSetup::configured_latency_secs`) in the UI (a small
   "buffer: Xms, CPU: Y%" readout), so users/testers can see if they're near
   hardware-competitive latency (~5-10ms round trip is the bar to hit).
-- **3.4 [P] Drag-to-reorder pedal chain in UI** — currently pedals are added to the end of
+- **3.3 [P] Drag-to-reorder pedal chain in UI** — currently pedals are added to the end of
   a `Vec`; confirm and add drag handles (egui supports this) so reordering doesn't require
   delete+re-add.
-- **3.5 [P] Settings persistence** — remember last-used input/output device, window size,
+- **3.4 [P] Settings persistence** — remember last-used input/output device, window size,
   and last-loaded preset across restarts (small serde-backed config file, reuses the
   existing serde/`Preset`/`dirs` infrastructure).
 
 ---
 
-## Phase 4 — Social Platform (Preset Sharing)
+## Phase 4 — Style Guide & Mobile-Friendly UI Redesign
+
+The current layout (`frontend/gui.rs`) is a single fixed `SidePanel` + `CentralPanel`
+carrying every control at once, with the oscilloscope and FFT plots alone consuming
+roughly half the vertical space — workable on a wide desktop window, cramped to the point
+of unusable on a phone-sized Android screen. This phase is a deliberate UX/visual reset
+before Phase 5 adds a whole new social-platform surface (browse/share/profile pages) on
+top of it: better to fix the foundation once than build three more pages on the current
+layout and redo them all later.
+
+### 4.1 [S] Style guide / design system
+- Produce a short design doc (`docs/style-guide.md` or similar) fixing: color palette
+  (dark/light), typography scale, spacing/padding constants, an `egui::Style`/`Visuals`
+  configuration to apply app-wide, and iconography conventions (bypass LED color, active
+  vs. inactive states, etc). This is a genuine design decision, not just an implementation
+  task — flag it to the user for sign-off on direction before 4.2+ build against it, since
+  every other task in this phase depends on the choices made here.
+- Acceptance: a committed style doc plus a reusable `frontend::style` module (theme
+  constants / `egui::Style` builder) that 4.2–4.6 import instead of hardcoding colors.
+
+### 4.2 [P, depends on 4.1] Multi-page navigation shell
+- Replace the single side-panel-plus-central-panel layout with page-based navigation
+  (e.g. bottom tab bar or nav rail: "Live" / "Chain" / "Tuner & Metronome" / "Presets" /
+  "Settings") so no single screen has to cram the pedal chain, oscilloscope, FFT, tuner,
+  metronome, and device pickers in at once. This is the main mobile-friendliness fix.
+- Must degrade gracefully to a wide desktop layout too (e.g. nav rail on the side instead
+  of a bottom bar past some width threshold), not just target phone aspect ratios.
+
+### 4.3 [P, depends on 4.1] Collapsible/dedicated oscilloscope + FFT view
+- Move the oscilloscope/FFT plots off the always-visible main screen and onto their own
+  page (or a collapsible panel), reusing `frontend::lib::fft::compute_fft` and the existing
+  sample buffer unchanged — this is a layout change, not a DSP change. Frees up the bulk of
+  a phone screen for the pedal chain during normal play.
+
+### 4.4 [P, depends on 4.1] Custom pedal visual widget
+- Replace the current `ui.group()`-per-pedal box rendering (`frontend/ui/pedals.rs`) with a
+  custom-painted stompbox-style widget (via `egui::Painter`): pedal-shaped body, a visible
+  bypass LED/footswitch graphic, and knob-style controls in place of plain sliders where it
+  reads better at a glance. Keep `render_pedal_ui`'s existing per-pedal parameter logic and
+  `PedalAction` contract — this task is purely the visual layer around it.
+
+### 4.5 [P, depends on 4.1] Touch-friendly control sizing
+- Audit tap target sizes (knobs, buttons, sliders) against Android touch-target guidelines
+  (~48dp minimum) and adjust `frontend/ui` widget sizing accordingly; verify on an Android
+  emulator or device at a real phone resolution, not just desktop with a resized window.
+
+### 4.6 [P, depends on 4.2] MIDI / footswitch control
+- *(Moved from the old Phase 3.1 — a natural fit once the "Live" page and pedal visuals
+  from 4.2/4.4 exist to represent footswitch state.)* Bind MIDI CC/PC messages (via
+  `midir` crate) to pedal bypass toggles and preset switching, so a physical MIDI
+  footswitch can drive the app hands-free like a real pedalboard.
+
+Acceptance for the phase as a whole: a working build (desktop + Android) showing the new
+navigation, pedal visuals, and layout; manual verification on a phone-sized viewport (real
+device/emulator, not just a narrowed desktop window) that the oscilloscope/FFT no longer
+dominates the screen by default.
+
+---
+
+## Phase 5 — Social Platform (Preset Sharing)
 
 This phase requires a real backend service and is the largest scope increase in the
-project. Backend and client work can proceed in parallel once the API contract (4.1) is fixed.
+project. Backend and client work can proceed in parallel once the API contract (5.1) is fixed.
 
-### 4.1 [S] API contract design
+### 5.1 [S] API contract design
 - Decide and document (new `docs/api.md` or similar): auth model (email/password vs.
   OAuth), preset upload/download endpoints, search/browse by song/artist/genre/tags
   (the `Preset.song`/`Preset.artist`/`Preset.tags` fields already exist for this), rating/
-  like counts, comments. This single design doc unblocks 4.2 and 4.3 to run in parallel
+  like counts, comments. This single design doc unblocks 5.2 and 5.3 to run in parallel
   against a shared contract.
 - This is a genuine product decision (hosting cost, moderation policy for user-uploaded
   content, whether accounts are required to browse vs. only to upload) — flag to the user
   for a go/no-go and scope call before agents build against it.
 
-### 4.2 [P, depends on 4.1] Backend service
+### 5.2 [P, depends on 5.1] Backend service
 - New top-level crate or separate repo/service (recommend `axum` + `sqlx`/Postgres, kept
   outside the `guitar_core` workspace since it has nothing to do with real-time audio).
-  Implements the 4.1 contract: accounts, preset CRUD, search, ratings/comments.
+  Implements the 5.1 contract: accounts, preset CRUD, search, ratings/comments.
 - Needs basic content moderation (reporting, rate limiting on uploads) before any public
   launch — flag as a hard requirement, not a nice-to-have, given user-generated content.
 
-### 4.3 [P, depends on 4.1] Client networking layer
+### 5.3 [P, depends on 5.1] Client networking layer
 - New module in `guitar_core` (e.g. `guitar_core/src/backend/api_client.rs`) using a
   minimal HTTP client (`ureq` or `reqwest` — prefer `ureq` for smaller dependency
-  footprint on Android). Wraps the 4.1 endpoints; UI work (4.4) builds on this.
+  footprint on Android). Wraps the 5.1 endpoints; UI work (5.4) builds on this.
 - Must run network calls off the UI thread (same background-thread pattern already used
   for device switching in `capture.rs`) so browsing/searching never blocks the egui frame
   loop or, worse, the audio callback.
 
-### 4.4 [S, depends on 4.3] Browse/share UI
+### 5.4 [S, depends on 5.3] Browse/share UI
 - New `guitar_core/src/frontend/ui/community.rs` — browse presets by song/artist/tag,
   preview/load one into the live chain, upload the current chain as a shared preset
-  (reusing the existing `song`/`artist` metadata), like/rate.
+  (reusing the existing `song`/`artist` metadata), like/rate. Should land as a new page in
+  the Phase 4 navigation shell rather than bolted onto the old single-screen layout.
 
-### 4.5 [P] Account/profile UI
-- Sign up/login/logout, view your uploaded presets. Can be built in parallel with 4.4
-  against the same 4.3 client layer.
+### 5.5 [P] Account/profile UI
+- Sign up/login/logout, view your uploaded presets. Can be built in parallel with 5.4
+  against the same 5.3 client layer.
 
 ---
 
-## Phase 5 — Launch Readiness
+## Phase 6 — Launch Readiness
 
 Final phase; mostly sequential since it's packaging/release engineering, not feature work.
 
-- **5.1 [P] Desktop packaging** — installers/bundles for Windows (`.msi`/`.exe` via
+- **6.1 [P] Desktop packaging** — installers/bundles for Windows (`.msi`/`.exe` via
   `cargo-wix` or similar), macOS (`.app` + notarization), Linux (AppImage or distro packages).
-- **5.2 [P] Google Play listing + signing pipeline** — production keystore (distinct from
+- **6.2 [P] Google Play listing + signing pipeline** — production keystore (distinct from
   the checked-in debug keystore in `guitar_android/Cargo.toml` — **do not ship the debug
   key to production**), Play Console listing, permissions review (RECORD_AUDIO is already
   declared).
-- **5.3 [P] Crash reporting / telemetry (opt-in)** — minimal crash reporter
+- **6.3 [P] Crash reporting / telemetry (opt-in)** — minimal crash reporter
   (e.g. `sentry` crate) gated behind explicit user opt-in, given this handles live audio
   from a personal instrument/mic.
-- **5.4 [S] iOS feasibility spike** — eframe/egui iOS support is not first-class; this
+- **6.4 [S] iOS feasibility spike** — eframe/egui iOS support is not first-class; this
   needs a dedicated research spike (not a build task) to decide whether iOS ships via
   egui's experimental iOS backend, a from-scratch SwiftUI shell calling into `guitar_core`
   via FFI, or is deferred. Flag to the user as a decision point before committing agent
   time to a full iOS port.
-- **5.5 [P] Docs & marketing site** — landing page, pedal/preset showcase, download links.
+- **6.5 [P] Docs & marketing site** — landing page, pedal/preset showcase, download links.
 
 ---
 
 ## Suggested parallel dispatch order
 
-1. Phase 4 is a deliberate go/no-go checkpoint with the user (backend hosting, moderation,
-   accounts are real product/cost decisions) — don't auto-dispatch 4.2+ without that
-   conversation.
-2. Phase 5 starts once there's a build worth shipping; 5.4 (iOS) is a research spike to
+1. Phase 3 tasks can be dispatched now, fully parallel.
+2. Phase 4 starts with the 4.1 style-guide sign-off (a design decision, flag to the user),
+   then 4.2–4.6 can run in parallel against it.
+3. Phase 5 is a deliberate go/no-go checkpoint with the user (backend hosting, moderation,
+   accounts are real product/cost decisions) — don't auto-dispatch 5.2+ without that
+   conversation. Sequence it after Phase 4 so there's a UI worth adding social pages to.
+4. Phase 6 starts once there's a build worth shipping; 6.4 (iOS) is a research spike to
    schedule early since it may change client architecture decisions retroactively.
