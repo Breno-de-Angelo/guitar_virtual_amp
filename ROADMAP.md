@@ -14,8 +14,10 @@ Status snapshot as of 2026-07-04 (see CLAUDE.md for full architecture):
 - 17 pedals: Amp (Clean/Crunch/Lead voicings + bass/mid/treble tone stack), Delay, Reverb,
   LowPass, Flanger, WahWah, Distortion, Noise Gate, Compressor, Tremolo, Chorus, EQ,
   Phaser, Octaver, Pitch Shifter, Looper, and Cabinet/IR (partitioned FFT convolution via
-  `backend/dsp/convolution.rs`, `.wav` IR loading via `hound`). No tuner, no metronome/tap
-  tempo yet.
+  `backend/dsp/convolution.rs`, `.wav` IR loading via `hound`). Tuner (YIN pitch detection,
+  `frontend/lib/pitch.rs`) and metronome/tap-tempo (`frontend/lib/metronome.rs`) utilities
+  ship as UI panels alongside the oscilloscope/FFT view, each with a BPM-sync button that
+  writes computed rate/delay values into any Delay/Tremolo pedals already in the chain.
 - Full serde support on `PedalDescription`/params, a `Preset` file format
   (`shared/preset.rs`) with save/load/list/delete/rename, a 20-entry factory preset pack
   (`guitar_core/assets/presets/factory/`), optional `song`/`artist` metadata on presets
@@ -47,27 +49,9 @@ and merge each before starting tasks that depend on it.
 
 ---
 
-## Phase 1 — DSP & Pedal Library Expansion (remaining)
-
-Everything in this phase except the two items below has shipped (see status snapshot).
-These are the two still-open items, independent **[P]** tasks (of each other and of Phase 3):
-
-- **1.8 Tuner utility (not a chain pedal)** — pitch detection (autocorrelation or YIN) off
-  the live sample buffer already available to the FFT view (`frontend/lib/fft.rs`);
-  surfaced as a UI panel, not a `Pedal` impl.
-- **1.9 Metronome / tap tempo utility** — feeds delay/tremolo rate params so time-based
-  effects can sync to a tempo; needed before "vast preset library" presets can specify
-  tempo-synced delay times meaningfully.
-
-Acceptance: unit test on the detection/timing logic in isolation (e.g. known sine wave →
-correct detected pitch/frequency), UI panel wired in alongside the existing
-oscilloscope/FFT view.
-
----
-
 ## Phase 3 — Hardware-Like UX Polish
 
-Independent of Phase 1's remaining items; can run in parallel.
+Fully parallel; can be dispatched now.
 
 - **3.1 [P] MIDI / footswitch control** — bind MIDI CC/PC messages (via `midir` crate) to
   pedal bypass toggles and preset switching, so a physical MIDI footswitch can drive the
@@ -93,8 +77,7 @@ Independent of Phase 1's remaining items; can run in parallel.
 ## Phase 4 — Social Platform (Preset Sharing)
 
 This phase requires a real backend service and is the largest scope increase in the
-project — sequence it after Phase 1's remaining items land so there's something worth
-sharing. Backend and client work can proceed in parallel once the API contract (4.1) is fixed.
+project. Backend and client work can proceed in parallel once the API contract (4.1) is fixed.
 
 ### 4.1 [S] API contract design
 - Decide and document (new `docs/api.md` or similar): auth model (email/password vs.
@@ -156,11 +139,8 @@ Final phase; mostly sequential since it's packaging/release engineering, not fea
 
 ## Suggested parallel dispatch order
 
-1. Kick off **1.8** (Tuner) and **1.9** (Metronome) together — independent files, no
-   shared match-arm contention (neither is a `Pedal`/`PedalDescription`).
-2. **Phase 3** tasks can start any time, fully parallel with Phase 1's remaining items.
-3. Phase 4 is a deliberate go/no-go checkpoint with the user (backend hosting, moderation,
+1. Phase 4 is a deliberate go/no-go checkpoint with the user (backend hosting, moderation,
    accounts are real product/cost decisions) — don't auto-dispatch 4.2+ without that
    conversation.
-4. Phase 5 starts once there's a build worth shipping; 5.4 (iOS) is a research spike to
+2. Phase 5 starts once there's a build worth shipping; 5.4 (iOS) is a research spike to
    schedule early since it may change client architecture decisions retroactively.

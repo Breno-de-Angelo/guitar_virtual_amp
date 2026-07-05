@@ -10,8 +10,10 @@ use crate::{
     backend::capture::{AudioSetup, find_best_config, switch_output_device},
     frontend::{
         lib::fft::compute_fft,
+        ui::metronome::MetronomePanel,
         ui::pedals::{PedalAction, render_pedal_ui},
         ui::presets::PresetPanel,
+        ui::tuner::tuner_ui,
     },
     shared::{config::GLOBAL_CONFIG, pedals::PedalDescription},
 };
@@ -76,6 +78,7 @@ pub struct AudioApp {
     switching_output_rx: Option<Receiver<Result<cpal::Stream, String>>>,
     refreshing_output_devices_rx: Option<Receiver<Vec<String>>>,
     preset_panel: PresetPanel,
+    metronome_panel: MetronomePanel,
 }
 
 impl AudioApp {
@@ -140,6 +143,7 @@ impl AudioApp {
             switching_output_rx: None,
             refreshing_output_devices_rx: None,
             preset_panel: PresetPanel::new(),
+            metronome_panel: MetronomePanel::new(),
         }
     }
 }
@@ -382,6 +386,18 @@ impl eframe::App for AudioApp {
                 ui.collapsing("Presets", |ui| {
                     if let Some(pedals) = self.preset_panel.ui(ui, &self.pedal_chain) {
                         self.pedal_chain = pedals;
+                        pedal_chain_updated = true;
+                    }
+                });
+                ui.separator();
+
+                ui.collapsing("Tuner", |ui| {
+                    tuner_ui(ui, &self.buffer);
+                });
+                ui.separator();
+
+                ui.collapsing("Metronome", |ui| {
+                    if self.metronome_panel.ui(ui, &mut self.pedal_chain) {
                         pedal_chain_updated = true;
                     }
                 });
