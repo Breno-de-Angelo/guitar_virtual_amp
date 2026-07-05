@@ -1,0 +1,36 @@
+{
+  "name": "Pop Clean",
+  "author": "Factory",
+  "pedals": [
+    {
+      "Chorus": {
+        "delay_ms": 20.0,
+        "depth_ms": 5.0,
+        "rate_hz": 1.0,
+        "mix": 0.3
+      }
+    },
+    {
+      "Compressor": {
+        "threshold": 0.5,
+        "ratio": 4.0,
+        "attack_ms": 5.0,
+        "release_ms": 100.0,
+        "makeup_gain": 1.5
+      }
+    },
+    {
+      "Eq": {
+        "low_gain_db": 0.0,
+        "mid_gain_db": -1.0,
+        "high_gain_db": 2.0
+      }
+    }
+  ],
+  "tags": [
+    "pop",
+    "clean"
+  ],
+  "song": null,
+  "artist": null
+}

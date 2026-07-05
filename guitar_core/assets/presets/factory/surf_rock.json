@@ -1,0 +1,25 @@
+{
+  "name": "Surf Rock",
+  "author": "Factory",
+  "pedals": [
+    {
+      "Tremolo": {
+        "rate_hz": 4.0,
+        "depth": 0.3
+      }
+    },
+    {
+      "Reverb": {
+        "room_size": 0.7,
+        "mix": 0.55,
+        "damping": 0.25
+      }
+    }
+  ],
+  "tags": [
+    "surf",
+    "spring-reverb"
+  ],
+  "song": null,
+  "artist": null
+}

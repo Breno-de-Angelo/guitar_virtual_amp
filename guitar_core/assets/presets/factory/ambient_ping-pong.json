@@ -1,0 +1,37 @@
+{
+  "name": "Ambient Ping-Pong",
+  "author": "Factory",
+  "pedals": [
+    {
+      "Chorus": {
+        "delay_ms": 20.0,
+        "depth_ms": 5.0,
+        "rate_hz": 1.0,
+        "mix": 0.5
+      }
+    },
+    {
+      "Delay": {
+        "delay_ms": 600.0,
+        "feedback": 0.55,
+        "gain": 0.6,
+        "mix": 0.5,
+        "taps": 6,
+        "damping": 0.2
+      }
+    },
+    {
+      "Reverb": {
+        "room_size": 0.8,
+        "mix": 0.5,
+        "damping": 0.2
+      }
+    }
+  ],
+  "tags": [
+    "ambient",
+    "delay"
+  ],
+  "song": null,
+  "artist": null
+}

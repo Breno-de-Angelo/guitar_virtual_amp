@@ -1,0 +1,31 @@
+{
+  "name": "Blues Crunch",
+  "author": "Factory",
+  "pedals": [
+    {
+      "Amp": {
+        "gain": 1.8,
+        "voicing": "Crunch",
+        "bass": 1.0,
+        "mid": 3.0,
+        "treble": 1.0
+      }
+    },
+    {
+      "Delay": {
+        "delay_ms": 350.0,
+        "feedback": 0.25,
+        "gain": 0.3,
+        "mix": 0.2,
+        "taps": 2,
+        "damping": 0.4
+      }
+    }
+  ],
+  "tags": [
+    "blues",
+    "crunch"
+  ],
+  "song": null,
+  "artist": "inspired by Stevie Ray Vaughan"
+}

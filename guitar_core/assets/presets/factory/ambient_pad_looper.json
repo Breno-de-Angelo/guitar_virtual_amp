@@ -1,0 +1,34 @@
+{
+  "name": "Ambient Pad Looper",
+  "author": "Factory",
+  "pedals": [
+    {
+      "Chorus": {
+        "delay_ms": 20.0,
+        "depth_ms": 5.0,
+        "rate_hz": 1.0,
+        "mix": 0.4
+      }
+    },
+    {
+      "Reverb": {
+        "room_size": 0.85,
+        "mix": 0.55,
+        "damping": 0.2
+      }
+    },
+    {
+      "Looper": {
+        "max_loop_seconds": 30.0,
+        "command": "Idle"
+      }
+    }
+  ],
+  "tags": [
+    "ambient",
+    "looper",
+    "pad"
+  ],
+  "song": null,
+  "artist": null
+}

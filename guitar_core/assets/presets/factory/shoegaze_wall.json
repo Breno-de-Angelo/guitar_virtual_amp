@@ -1,0 +1,46 @@
+{
+  "name": "Shoegaze Wall",
+  "author": "Factory",
+  "pedals": [
+    {
+      "Distortion": {
+        "drive": 5.0,
+        "tone": 0.6,
+        "level": 0.7,
+        "mix": 0.8,
+        "bias": 0.0
+      }
+    },
+    {
+      "Chorus": {
+        "delay_ms": 20.0,
+        "depth_ms": 8.0,
+        "rate_hz": 1.0,
+        "mix": 0.6
+      }
+    },
+    {
+      "Delay": {
+        "delay_ms": 450.0,
+        "feedback": 0.4,
+        "gain": 0.4,
+        "mix": 0.3,
+        "taps": 4,
+        "damping": 0.3
+      }
+    },
+    {
+      "Reverb": {
+        "room_size": 0.9,
+        "mix": 0.6,
+        "damping": 0.15
+      }
+    }
+  ],
+  "tags": [
+    "shoegaze",
+    "wall-of-sound"
+  ],
+  "song": null,
+  "artist": null
+}

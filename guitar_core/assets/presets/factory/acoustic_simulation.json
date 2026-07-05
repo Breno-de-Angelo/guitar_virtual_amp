@@ -1,0 +1,26 @@
+{
+  "name": "Acoustic Simulation",
+  "author": "Factory",
+  "pedals": [
+    {
+      "Eq": {
+        "low_gain_db": 1.0,
+        "mid_gain_db": -2.0,
+        "high_gain_db": 3.0
+      }
+    },
+    {
+      "Reverb": {
+        "room_size": 0.35,
+        "mix": 0.2,
+        "damping": 0.4
+      }
+    }
+  ],
+  "tags": [
+    "acoustic",
+    "unplugged"
+  ],
+  "song": null,
+  "artist": null
+}

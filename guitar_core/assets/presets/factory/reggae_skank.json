@@ -1,0 +1,30 @@
+{
+  "name": "Reggae Skank",
+  "author": "Factory",
+  "pedals": [
+    {
+      "Phaser": {
+        "rate_hz": 0.5,
+        "depth": 0.7,
+        "feedback": 0.3,
+        "mix": 0.5
+      }
+    },
+    {
+      "Delay": {
+        "delay_ms": 300.0,
+        "feedback": 0.3,
+        "gain": 0.3,
+        "mix": 0.25,
+        "taps": 2,
+        "damping": 0.4
+      }
+    }
+  ],
+  "tags": [
+    "reggae",
+    "skank"
+  ],
+  "song": null,
+  "artist": null
+}

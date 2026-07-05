@@ -1,0 +1,37 @@
+{
+  "name": "Clean Jazz",
+  "author": "Factory",
+  "pedals": [
+    {
+      "Compressor": {
+        "threshold": 0.6,
+        "ratio": 2.0,
+        "attack_ms": 5.0,
+        "release_ms": 100.0,
+        "makeup_gain": 1.5
+      }
+    },
+    {
+      "Amp": {
+        "gain": 0.8,
+        "voicing": "Clean",
+        "bass": 2.0,
+        "mid": -1.0,
+        "treble": -2.0
+      }
+    },
+    {
+      "Reverb": {
+        "room_size": 0.3,
+        "mix": 0.2,
+        "damping": 0.5
+      }
+    }
+  ],
+  "tags": [
+    "clean",
+    "jazz"
+  ],
+  "song": null,
+  "artist": null
+}

@@ -1,0 +1,33 @@
+{
+  "name": "Doom Sludge",
+  "author": "Factory",
+  "pedals": [
+    {
+      "Distortion": {
+        "drive": 8.0,
+        "tone": 0.3,
+        "level": 0.9,
+        "mix": 1.0,
+        "bias": 0.0
+      }
+    },
+    {
+      "LowPass": {
+        "frequency": 3500.0
+      }
+    },
+    {
+      "Cabinet": {
+        "ir_path": null,
+        "mix": 1.0
+      }
+    }
+  ],
+  "tags": [
+    "doom",
+    "sludge",
+    "low-tuned"
+  ],
+  "song": null,
+  "artist": null
+}

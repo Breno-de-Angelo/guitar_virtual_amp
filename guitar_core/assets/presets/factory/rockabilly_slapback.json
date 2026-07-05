@@ -1,0 +1,31 @@
+{
+  "name": "Rockabilly Slapback",
+  "author": "Factory",
+  "pedals": [
+    {
+      "Amp": {
+        "gain": 1.6,
+        "voicing": "Crunch",
+        "bass": 0.0,
+        "mid": 2.0,
+        "treble": 2.0
+      }
+    },
+    {
+      "Delay": {
+        "delay_ms": 110.0,
+        "feedback": 0.05,
+        "gain": 0.4,
+        "mix": 0.3,
+        "taps": 1,
+        "damping": 0.2
+      }
+    }
+  ],
+  "tags": [
+    "rockabilly",
+    "slapback"
+  ],
+  "song": null,
+  "artist": null
+}

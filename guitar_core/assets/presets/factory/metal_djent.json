@@ -1,0 +1,43 @@
+{
+  "name": "Metal Djent",
+  "author": "Factory",
+  "pedals": [
+    {
+      "NoiseGate": {
+        "threshold": 0.08,
+        "attack_ms": 0.5,
+        "release_ms": 60.0,
+        "hold_ms": 20.0
+      }
+    },
+    {
+      "Distortion": {
+        "drive": 6.0,
+        "tone": 0.35,
+        "level": 0.85,
+        "mix": 1.0,
+        "bias": 0.0
+      }
+    },
+    {
+      "Eq": {
+        "low_gain_db": 2.0,
+        "mid_gain_db": -5.0,
+        "high_gain_db": 3.0
+      }
+    },
+    {
+      "Cabinet": {
+        "ir_path": null,
+        "mix": 1.0
+      }
+    }
+  ],
+  "tags": [
+    "metal",
+    "djent",
+    "tight"
+  ],
+  "song": null,
+  "artist": null
+}

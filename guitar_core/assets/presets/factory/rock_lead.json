@@ -1,0 +1,38 @@
+{
+  "name": "Rock Lead",
+  "author": "Factory",
+  "pedals": [
+    {
+      "Amp": {
+        "gain": 3.0,
+        "voicing": "Lead",
+        "bass": 0.0,
+        "mid": 4.0,
+        "treble": 2.0
+      }
+    },
+    {
+      "Delay": {
+        "delay_ms": 400.0,
+        "feedback": 0.35,
+        "gain": 0.35,
+        "mix": 0.25,
+        "taps": 3,
+        "damping": 0.3
+      }
+    },
+    {
+      "Reverb": {
+        "room_size": 0.5,
+        "mix": 0.25,
+        "damping": 0.3
+      }
+    }
+  ],
+  "tags": [
+    "rock",
+    "lead"
+  ],
+  "song": "Sweet Child O' Mine (style)",
+  "artist": "inspired by Guns N' Roses"
+}

@@ -1,0 +1,44 @@
+{
+  "name": "Metal High Gain",
+  "author": "Factory",
+  "pedals": [
+    {
+      "NoiseGate": {
+        "threshold": 0.05,
+        "attack_ms": 1.0,
+        "release_ms": 100.0,
+        "hold_ms": 50.0
+      }
+    },
+    {
+      "Distortion": {
+        "drive": 7.0,
+        "tone": 0.4,
+        "level": 0.9,
+        "mix": 1.0,
+        "bias": 0.0
+      }
+    },
+    {
+      "Amp": {
+        "gain": 3.5,
+        "voicing": "Lead",
+        "bass": 3.0,
+        "mid": -3.0,
+        "treble": 2.0
+      }
+    },
+    {
+      "Cabinet": {
+        "ir_path": null,
+        "mix": 1.0
+      }
+    }
+  ],
+  "tags": [
+    "metal",
+    "high-gain"
+  ],
+  "song": null,
+  "artist": null
+}

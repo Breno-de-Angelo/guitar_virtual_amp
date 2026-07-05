@@ -8,6 +8,10 @@ default-run = "guitar_desktop"
 name = "test_device_switch"
 path = "src/test_device_switch.rs"
 
+[[bin]]
+name = "generate_factory_presets"
+path = "src/generate_factory_presets.rs"
+
 [dependencies]
 guitar_core = { path = "../guitar_core" }
 eframe = "0.32.1"

@@ -1,0 +1,28 @@
+{
+  "name": "Classic Rock Rhythm",
+  "author": "Factory",
+  "pedals": [
+    {
+      "Amp": {
+        "gain": 2.0,
+        "voicing": "Crunch",
+        "bass": 1.0,
+        "mid": 1.0,
+        "treble": 0.0
+      }
+    },
+    {
+      "Eq": {
+        "low_gain_db": 1.0,
+        "mid_gain_db": 0.0,
+        "high_gain_db": 1.0
+      }
+    }
+  ],
+  "tags": [
+    "rock",
+    "rhythm"
+  ],
+  "song": null,
+  "artist": null
+}

@@ -1,0 +1,32 @@
+{
+  "name": "Lo-Fi Tape",
+  "author": "Factory",
+  "pedals": [
+    {
+      "LowPass": {
+        "frequency": 4000.0
+      }
+    },
+    {
+      "PitchShift": {
+        "semitones": 0.1,
+        "mix": 0.3,
+        "grain_size_ms": 80.0
+      }
+    },
+    {
+      "NoiseGate": {
+        "threshold": 0.02,
+        "attack_ms": 1.0,
+        "release_ms": 100.0,
+        "hold_ms": 50.0
+      }
+    }
+  ],
+  "tags": [
+    "lo-fi",
+    "tape"
+  ],
+  "song": null,
+  "artist": null
+}

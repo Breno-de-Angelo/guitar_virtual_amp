@@ -1,0 +1,38 @@
+{
+  "name": "Country Twang",
+  "author": "Factory",
+  "pedals": [
+    {
+      "Compressor": {
+        "threshold": 0.4,
+        "ratio": 3.5,
+        "attack_ms": 3.0,
+        "release_ms": 80.0,
+        "makeup_gain": 1.6
+      }
+    },
+    {
+      "Eq": {
+        "low_gain_db": -2.0,
+        "mid_gain_db": 1.0,
+        "high_gain_db": 4.0
+      }
+    },
+    {
+      "Delay": {
+        "delay_ms": 120.0,
+        "feedback": 0.1,
+        "gain": 0.2,
+        "mix": 0.15,
+        "taps": 1,
+        "damping": 0.3
+      }
+    }
+  ],
+  "tags": [
+    "country",
+    "twang"
+  ],
+  "song": null,
+  "artist": null
+}

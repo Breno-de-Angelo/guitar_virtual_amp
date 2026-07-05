@@ -11,6 +11,7 @@ use crate::{
     frontend::{
         lib::fft::compute_fft,
         ui::pedals::{PedalAction, render_pedal_ui},
+        ui::presets::PresetPanel,
     },
     shared::{config::GLOBAL_CONFIG, pedals::PedalDescription},
 };
@@ -74,6 +75,7 @@ pub struct AudioApp {
     output_audio_tx: Sender<i16>,
     switching_output_rx: Option<Receiver<Result<cpal::Stream, String>>>,
     refreshing_output_devices_rx: Option<Receiver<Vec<String>>>,
+    preset_panel: PresetPanel,
 }
 
 impl AudioApp {
@@ -137,6 +139,7 @@ impl AudioApp {
             output_audio_tx: setup.audio_tx,
             switching_output_rx: None,
             refreshing_output_devices_rx: None,
+            preset_panel: PresetPanel::new(),
         }
     }
 }
@@ -372,6 +375,14 @@ impl eframe::App for AudioApp {
                             let _ = tx.send(list);
                         });
                         self.refreshing_output_devices_rx = Some(rx);
+                    }
+                });
+                ui.separator();
+
+                ui.collapsing("Presets", |ui| {
+                    if let Some(pedals) = self.preset_panel.ui(ui, &self.pedal_chain) {
+                        self.pedal_chain = pedals;
+                        pedal_chain_updated = true;
                     }
                 });
                 ui.separator();

@@ -1,0 +1,30 @@
+{
+  "name": "Funk Envelope",
+  "author": "Factory",
+  "pedals": [
+    {
+      "Compressor": {
+        "threshold": 0.5,
+        "ratio": 5.0,
+        "attack_ms": 2.0,
+        "release_ms": 100.0,
+        "makeup_gain": 1.5
+      }
+    },
+    {
+      "WahWah": {
+        "frequency": 1000.0,
+        "resonance": 2.0,
+        "mix": 0.7,
+        "lfo_rate": 3.5,
+        "lfo_depth": 0.8
+      }
+    }
+  ],
+  "tags": [
+    "funk",
+    "auto-wah"
+  ],
+  "song": null,
+  "artist": null
+}
