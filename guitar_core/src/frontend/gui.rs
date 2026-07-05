@@ -4,7 +4,7 @@ use crossbeam::channel::{Receiver, Sender};
 use eframe::egui;
 use egui_plot::{Line, Plot, PlotPoints};
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 use strum::IntoEnumIterator;
 
@@ -96,6 +96,10 @@ pub struct AudioApp {
     /// Wall-clock duration of the most recently completed output-stream
     /// callback, updated from the realtime audio thread. See `capture.rs`.
     last_output_callback_ns: Arc<AtomicU64>,
+    /// Shared with the realtime output callback so it can generate the
+    /// metronome click sample-accurately. See `capture.rs`.
+    metronome_running: Arc<AtomicBool>,
+    metronome_bpm: Arc<AtomicU32>,
     /// Index (in `pedal_chain`) of the pedal currently being dragged for
     /// reordering, if any.
     dragged_pedal: Option<usize>,
@@ -199,9 +203,14 @@ impl AudioApp {
             switching_output_rx: None,
             refreshing_output_devices_rx: None,
             preset_panel: PresetPanel::new(),
-            metronome_panel: MetronomePanel::new(),
+            metronome_panel: MetronomePanel::new(
+                setup.metronome_running.clone(),
+                setup.metronome_bpm.clone(),
+            ),
             configured_latency_secs: setup.configured_latency_secs,
             last_output_callback_ns: setup.last_output_callback_ns,
+            metronome_running: setup.metronome_running,
+            metronome_bpm: setup.metronome_bpm,
             dragged_pedal: None,
             buffer_frames: settings
                 .buffer_frames
@@ -359,6 +368,8 @@ impl eframe::App for AudioApp {
                             let output_audio_tx = self.output_audio_tx.clone();
                             let output_pedal_rx = self.output_pedal_rx.clone();
                             let initial_pedals = self.pedal_chain.clone();
+                            let metronome_running = self.metronome_running.clone();
+                            let metronome_bpm = self.metronome_bpm.clone();
 
                             std::thread::spawn(move || {
                                 let input_res =
@@ -370,6 +381,8 @@ impl eframe::App for AudioApp {
                                     output_audio_tx,
                                     output_pedal_rx,
                                     initial_pedals,
+                                    metronome_running,
+                                    metronome_bpm,
                                 );
                                 let _ = tx.send((input_res, output_res));
                             });
@@ -471,6 +484,8 @@ impl eframe::App for AudioApp {
                                         let pedal_rx = self.output_pedal_rx.clone();
                                         let initial_pedals = self.pedal_chain.clone();
                                         let buffer_frames = self.buffer_frames;
+                                        let metronome_running = self.metronome_running.clone();
+                                        let metronome_bpm = self.metronome_bpm.clone();
 
                                         std::thread::spawn(move || {
                                             let res = switch_output_device(
@@ -480,6 +495,8 @@ impl eframe::App for AudioApp {
                                                 audio_tx,
                                                 pedal_rx,
                                                 initial_pedals,
+                                                metronome_running,
+                                                metronome_bpm,
                                             );
                                             let _ = tx.send(res);
                                         });

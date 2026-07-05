@@ -62,12 +62,76 @@
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use crossbeam::channel::{bounded, Receiver, Sender};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 use crate::backend::pedals::pedal::{MultiChannelPedalChain, PedalChain};
 use crate::shared::pedals::PedalInstance;
 use crate::shared::config::GLOBAL_CONFIG;
+
+/// Length of the metronome's click sound, in samples at `GLOBAL_CONFIG.sample_rate`.
+const METRONOME_CLICK_SAMPLES: u32 = 1440; // ~30ms at 48kHz
+/// Tone frequency of the metronome click, in Hz.
+const METRONOME_CLICK_FREQ_HZ: f32 = 1500.0;
+/// Peak amplitude of the metronome click, as a fraction of `i16::MAX` (kept
+/// well below the input signal's headroom so it doesn't dominate the mix).
+const METRONOME_CLICK_GAIN: f32 = 0.5;
+
+/// Sample-accurate click generator for the metronome, driven by realtime state
+/// (`running`/`bpm`) shared with the UI thread via atomics. Runs entirely on the
+/// audio callback thread so beat timing isn't subject to UI frame-rate jitter.
+struct MetronomeClick {
+    running: Arc<AtomicBool>,
+    bpm_bits: Arc<AtomicU32>,
+    samples_into_beat: u64,
+    click_remaining: u32,
+    click_phase: f32,
+}
+
+impl MetronomeClick {
+    fn new(running: Arc<AtomicBool>, bpm_bits: Arc<AtomicU32>) -> Self {
+        Self {
+            running,
+            bpm_bits,
+            samples_into_beat: 0,
+            click_remaining: 0,
+            click_phase: 0.0,
+        }
+    }
+
+    /// Advances the beat clock by one sample and returns the click contribution
+    /// (silence outside of a click envelope, or when stopped) to mix in.
+    fn next_sample(&mut self) -> i16 {
+        if self.running.load(Ordering::Relaxed) {
+            let bpm = f32::from_bits(self.bpm_bits.load(Ordering::Relaxed)).clamp(1.0, 1000.0);
+            let period_samples = ((GLOBAL_CONFIG.sample_rate * 60.0 / bpm) as u64).max(1);
+            if self.samples_into_beat == 0 {
+                self.click_remaining = METRONOME_CLICK_SAMPLES;
+                self.click_phase = 0.0;
+            }
+            self.samples_into_beat = (self.samples_into_beat + 1) % period_samples;
+        } else {
+            self.samples_into_beat = 0;
+            self.click_remaining = 0;
+        }
+
+        if self.click_remaining > 0 {
+            let envelope = self.click_remaining as f32 / METRONOME_CLICK_SAMPLES as f32;
+            let value = (self.click_phase * 2.0 * std::f32::consts::PI * METRONOME_CLICK_FREQ_HZ
+                / GLOBAL_CONFIG.sample_rate)
+                .sin()
+                * envelope
+                * envelope
+                * i16::MAX as f32
+                * METRONOME_CLICK_GAIN;
+            self.click_phase += 1.0;
+            self.click_remaining -= 1;
+            value as i16
+        } else {
+            0
+        }
+    }
+}
 
 /// Turns a device's `SupportedStreamConfig` into a concrete `StreamConfig`,
 /// overriding the buffer size to `requested_frames` when the device reports a
@@ -119,6 +183,13 @@ pub struct AudioSetup {
     /// nanoseconds. Updated from the realtime audio thread on every callback; safe to read
     /// from any thread via `.load(Ordering::Relaxed)`. See module docs for context.
     pub last_output_callback_ns: Arc<AtomicU64>,
+    /// Whether the metronome click should currently be audible. Read from the
+    /// realtime output callback; written from the UI when the user starts/stops
+    /// the metronome (see `frontend::ui::metronome::MetronomePanel`).
+    pub metronome_running: Arc<AtomicBool>,
+    /// Current metronome tempo, stored as `f32::to_bits` since `AtomicF32`
+    /// doesn't exist in `std`.
+    pub metronome_bpm: Arc<AtomicU32>,
 }
 
 pub fn start_audio_processing(
@@ -220,6 +291,8 @@ pub fn start_audio_processing_with_devices(
     let (pedal_tx, pedal_rx) = bounded::<Vec<PedalInstance>>(8);
 
     let last_output_callback_ns = Arc::new(AtomicU64::new(0));
+    let metronome_running = Arc::new(AtomicBool::new(false));
+    let metronome_bpm = Arc::new(AtomicU32::new(120.0f32.to_bits()));
 
     let (output_stream, output_effective_frames) = build_output_stream(
         &output_device,
@@ -230,6 +303,8 @@ pub fn start_audio_processing_with_devices(
         pedal_rx.clone(),
         Vec::new(),
         last_output_callback_ns.clone(),
+        metronome_running.clone(),
+        metronome_bpm.clone(),
     )?;
 
     output_stream.play()?;
@@ -252,6 +327,8 @@ pub fn start_audio_processing_with_devices(
         audio_tx,
         configured_latency_secs,
         last_output_callback_ns,
+        metronome_running,
+        metronome_bpm,
     })
 }
 
@@ -268,12 +345,15 @@ fn build_output_stream(
     pedal_rx: Receiver<Vec<PedalInstance>>,
     initial_pedals: Vec<PedalInstance>,
     last_output_callback_ns: Arc<AtomicU64>,
+    metronome_running: Arc<AtomicBool>,
+    metronome_bpm: Arc<AtomicU32>,
 ) -> Result<(cpal::Stream, Option<u32>), Box<dyn std::error::Error>> {
     let sample_format = config.sample_format();
     let (stream_config, effective_frames) = resolve_stream_config(&config, buffer_frames);
     let channels = stream_config.channels;
 
     let mut pedal_chain = PedalChain::from_description(initial_pedals);
+    let mut metronome_click = MetronomeClick::new(metronome_running, metronome_bpm);
 
     let stream = match sample_format {
         cpal::SampleFormat::I16 => device.build_output_stream(
@@ -286,13 +366,14 @@ fn build_output_stream(
                 }
 
                 for frame in data.chunks_mut(channels as usize) {
-                    let processed = if let Ok(in_sample) = input_rx.try_recv() {
-                        let out_sample = pedal_chain.process_sample(in_sample);
-                        let _ = audio_tx.try_send(out_sample);
-                        out_sample
+                    let base_sample = if let Ok(in_sample) = input_rx.try_recv() {
+                        pedal_chain.process_sample(in_sample)
                     } else {
                         0
                     };
+                    let click_sample = metronome_click.next_sample();
+                    let processed = base_sample.saturating_add(click_sample);
+                    let _ = audio_tx.try_send(processed);
 
                     for channel_sample in frame.iter_mut() {
                         *channel_sample = processed;
@@ -317,13 +398,14 @@ fn build_output_stream(
                 }
 
                 for frame in data.chunks_mut(channels as usize) {
-                    let processed_i16 = if let Ok(in_sample) = input_rx.try_recv() {
-                        let out_sample = pedal_chain.process_sample(in_sample);
-                        let _ = audio_tx.try_send(out_sample);
-                        out_sample
+                    let base_sample = if let Ok(in_sample) = input_rx.try_recv() {
+                        pedal_chain.process_sample(in_sample)
                     } else {
                         0
                     };
+                    let click_sample = metronome_click.next_sample();
+                    let processed_i16 = base_sample.saturating_add(click_sample);
+                    let _ = audio_tx.try_send(processed_i16);
 
                     let processed_f32 = processed_i16 as f32 / i16::MAX as f32;
                     for channel_sample in frame.iter_mut() {
@@ -354,6 +436,7 @@ fn build_output_stream(
 /// a fresh counter is created internally for the new stream's callback and simply isn't
 /// surfaced to the caller. If a future overlay needs live timing across device switches too,
 /// this would need a signature change on the UI side as well.
+#[allow(clippy::too_many_arguments)]
 pub fn switch_output_device(
     device_name: &str,
     buffer_frames: u32,
@@ -361,6 +444,8 @@ pub fn switch_output_device(
     audio_tx: Sender<i16>,
     pedal_rx: Receiver<Vec<PedalInstance>>,
     initial_pedals: Vec<PedalInstance>,
+    metronome_running: Arc<AtomicBool>,
+    metronome_bpm: Arc<AtomicU32>,
 ) -> Result<cpal::Stream, String> {
     let host = cpal::default_host();
     let devices = host.output_devices().map_err(|e| e.to_string())?;
@@ -382,6 +467,8 @@ pub fn switch_output_device(
         pedal_rx,
         initial_pedals,
         last_output_callback_ns,
+        metronome_running,
+        metronome_bpm,
     )
     .map_err(|e| e.to_string())?;
 

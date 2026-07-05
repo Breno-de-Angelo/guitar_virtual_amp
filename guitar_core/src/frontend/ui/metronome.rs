@@ -1,3 +1,5 @@
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use eframe::egui::{self, Ui};
@@ -8,22 +10,26 @@ use crate::shared::pedals::{PedalDescription, PedalInstance};
 /// UI wrapper around `Metronome`: BPM slider, tap-tempo/start-stop buttons, a
 /// flashing beat indicator, and a "sync" button that writes the current BPM
 /// into any Delay/Tremolo pedals already in the chain.
+///
+/// Also mirrors `running`/`bpm` into a pair of atomics shared with the
+/// realtime audio output callback (`backend::capture`), which is what
+/// actually generates the audible click -- the UI-frame-driven `tick()`
+/// below only drives the visual beat indicator, since egui's frame rate
+/// isn't accurate enough for audio timing.
 pub struct MetronomePanel {
     metronome: Metronome,
     flash_until: Instant,
-}
-
-impl Default for MetronomePanel {
-    fn default() -> Self {
-        Self::new()
-    }
+    audio_running: Arc<AtomicBool>,
+    audio_bpm: Arc<AtomicU32>,
 }
 
 impl MetronomePanel {
-    pub fn new() -> Self {
+    pub fn new(audio_running: Arc<AtomicBool>, audio_bpm: Arc<AtomicU32>) -> Self {
         Self {
             metronome: Metronome::new(),
             flash_until: Instant::now(),
+            audio_running,
+            audio_bpm,
         }
     }
 
@@ -65,6 +71,14 @@ impl MetronomePanel {
             let (rect, _) = ui.allocate_exact_size(egui::vec2(18.0, 18.0), egui::Sense::hover());
             ui.painter().circle_filled(rect.center(), 8.0, color);
         });
+
+        // Mirror running/bpm into the atomics the realtime output callback reads
+        // to generate the audible click. Unconditional store each frame is cheap
+        // and keeps this correct regardless of which control above changed them.
+        self.audio_running
+            .store(self.metronome.running, Ordering::Relaxed);
+        self.audio_bpm
+            .store(self.metronome.bpm.to_bits(), Ordering::Relaxed);
 
         let mut updated = false;
         if ui
