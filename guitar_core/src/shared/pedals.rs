@@ -22,6 +22,41 @@ pub enum PedalDescription {
     Cabinet(CabinetParams),
 }
 
+/// One entry in a pedal chain: a [`PedalDescription`] plus whether it's
+/// currently bypassed. Bypassing keeps the pedal in the chain (and, once
+/// rebuilt, its instance in memory) without removing it -- matching the real
+/// pedalboard workflow of stomping a footswitch instead of unplugging a pedal.
+///
+/// Serialized with `#[serde(flatten)]` on `description` so existing preset
+/// JSON files (which serialize a bare `PedalDescription`, e.g. `{"Amp": {...}}`)
+/// still deserialize: `enabled` defaults to `true` when absent.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PedalInstance {
+    #[serde(default = "default_enabled")]
+    pub enabled: bool,
+    #[serde(flatten)]
+    pub description: PedalDescription,
+}
+
+fn default_enabled() -> bool {
+    true
+}
+
+impl PedalInstance {
+    pub fn new(description: PedalDescription) -> Self {
+        Self {
+            enabled: true,
+            description,
+        }
+    }
+}
+
+impl From<PedalDescription> for PedalInstance {
+    fn from(description: PedalDescription) -> Self {
+        Self::new(description)
+    }
+}
+
 impl PedalDescription {
     pub fn name(&self) -> &'static str {
         match self {

@@ -35,7 +35,13 @@ fn android_main(app: android_activity::AndroidApp) {
     if let Err(e) = eframe::run_native(
         "GuitarVirtualAmp",
         options,
-        Box::new(|_cc| Ok(Box::new(AudioApp::new(audio_rx, audio_setup)))),
+        Box::new(|_cc| {
+            Ok(Box::new(AudioApp::new(
+                audio_rx,
+                audio_setup,
+                guitar_core::shared::settings::AppSettings::default(),
+            )))
+        }),
     ) {
         log::error!("Erro ao executar eframe no Android: {:?}", e);
     }

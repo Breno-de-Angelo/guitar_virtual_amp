@@ -12,6 +12,10 @@ path = "src/test_device_switch.rs"
 name = "generate_factory_presets"
 path = "src/generate_factory_presets.rs"
 
+[[bin]]
+name = "bench_pedal_chain"
+path = "src/bench_pedal_chain.rs"
+
 [dependencies]
 guitar_core = { path = "../guitar_core" }
 eframe = "0.32.1"

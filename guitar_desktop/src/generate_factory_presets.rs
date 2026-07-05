@@ -7,7 +7,8 @@
 use guitar_core::shared::pedals::{
     AmpParams, AmpVoicing, CabinetParams, ChorusParams, CompressorParams, DelayParams,
     DistortionParams, EqParams, LooperCommand, LooperParams, NoiseGateParams, OctaverParams,
-    PedalDescription, PhaserParams, PitchShifterParams, ReverbParams, TremoloParams, WahWahParams,
+    PedalDescription, PedalInstance, PhaserParams, PitchShifterParams, ReverbParams,
+    TremoloParams, WahWahParams,
 };
 use guitar_core::shared::preset::{sanitize_file_stem, save_to_file, Preset};
 
@@ -21,7 +22,7 @@ fn preset(
     Preset {
         name: name.to_string(),
         author: Some("Factory".to_string()),
-        pedals,
+        pedals: pedals.into_iter().map(PedalInstance::new).collect(),
         tags: tags.iter().map(|t| t.to_string()).collect(),
         song: song.map(|s| s.to_string()),
         artist: artist.map(|a| a.to_string()),

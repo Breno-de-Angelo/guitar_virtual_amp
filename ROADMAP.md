@@ -27,6 +27,23 @@ Status snapshot as of 2026-07-04 (see CLAUDE.md for full architecture):
   `armv7-linux-androideabi` and `aarch64-linux-android`.
 - No MIDI / footswitch / external controller support.
 - No backend service, no accounts, nothing network-facing at all.
+- Phase 3 (hardware-like UX polish) is done: per-pedal bypass (`PedalInstance::enabled`,
+  a bypass LED/footswitch toggle in `frontend/ui/pedals.rs`, honored by `PedalChain::process_sample`
+  skipping disabled pedals without dropping them from the chain), a live "buffer: Xms, CPU: Y%"
+  latency/CPU overlay in the side panel driven by `AudioSetup::configured_latency_secs` /
+  `last_output_callback_ns`, drag-to-reorder pedals via a `☰` handle, and settings persistence
+  (`shared/settings.rs`, `~/.config/guitar_virtual_amp/settings.json`) for last-used input/output
+  device and last-loaded preset; window size/position persistence comes from enabling eframe's
+  `persistence` feature rather than app code. A real-time budget check
+  (`guitar_desktop/src/bench_pedal_chain.rs`, run via `cargo run --release -p guitar_desktop --bin
+  bench_pedal_chain`) shows the DSP hot path itself is nowhere near the bottleneck: a chain with
+  all 17 pedal types stacked costs ~430ns/sample against a 20.8us budget at 48kHz (~98% headroom).
+  The real latency knob is the host callback buffer size, which used to be a fixed
+  `GLOBAL_CONFIG.buffer_size` (1024 frames) never negotiated with the device; it's now tunable
+  live from a "Buffer:" selector in the UI (`shared::config::BUFFER_SIZE_OPTIONS_FRAMES`, 32-4096
+  frames), clamped to what the device actually reports supporting
+  (`backend::capture::resolve_stream_config`), rebuilding both streams in the background and
+  persisting the choice via `AppSettings::buffer_frames`.
 
 Because of this, "vast preset library" and "social sharing" are not incremental features —
 they require a backend service and client networking layer that don't exist yet. The
@@ -46,27 +63,6 @@ touch disjoint files/crates and can be dispatched simultaneously. Tasks marked *
 Recommended dispatch pattern: one agent per **[P]** task via the `Agent` tool with
 `isolation: worktree` so parallel agents don't collide on the working tree, then review
 and merge each before starting tasks that depend on it.
-
----
-
-## Phase 3 — Hardware-Like UX Polish
-
-Fully parallel; can be dispatched now.
-
-- **3.1 [P] Per-pedal bypass (true/soft bypass toggle)** — currently every pedal in the
-  chain always processes; add an `enabled: bool` to each pedal/description and a bypass
-  button in the UI, without removing the pedal from the chain (matches real pedalboard
-  workflow of stomping a switch instead of unplugging a pedal).
-- **3.2 [P] Latency/CPU meter overlay** — surfaces the measurements already computed in
-  `backend/capture.rs` (`AudioSetup::configured_latency_secs`) in the UI (a small
-  "buffer: Xms, CPU: Y%" readout), so users/testers can see if they're near
-  hardware-competitive latency (~5-10ms round trip is the bar to hit).
-- **3.3 [P] Drag-to-reorder pedal chain in UI** — currently pedals are added to the end of
-  a `Vec`; confirm and add drag handles (egui supports this) so reordering doesn't require
-  delete+re-add.
-- **3.4 [P] Settings persistence** — remember last-used input/output device, window size,
-  and last-loaded preset across restarts (small serde-backed config file, reuses the
-  existing serde/`Preset`/`dirs` infrastructure).
 
 ---
 
@@ -195,7 +191,7 @@ Final phase; mostly sequential since it's packaging/release engineering, not fea
 
 ## Suggested parallel dispatch order
 
-1. Phase 3 tasks can be dispatched now, fully parallel.
+1. Phase 3 is done (see status snapshot above).
 2. Phase 4 starts with the 4.1 style-guide sign-off (a design decision, flag to the user),
    then 4.2–4.6 can run in parallel against it.
 3. Phase 5 is a deliberate go/no-go checkpoint with the user (backend hosting, moderation,

@@ -3,7 +3,7 @@ use std::time::{Duration, Instant};
 use eframe::egui::{self, Ui};
 
 use crate::frontend::lib::metronome::Metronome;
-use crate::shared::pedals::PedalDescription;
+use crate::shared::pedals::{PedalDescription, PedalInstance};
 
 /// UI wrapper around `Metronome`: BPM slider, tap-tempo/start-stop buttons, a
 /// flashing beat indicator, and a "sync" button that writes the current BPM
@@ -29,7 +29,7 @@ impl MetronomePanel {
 
     /// Renders the panel. Returns `true` if it wrote new tempo-synced values
     /// into `pedal_chain`, so the caller knows to push a chain update.
-    pub fn ui(&mut self, ui: &mut Ui, pedal_chain: &mut [PedalDescription]) -> bool {
+    pub fn ui(&mut self, ui: &mut Ui, pedal_chain: &mut [PedalInstance]) -> bool {
         ui.horizontal(|ui| {
             ui.label("BPM:");
             ui.add(egui::Slider::new(&mut self.metronome.bpm, 30.0..=300.0));
@@ -72,8 +72,8 @@ impl MetronomePanel {
             .on_hover_text("Sets Delay time / Tremolo rate to match the current BPM")
             .clicked()
         {
-            for pedal in pedal_chain.iter_mut() {
-                match pedal {
+            for instance in pedal_chain.iter_mut() {
+                match &mut instance.description {
                     PedalDescription::Delay(params) => {
                         params.delay_ms = 60_000.0 / self.metronome.bpm;
                         updated = true;

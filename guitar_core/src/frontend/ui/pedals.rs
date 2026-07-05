@@ -3,8 +3,8 @@ use eframe::egui::{ComboBox, Slider, Ui};
 use crate::shared::pedals::{
     AmpParams, AmpVoicing, CabinetParams, ChorusParams, CompressorParams, DelayParams,
     DistortionParams, EqParams, FlangerParams, LooperCommand, LooperParams, LowPassParams,
-    NoiseGateParams, OctaverParams, PedalDescription, PhaserParams, PitchShifterParams,
-    ReverbParams, TremoloParams, WahWahParams,
+    NoiseGateParams, OctaverParams, PedalDescription, PedalInstance, PhaserParams,
+    PitchShifterParams, ReverbParams, TremoloParams, WahWahParams,
 };
 
 pub enum PedalAction {
@@ -13,36 +13,71 @@ pub enum PedalAction {
     Deleted,
 }
 
-/// Returns true if component has changed
-pub fn render_pedal_ui(ui: &mut Ui, pedal: &mut PedalDescription) -> PedalAction {
+/// Returns the action taken this frame (bypass toggle and per-param sliders
+/// both report `Updated`, so the caller pushes a chain update either way).
+pub fn render_pedal_ui(ui: &mut Ui, instance: &mut PedalInstance) -> PedalAction {
     ui.group(|ui| {
-        if ui.button("Delete").clicked() {
-            PedalAction::Deleted
-        } else {
-            let updated = match pedal {
-                PedalDescription::Amp(params) => amp_ui(ui, params),
-                PedalDescription::Delay(params) => delay_ui(ui, params),
-                PedalDescription::Reverb(params) => reverb_ui(ui, params),
-                PedalDescription::LowPass(params) => low_pass_ui(ui, params),
-                PedalDescription::Flanger(params) => flanger_ui(ui, params),
-                PedalDescription::WahWah(params) => wah_wah_ui(ui, params),
-                PedalDescription::Distortion(params) => distortion_ui(ui, params),
-                PedalDescription::NoiseGate(params) => noise_gate_ui(ui, params),
-                PedalDescription::Compressor(params) => compressor_ui(ui, params),
-                PedalDescription::Tremolo(params) => tremolo_ui(ui, params),
-                PedalDescription::Chorus(params) => chorus_ui(ui, params),
-                PedalDescription::Eq(params) => eq_ui(ui, params),
-                PedalDescription::Phaser(params) => phaser_ui(ui, params),
-                PedalDescription::Octaver(params) => octaver_ui(ui, params),
-                PedalDescription::PitchShift(params) => pitch_shifter_ui(ui, params),
-                PedalDescription::Looper(params) => looper_ui(ui, params),
-                PedalDescription::Cabinet(params) => cabinet_ui(ui, params),
-            };
-            if updated {
-                PedalAction::Updated
+        let mut changed = false;
+        let mut deleted = false;
+
+        ui.horizontal(|ui| {
+            // Bypass LED/footswitch: green when the pedal is active, gray when
+            // bypassed. Clicking toggles it without removing the pedal from
+            // the chain (real pedalboard "stomp the switch" workflow).
+            let led_color = if instance.enabled {
+                eframe::egui::Color32::from_rgb(60, 220, 60)
             } else {
-                PedalAction::None
+                eframe::egui::Color32::GRAY
+            };
+            let (rect, response) = ui.allocate_exact_size(
+                eframe::egui::vec2(16.0, 16.0),
+                eframe::egui::Sense::click(),
+            );
+            ui.painter()
+                .circle_filled(rect.center(), 7.0, led_color);
+            if response
+                .on_hover_text("Bypass this pedal")
+                .clicked()
+            {
+                instance.enabled = !instance.enabled;
+                changed = true;
             }
+
+            if ui.button("Delete").clicked() {
+                deleted = true;
+            }
+        });
+
+        if deleted {
+            return PedalAction::Deleted;
+        }
+
+        let pedal = &mut instance.description;
+        let updated = match pedal {
+            PedalDescription::Amp(params) => amp_ui(ui, params),
+            PedalDescription::Delay(params) => delay_ui(ui, params),
+            PedalDescription::Reverb(params) => reverb_ui(ui, params),
+            PedalDescription::LowPass(params) => low_pass_ui(ui, params),
+            PedalDescription::Flanger(params) => flanger_ui(ui, params),
+            PedalDescription::WahWah(params) => wah_wah_ui(ui, params),
+            PedalDescription::Distortion(params) => distortion_ui(ui, params),
+            PedalDescription::NoiseGate(params) => noise_gate_ui(ui, params),
+            PedalDescription::Compressor(params) => compressor_ui(ui, params),
+            PedalDescription::Tremolo(params) => tremolo_ui(ui, params),
+            PedalDescription::Chorus(params) => chorus_ui(ui, params),
+            PedalDescription::Eq(params) => eq_ui(ui, params),
+            PedalDescription::Phaser(params) => phaser_ui(ui, params),
+            PedalDescription::Octaver(params) => octaver_ui(ui, params),
+            PedalDescription::PitchShift(params) => pitch_shifter_ui(ui, params),
+            PedalDescription::Looper(params) => looper_ui(ui, params),
+            PedalDescription::Cabinet(params) => cabinet_ui(ui, params),
+        };
+        changed |= updated;
+
+        if changed {
+            PedalAction::Updated
+        } else {
+            PedalAction::None
         }
     })
     .inner

@@ -2,7 +2,7 @@ use crate::{
     backend::pedals::pedal::Pedal,
     shared::{
         config::GLOBAL_CONFIG,
-        pedals::{LooperCommand, LooperParams},
+        pedals::{LooperCommand, LooperParams, PedalDescription},
     },
 };
 
@@ -19,14 +19,21 @@ enum LooperState {
     Stopped,
 }
 
+fn max_samples_for(params: &LooperParams) -> usize {
+    let max_samples =
+        (params.max_loop_seconds.max(0.0) * GLOBAL_CONFIG.sample_rate).round() as usize;
+    max_samples.max(1)
+}
+
 /// Records a loop of audio and plays it back repeatedly, with the ability to
 /// layer (overdub) more audio on top while looping.
 ///
-/// NOTE: because `PedalChain` is rebuilt wholesale from `PedalDescription` on
-/// every chain edit, a fresh `Looper` (with an empty buffer) is constructed
-/// every time ANY pedal in the chain is added/removed/tweaked -- this is a
-/// known limitation of the current architecture, not something fixed here
-/// (see the doc comment on `LooperParams` in `shared/pedals.rs`).
+/// Implements `Pedal::update_in_place` (see that method's doc comment) so its
+/// recorded buffer survives `PedalChain` rebuilds triggered by edits to
+/// *other* pedals in the chain, or by its own transport button clicks -- both
+/// of which send an updated `Vec<PedalInstance>` down the same channel.
+/// Without it, e.g. clicking "Play" right after "Record" would rebuild a
+/// fresh, empty `Looper` before a single loop iteration ever played back.
 pub struct Looper {
     params: LooperParams,
     state: LooperState,
@@ -37,15 +44,14 @@ pub struct Looper {
 
 impl Looper {
     pub fn new(params: LooperParams) -> Self {
-        let max_samples =
-            (params.max_loop_seconds.max(0.0) * GLOBAL_CONFIG.sample_rate).round() as usize;
+        let max_samples = max_samples_for(&params);
 
         Self {
             params,
             state: LooperState::Idle,
             buffer: Vec::new(),
             position: 0,
-            max_samples: max_samples.max(1),
+            max_samples,
         }
     }
 
@@ -121,6 +127,25 @@ impl Pedal for Looper {
             // still hears their live signal, just without the recorded loop.
             LooperState::Stopped => input,
         }
+    }
+
+    fn update_in_place(&mut self, description: &PedalDescription) -> bool {
+        let PedalDescription::Looper(params) = description else {
+            return false;
+        };
+        self.params = *params;
+        self.max_samples = max_samples_for(params);
+        // Shrinking max_loop_seconds below what's already recorded truncates
+        // the buffer rather than silently ignoring the new limit; if that
+        // clips past the current playback position, wrap back to the start
+        // instead of leaving `position` out of bounds.
+        if self.buffer.len() > self.max_samples {
+            self.buffer.truncate(self.max_samples);
+            if self.position >= self.buffer.len() {
+                self.position = 0;
+            }
+        }
+        true
     }
 }
 

@@ -66,8 +66,33 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 use crate::backend::pedals::pedal::{MultiChannelPedalChain, PedalChain};
-use crate::shared::pedals::PedalDescription;
+use crate::shared::pedals::PedalInstance;
 use crate::shared::config::GLOBAL_CONFIG;
+
+/// Turns a device's `SupportedStreamConfig` into a concrete `StreamConfig`,
+/// overriding the buffer size to `requested_frames` when the device reports a
+/// queryable supported range (clamping into that range), or leaving it at
+/// `BufferSize::Default` when the range is unknown (some hosts/devices can't
+/// report one, in which case requesting an arbitrary fixed size risks a
+/// stream-build error rather than silently doing the right thing).
+///
+/// Returns the concrete config plus the buffer size actually applied, in
+/// frames (`None` when left at the host default because the range was
+/// unknown, since the real value in that case isn't known until playback).
+pub fn resolve_stream_config(
+    supported: &cpal::SupportedStreamConfig,
+    requested_frames: u32,
+) -> (cpal::StreamConfig, Option<u32>) {
+    let mut config = supported.config();
+    match supported.buffer_size() {
+        cpal::SupportedBufferSize::Range { min, max } => {
+            let clamped = requested_frames.clamp(*min, *max);
+            config.buffer_size = cpal::BufferSize::Fixed(clamped);
+            (config, Some(clamped))
+        }
+        cpal::SupportedBufferSize::Unknown => (config, None),
+    }
+}
 
 /// Extracts up to `channel_count` samples from one interleaved device frame
 /// (`frame[0]` = channel 0, `frame[1]` = channel 1, ...). Shared by the legacy
@@ -81,11 +106,11 @@ pub struct AudioSetup {
     pub input_stream: cpal::Stream,
     pub output_stream: cpal::Stream,
     pub input_tx: Sender<i16>,
-    pub pedal_tx: Sender<Vec<PedalDescription>>,
+    pub pedal_tx: Sender<Vec<PedalInstance>>,
     // Kept around so the output stream can be rebuilt on a different device later
     // (see `switch_output_device`) with the same processing pipeline.
     pub input_rx: Receiver<i16>,
-    pub pedal_rx: Receiver<Vec<PedalDescription>>,
+    pub pedal_rx: Receiver<Vec<PedalInstance>>,
     pub audio_tx: Sender<i16>,
     /// Nominal round-trip buffer latency in seconds (`buffer_size / sample_rate` from
     /// `GLOBAL_CONFIG`), computed once at setup time. See module docs for context.
@@ -99,11 +124,40 @@ pub struct AudioSetup {
 pub fn start_audio_processing(
     audio_tx: Sender<i16>,
 ) -> Result<AudioSetup, Box<dyn std::error::Error>> {
+    start_audio_processing_with_devices(audio_tx, None, None, GLOBAL_CONFIG.buffer_size as u32)
+}
+
+/// Like `start_audio_processing`, but tries to open `preferred_input_name` /
+/// `preferred_output_name` (matched by exact device name) instead of the
+/// host's default device, falling back to the default if no device with that
+/// name is currently available, and requests `buffer_frames` as the host
+/// callback buffer size (clamped to what the device actually supports; see
+/// `resolve_stream_config`). Used to restore the last-used devices/buffer
+/// size from `shared::settings::AppSettings` (Phase 3.4) without duplicating
+/// the device-switching machinery used for live switches in `frontend::gui`.
+pub fn start_audio_processing_with_devices(
+    audio_tx: Sender<i16>,
+    preferred_input_name: Option<&str>,
+    preferred_output_name: Option<&str>,
+    buffer_frames: u32,
+) -> Result<AudioSetup, Box<dyn std::error::Error>> {
     let host = cpal::default_host();
 
-    let input_device = host.default_input_device()
+    let input_device = preferred_input_name
+        .and_then(|name| {
+            host.input_devices()
+                .ok()
+                .and_then(|mut devs| devs.find(|d| d.to_string() == name))
+        })
+        .or_else(|| host.default_input_device())
         .ok_or("Nenhum dispositivo de entrada de áudio encontrado")?;
-    let output_device = host.default_output_device()
+    let output_device = preferred_output_name
+        .and_then(|name| {
+            host.output_devices()
+                .ok()
+                .and_then(|mut devs| devs.find(|d| d.to_string() == name))
+        })
+        .or_else(|| host.default_output_device())
         .ok_or("Nenhum dispositivo de saída de áudio encontrado")?;
 
     println!("Dispositivo de Entrada Inicial: {:?}", input_device.to_string());
@@ -122,7 +176,8 @@ pub fn start_audio_processing(
 
     // Construção inicial do Stream de Captura (Input)
     let input_sample_format = input_config.sample_format();
-    let input_stream_config = input_config.config();
+    let (input_stream_config, input_effective_frames) =
+        resolve_stream_config(&input_config, buffer_frames);
     let input_channels = input_stream_config.channels;
     let input_tx_clone = input_tx.clone();
 
@@ -162,13 +217,14 @@ pub fn start_audio_processing(
     input_stream.play()?;
 
     // Canal para passar atualizações de pedais para a thread de reprodução
-    let (pedal_tx, pedal_rx) = bounded::<Vec<PedalDescription>>(8);
+    let (pedal_tx, pedal_rx) = bounded::<Vec<PedalInstance>>(8);
 
     let last_output_callback_ns = Arc::new(AtomicU64::new(0));
 
-    let output_stream = build_output_stream(
+    let (output_stream, output_effective_frames) = build_output_stream(
         &output_device,
         output_config,
+        buffer_frames,
         input_rx.clone(),
         audio_tx.clone(),
         pedal_rx.clone(),
@@ -178,8 +234,13 @@ pub fn start_audio_processing(
 
     output_stream.play()?;
 
-    let configured_latency_secs =
-        GLOBAL_CONFIG.buffer_size as f32 / GLOBAL_CONFIG.sample_rate;
+    // Nominal round-trip latency: input-side + output-side buffer, each converted
+    // to seconds. Falls back to the requested (unclamped) frame count for whichever
+    // side couldn't report a supported range (see `resolve_stream_config`), which
+    // matches the previous fixed-`GLOBAL_CONFIG.buffer_size` estimate's precision.
+    let configured_latency_secs = (input_effective_frames.unwrap_or(buffer_frames)
+        + output_effective_frames.unwrap_or(buffer_frames)) as f32
+        / GLOBAL_CONFIG.sample_rate;
 
     Ok(AudioSetup {
         input_stream,
@@ -195,18 +256,21 @@ pub fn start_audio_processing(
 }
 
 /// Builds the output stream: drains pedal-chain updates, pulls processed samples off
-/// `input_rx`, and forwards the result to `audio_tx` for visualization.
+/// `input_rx`, and forwards the result to `audio_tx` for visualization. Returns the
+/// stream plus the buffer size actually applied (see `resolve_stream_config`).
+#[allow(clippy::too_many_arguments)]
 fn build_output_stream(
     device: &cpal::Device,
     config: cpal::SupportedStreamConfig,
+    buffer_frames: u32,
     input_rx: Receiver<i16>,
     audio_tx: Sender<i16>,
-    pedal_rx: Receiver<Vec<PedalDescription>>,
-    initial_pedals: Vec<PedalDescription>,
+    pedal_rx: Receiver<Vec<PedalInstance>>,
+    initial_pedals: Vec<PedalInstance>,
     last_output_callback_ns: Arc<AtomicU64>,
-) -> Result<cpal::Stream, Box<dyn std::error::Error>> {
+) -> Result<(cpal::Stream, Option<u32>), Box<dyn std::error::Error>> {
     let sample_format = config.sample_format();
-    let stream_config = config.config();
+    let (stream_config, effective_frames) = resolve_stream_config(&config, buffer_frames);
     let channels = stream_config.channels;
 
     let mut pedal_chain = PedalChain::from_description(initial_pedals);
@@ -218,7 +282,7 @@ fn build_output_stream(
                 let callback_start = Instant::now();
 
                 for msg in pedal_rx.try_iter() {
-                    pedal_chain = PedalChain::from_description(msg);
+                    pedal_chain.apply_description(msg);
                 }
 
                 for frame in data.chunks_mut(channels as usize) {
@@ -249,7 +313,7 @@ fn build_output_stream(
                 let callback_start = Instant::now();
 
                 for msg in pedal_rx.try_iter() {
-                    pedal_chain = PedalChain::from_description(msg);
+                    pedal_chain.apply_description(msg);
                 }
 
                 for frame in data.chunks_mut(channels as usize) {
@@ -278,11 +342,12 @@ fn build_output_stream(
         _ => return Err("Formato de amostra de saída não suportado pelo CPAL".into()),
     };
 
-    Ok(stream)
+    Ok((stream, effective_frames))
 }
 
 /// Finds the named output device, builds a fresh output stream for it (seeded with
-/// `initial_pedals` so the pedal chain doesn't reset to empty), and starts it playing.
+/// `initial_pedals` so the pedal chain doesn't reset to empty), requesting
+/// `buffer_frames` as the callback buffer size, and starts it playing.
 ///
 /// Kept API-compatible with existing callers (`guitar_core::frontend::gui`'s device-switching
 /// flow), so it doesn't take/return the `last_output_callback_ns` handle from `AudioSetup`;
@@ -291,10 +356,11 @@ fn build_output_stream(
 /// this would need a signature change on the UI side as well.
 pub fn switch_output_device(
     device_name: &str,
+    buffer_frames: u32,
     input_rx: Receiver<i16>,
     audio_tx: Sender<i16>,
-    pedal_rx: Receiver<Vec<PedalDescription>>,
-    initial_pedals: Vec<PedalDescription>,
+    pedal_rx: Receiver<Vec<PedalInstance>>,
+    initial_pedals: Vec<PedalInstance>,
 ) -> Result<cpal::Stream, String> {
     let host = cpal::default_host();
     let devices = host.output_devices().map_err(|e| e.to_string())?;
@@ -307,9 +373,10 @@ pub fn switch_output_device(
     let config = find_best_config(&device, target_sample_rate, false).map_err(|e| e.to_string())?;
 
     let last_output_callback_ns = Arc::new(AtomicU64::new(0));
-    let stream = build_output_stream(
+    let (stream, _effective_frames) = build_output_stream(
         &device,
         config,
+        buffer_frames,
         input_rx,
         audio_tx,
         pedal_rx,
@@ -317,6 +384,66 @@ pub fn switch_output_device(
         last_output_callback_ns,
     )
     .map_err(|e| e.to_string())?;
+
+    stream.play().map_err(|e| e.to_string())?;
+    Ok(stream)
+}
+
+/// Finds the named input device, builds a fresh input stream for it requesting
+/// `buffer_frames` as the callback buffer size, and starts it playing. Mirrors
+/// `switch_output_device`; factored out of `frontend::gui`'s inline device-switch
+/// closure so live device switches and buffer-size changes share one
+/// implementation instead of two copies of the same cpal setup dance.
+pub fn switch_input_device(
+    device_name: &str,
+    buffer_frames: u32,
+    input_tx: Sender<i16>,
+) -> Result<cpal::Stream, String> {
+    let host = cpal::default_host();
+    let devices = host.input_devices().map_err(|e| e.to_string())?;
+    let device = devices
+        .into_iter()
+        .find(|d| d.to_string() == device_name)
+        .ok_or_else(|| "Dispositivo de entrada não encontrado".to_string())?;
+
+    let target_sample_rate = GLOBAL_CONFIG.sample_rate as u32;
+    let config = find_best_config(&device, target_sample_rate, true).map_err(|e| e.to_string())?;
+    let sample_format = config.sample_format();
+    let (stream_config, _effective_frames) = resolve_stream_config(&config, buffer_frames);
+    let channels = stream_config.channels;
+
+    let stream = match sample_format {
+        cpal::SampleFormat::I16 => device
+            .build_input_stream(
+                stream_config,
+                move |data: &[i16], _| {
+                    for frame in data.chunks(channels as usize) {
+                        if let Some(&sample) = frame.first() {
+                            let _ = input_tx.try_send(sample);
+                        }
+                    }
+                },
+                |err| eprintln!("Erro no input stream (I16): {}", err),
+                None,
+            )
+            .map_err(|e| e.to_string())?,
+        cpal::SampleFormat::F32 => device
+            .build_input_stream(
+                stream_config,
+                move |data: &[f32], _| {
+                    for frame in data.chunks(channels as usize) {
+                        if let Some(&sample) = frame.first() {
+                            let sample_i16 = (sample.clamp(-1.0, 1.0) * i16::MAX as f32) as i16;
+                            let _ = input_tx.try_send(sample_i16);
+                        }
+                    }
+                },
+                |err| eprintln!("Erro no input stream (F32): {}", err),
+                None,
+            )
+            .map_err(|e| e.to_string())?,
+        _ => return Err("Formato de amostra de entrada não suportado".to_string()),
+    };
 
     stream.play().map_err(|e| e.to_string())?;
     Ok(stream)
@@ -345,9 +472,9 @@ pub struct MultiChannelAudioSetup {
     pub input_stream: cpal::Stream,
     pub output_stream: cpal::Stream,
     pub input_tx: Sender<Vec<i16>>,
-    pub pedal_tx: Sender<Vec<PedalDescription>>,
+    pub pedal_tx: Sender<Vec<PedalInstance>>,
     pub input_rx: Receiver<Vec<i16>>,
-    pub pedal_rx: Receiver<Vec<PedalDescription>>,
+    pub pedal_rx: Receiver<Vec<PedalInstance>>,
     pub audio_tx: Sender<i16>,
     pub channel_count: usize,
 }
@@ -418,7 +545,7 @@ pub fn start_audio_processing_multi(
 
     input_stream.play()?;
 
-    let (pedal_tx, pedal_rx) = bounded::<Vec<PedalDescription>>(8);
+    let (pedal_tx, pedal_rx) = bounded::<Vec<PedalInstance>>(8);
 
     let output_stream = build_multi_channel_output_stream(
         &output_device,
@@ -456,8 +583,8 @@ fn build_multi_channel_output_stream(
     config: cpal::SupportedStreamConfig,
     input_rx: Receiver<Vec<i16>>,
     audio_tx: Sender<i16>,
-    pedal_rx: Receiver<Vec<PedalDescription>>,
-    initial_pedals: Vec<PedalDescription>,
+    pedal_rx: Receiver<Vec<PedalInstance>>,
+    initial_pedals: Vec<PedalInstance>,
     channel_count: usize,
 ) -> Result<cpal::Stream, Box<dyn std::error::Error>> {
     let sample_format = config.sample_format();
@@ -530,7 +657,39 @@ fn build_multi_channel_output_stream(
 mod tests {
     use super::*;
     use crate::backend::pedals::pedal::MultiChannelPedalChain;
-    use crate::shared::pedals::{LowPassParams, PedalDescription};
+    use crate::shared::pedals::{LowPassParams, PedalDescription, PedalInstance};
+
+    fn supported_config(buffer_size: cpal::SupportedBufferSize) -> cpal::SupportedStreamConfig {
+        cpal::SupportedStreamConfig::new(2, 48000, buffer_size, cpal::SampleFormat::F32)
+    }
+
+    #[test]
+    fn resolve_stream_config_clamps_requested_frames_into_supported_range() {
+        let supported = supported_config(cpal::SupportedBufferSize::Range { min: 64, max: 1024 });
+
+        let (config, effective) = resolve_stream_config(&supported, 256);
+        assert_eq!(effective, Some(256));
+        assert_eq!(config.buffer_size, cpal::BufferSize::Fixed(256));
+
+        // Below the device's minimum: clamp up.
+        let (config, effective) = resolve_stream_config(&supported, 16);
+        assert_eq!(effective, Some(64));
+        assert_eq!(config.buffer_size, cpal::BufferSize::Fixed(64));
+
+        // Above the device's maximum: clamp down.
+        let (config, effective) = resolve_stream_config(&supported, 8192);
+        assert_eq!(effective, Some(1024));
+        assert_eq!(config.buffer_size, cpal::BufferSize::Fixed(1024));
+    }
+
+    #[test]
+    fn resolve_stream_config_leaves_default_when_range_unknown() {
+        let supported = supported_config(cpal::SupportedBufferSize::Unknown);
+
+        let (config, effective) = resolve_stream_config(&supported, 256);
+        assert_eq!(effective, None);
+        assert_eq!(config.buffer_size, cpal::BufferSize::Default);
+    }
 
     #[test]
     fn extract_channels_takes_only_requested_count() {
@@ -565,7 +724,7 @@ mod tests {
             [15000, 0],
         ];
 
-        let description = vec![PedalDescription::LowPass(LowPassParams { frequency: 1000.0 })];
+        let description = vec![PedalInstance::new(PedalDescription::LowPass(LowPassParams { frequency: 1000.0 }))];
         let mut chain = MultiChannelPedalChain::from_description(description, 2);
 
         let mut channel0_playback = Vec::new();

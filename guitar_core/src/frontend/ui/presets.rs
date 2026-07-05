@@ -4,8 +4,9 @@ use eframe::egui::Ui;
 
 use crate::shared::{
     factory_presets::factory_presets,
-    pedals::PedalDescription,
+    pedals::PedalInstance,
     preset::{self, Preset, PresetListing},
+    settings::PresetRef,
 };
 
 /// UI state for the preset save/load/rename/delete/import/export panel.
@@ -48,7 +49,7 @@ impl PresetPanel {
             .unwrap_or_default();
     }
 
-    fn current_preset(&self, pedals: &[PedalDescription]) -> Preset {
+    fn current_preset(&self, pedals: &[PedalInstance]) -> Preset {
         Preset {
             name: self.save_name.trim().to_string(),
             author: None,
@@ -59,10 +60,15 @@ impl PresetPanel {
         }
     }
 
-    /// Renders the panel. Returns `Some(pedals)` the one time this frame that
-    /// the user loaded a preset (factory or user-saved) into the live chain,
-    /// so the caller can push it through `pedal_tx` like any other chain edit.
-    pub fn ui(&mut self, ui: &mut Ui, current_pedals: &[PedalDescription]) -> Option<Vec<PedalDescription>> {
+    /// Renders the panel. Returns `Some((pedals, preset_ref))` the one time
+    /// this frame that the user loaded a preset (factory or user-saved) into
+    /// the live chain, so the caller can push it through `pedal_tx` like any
+    /// other chain edit and remember it (Phase 3.4 "last-loaded preset").
+    pub fn ui(
+        &mut self,
+        ui: &mut Ui,
+        current_pedals: &[PedalInstance],
+    ) -> Option<(Vec<PedalInstance>, PresetRef)> {
         let mut loaded_chain = None;
 
         ui.heading("Presets");
@@ -101,8 +107,8 @@ impl PresetPanel {
             }
 
             self.export_button(ui, current_pedals);
-            if let Some(pedals) = self.import_button(ui) {
-                loaded_chain = Some(pedals);
+            if let Some((pedals, preset_ref)) = self.import_button(ui) {
+                loaded_chain = Some((pedals, preset_ref));
             }
         });
 
@@ -138,7 +144,8 @@ impl PresetPanel {
                     ui.label(&listing.name);
                     if ui.button("Load").clicked() {
                         if let Ok(preset) = preset::load_from_file(&listing.path) {
-                            loaded_chain = Some(preset.pedals);
+                            loaded_chain =
+                                Some((preset.pedals, PresetRef::User(listing.path.clone())));
                         }
                     }
                     if ui.button("Rename").clicked() {
@@ -186,7 +193,8 @@ impl PresetPanel {
             ui.horizontal(|ui| {
                 ui.label(&preset.name);
                 if ui.button("Load").clicked() {
-                    loaded_chain = Some(preset.pedals.clone());
+                    loaded_chain =
+                        Some((preset.pedals.clone(), PresetRef::Factory(preset.name.clone())));
                 }
             });
         }
@@ -198,7 +206,7 @@ impl PresetPanel {
     /// a native save dialog (desktop) or a manually entered path (Android,
     /// where `rfd` has no backend).
     #[cfg(not(target_os = "android"))]
-    fn export_button(&mut self, ui: &mut Ui, current_pedals: &[PedalDescription]) {
+    fn export_button(&mut self, ui: &mut Ui, current_pedals: &[PedalInstance]) {
         if ui.button("Export current...").clicked() {
             if let Some(path) = rfd::FileDialog::new()
                 .add_filter("JSON", &["json"])
@@ -218,7 +226,7 @@ impl PresetPanel {
     }
 
     #[cfg(target_os = "android")]
-    fn export_button(&mut self, ui: &mut Ui, current_pedals: &[PedalDescription]) {
+    fn export_button(&mut self, ui: &mut Ui, current_pedals: &[PedalInstance]) {
         ui.label("Export path:");
         ui.text_edit_singleline(&mut self.manual_path);
         if ui.button("Export current").clicked() && !self.manual_path.trim().is_empty() {
@@ -235,7 +243,7 @@ impl PresetPanel {
     /// native open dialog (desktop) or a manually entered path (Android).
     /// Returns the imported pedal chain if the user picked/entered a valid file.
     #[cfg(not(target_os = "android"))]
-    fn import_button(&mut self, ui: &mut Ui) -> Option<Vec<PedalDescription>> {
+    fn import_button(&mut self, ui: &mut Ui) -> Option<(Vec<PedalInstance>, PresetRef)> {
         if ui.button("Import from file...").clicked() {
             if let Some(path) = rfd::FileDialog::new()
                 .add_filter("JSON", &["json"])
@@ -244,7 +252,7 @@ impl PresetPanel {
                 return match preset::load_from_file(&path) {
                     Ok(preset) => {
                         self.status = Some(format!("Imported \"{}\"", preset.name));
-                        Some(preset.pedals)
+                        Some((preset.pedals, PresetRef::User(path)))
                     }
                     Err(e) => {
                         self.status = Some(format!("Import failed: {e}"));
@@ -257,13 +265,13 @@ impl PresetPanel {
     }
 
     #[cfg(target_os = "android")]
-    fn import_button(&mut self, ui: &mut Ui) -> Option<Vec<PedalDescription>> {
+    fn import_button(&mut self, ui: &mut Ui) -> Option<(Vec<PedalInstance>, PresetRef)> {
         if ui.button("Import from path").clicked() && !self.manual_path.trim().is_empty() {
             let path = PathBuf::from(self.manual_path.trim());
             return match preset::load_from_file(&path) {
                 Ok(preset) => {
                     self.status = Some(format!("Imported \"{}\"", preset.name));
-                    Some(preset.pedals)
+                    Some((preset.pedals, PresetRef::User(path)))
                 }
                 Err(e) => {
                     self.status = Some(format!("Import failed: {e}"));

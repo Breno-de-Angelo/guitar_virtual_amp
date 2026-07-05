@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use super::pedals::PedalDescription;
+use super::pedals::PedalInstance;
 
 /// A named, shareable snapshot of a pedal chain.
 ///
@@ -22,7 +22,7 @@ use super::pedals::PedalDescription;
 pub struct Preset {
     pub name: String,
     pub author: Option<String>,
-    pub pedals: Vec<PedalDescription>,
+    pub pedals: Vec<PedalInstance>,
     pub tags: Vec<String>,
     #[serde(default)]
     pub song: Option<String>,
@@ -165,18 +165,18 @@ pub fn sanitize_file_stem(name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::shared::pedals::{AmpParams, DelayParams};
+    use crate::shared::pedals::{AmpParams, DelayParams, PedalDescription};
 
     fn sample_preset() -> Preset {
         Preset {
             name: "Test Preset".to_string(),
             author: Some("Breno".to_string()),
             pedals: vec![
-                PedalDescription::Amp(AmpParams {
+                PedalInstance::new(PedalDescription::Amp(AmpParams {
                     gain: 1.5,
                     ..Default::default()
-                }),
-                PedalDescription::Delay(DelayParams::default()),
+                })),
+                PedalInstance::new(PedalDescription::Delay(DelayParams::default())),
             ],
             tags: vec!["clean".to_string(), "test".to_string()],
             song: Some("Test Song".to_string()),
