@@ -10,11 +10,13 @@ use strum::IntoEnumIterator;
 
 use crate::{
     backend::capture::{AudioSetup, switch_input_device, switch_output_device},
+    backend::song_player::SongPlayer,
     frontend::{
         lib::fft::compute_fft,
         ui::metronome::MetronomePanel,
         ui::pedals::{PedalAction, render_pedal_ui},
         ui::presets::PresetPanel,
+        ui::tab_player::TabPlayerPanel,
         ui::tuner::tuner_ui,
     },
     shared::{
@@ -28,6 +30,13 @@ use crate::{
 
 const BUFFER_SIZE: usize = 2048;
 const FFT_FREQ_RESOLUTION: f64 = GLOBAL_CONFIG.sample_rate as f64 / BUFFER_SIZE as f64;
+
+/// Which page the central panel shows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MainView {
+    Analyzer,
+    Tabs,
+}
 
 /// Result of a background buffer-size change: (input stream result, output stream result).
 type BufferSwitchResult = (Result<cpal::Stream, String>, Result<cpal::Stream, String>);
@@ -100,6 +109,11 @@ pub struct AudioApp {
     /// metronome click sample-accurately. See `capture.rs`.
     metronome_running: Arc<AtomicBool>,
     metronome_bpm: Arc<AtomicU32>,
+    /// Tab-player song engine, shared with the output stream so it can be
+    /// handed to a rebuilt stream on device/buffer changes.
+    song_player: SongPlayer,
+    tab_panel: TabPlayerPanel,
+    main_view: MainView,
     /// Index (in `pedal_chain`) of the pedal currently being dragged for
     /// reordering, if any.
     dragged_pedal: Option<usize>,
@@ -211,6 +225,9 @@ impl AudioApp {
             last_output_callback_ns: setup.last_output_callback_ns,
             metronome_running: setup.metronome_running,
             metronome_bpm: setup.metronome_bpm,
+            tab_panel: TabPlayerPanel::new(setup.song_player.clone(), &settings),
+            main_view: if settings.last_tab.is_some() { MainView::Tabs } else { MainView::Analyzer },
+            song_player: setup.song_player,
             dragged_pedal: None,
             buffer_frames: settings
                 .buffer_frames
@@ -370,6 +387,7 @@ impl eframe::App for AudioApp {
                             let initial_pedals = self.pedal_chain.clone();
                             let metronome_running = self.metronome_running.clone();
                             let metronome_bpm = self.metronome_bpm.clone();
+                            let song_player = self.song_player.clone();
 
                             std::thread::spawn(move || {
                                 let input_res =
@@ -383,6 +401,7 @@ impl eframe::App for AudioApp {
                                     initial_pedals,
                                     metronome_running,
                                     metronome_bpm,
+                                    song_player,
                                 );
                                 let _ = tx.send((input_res, output_res));
                             });
@@ -486,6 +505,7 @@ impl eframe::App for AudioApp {
                                         let buffer_frames = self.buffer_frames;
                                         let metronome_running = self.metronome_running.clone();
                                         let metronome_bpm = self.metronome_bpm.clone();
+                                        let song_player = self.song_player.clone();
 
                                         std::thread::spawn(move || {
                                             let res = switch_output_device(
@@ -497,6 +517,7 @@ impl eframe::App for AudioApp {
                                                 initial_pedals,
                                                 metronome_running,
                                                 metronome_bpm,
+                                                song_player,
                                             );
                                             let _ = tx.send(res);
                                         });
@@ -639,8 +660,19 @@ impl eframe::App for AudioApp {
                 })
             });
 
-        // Central panel for graphs
+        // Central panel: analyzer graphs or the tab player.
         egui::CentralPanel::default().show(ctx, |ui| {
+            ui.horizontal(|ui| {
+                ui.selectable_value(&mut self.main_view, MainView::Analyzer, "📈 Analyzer");
+                ui.selectable_value(&mut self.main_view, MainView::Tabs, "🎼 Tabs");
+            });
+            ui.separator();
+
+            if self.main_view == MainView::Tabs {
+                self.tab_panel.ui(ui, &mut self.settings);
+                return;
+            }
+
             ui.heading("Real Time Audio Analyzer");
             ui.separator();
 
@@ -691,11 +723,11 @@ impl eframe::App for AudioApp {
                     },
                 );
             });
-
-            if pedal_chain_updated {
-                let _ = self.pedal_tx.send(self.pedal_chain.clone());
-            }
         });
+
+        if pedal_chain_updated {
+            let _ = self.pedal_tx.send(self.pedal_chain.clone());
+        }
 
         ctx.request_repaint();
     }

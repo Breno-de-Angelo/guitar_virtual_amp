@@ -5,6 +5,7 @@
 //! specific to this app: last-used input/output device and the last-loaded
 //! preset, so a restart drops the user back roughly where they left off.
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::PathBuf;
 
@@ -20,7 +21,27 @@ pub enum PresetRef {
     Factory(String),
 }
 
+/// Per-tab backing-track choice and manual sync, so reopening a tab brings
+/// its audio back already aligned.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct TabSyncSettings {
+    pub audio_path: Option<PathBuf>,
+    /// Backing-track time (seconds) at which bar 1 starts.
+    pub offset_secs: f64,
+    /// Recording tempo divided by the tab's notated tempo.
+    pub tempo_ratio: f64,
+}
+
+impl Default for TabSyncSettings {
+    fn default() -> Self {
+        Self { audio_path: None, offset_secs: 0.0, tempo_ratio: 1.0 }
+    }
+}
+
+// `serde(default)` keeps settings files written by older versions loadable
+// when fields are added (a parse failure would reset every setting).
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct AppSettings {
     pub input_device: Option<String>,
     pub output_device: Option<String>,
@@ -29,6 +50,12 @@ pub struct AppSettings {
     /// `backend::capture::resolve_stream_config`); `None` uses the
     /// `shared::config::GLOBAL_CONFIG` default.
     pub buffer_frames: Option<u32>,
+    /// SoundFont (.sf2) used by the tab player's synthesizer.
+    pub soundfont_path: Option<PathBuf>,
+    /// Last tab opened in the tab player, reopened on launch.
+    pub last_tab: Option<PathBuf>,
+    /// Keyed by the tab file's path.
+    pub tab_sync: BTreeMap<String, TabSyncSettings>,
 }
 
 const SETTINGS_SUBPATH: &str = "guitar_virtual_amp/settings.json";
@@ -76,10 +103,30 @@ mod tests {
             output_device: Some("Speakers".to_string()),
             last_preset: Some(PresetRef::Factory("Clean Jazz".to_string())),
             buffer_frames: Some(256),
+            soundfont_path: Some(PathBuf::from("/sf/FluidR3_GM.sf2")),
+            last_tab: Some(PathBuf::from("/tabs/song.gp5")),
+            tab_sync: BTreeMap::from([(
+                "/tabs/song.gp5".to_string(),
+                TabSyncSettings {
+                    audio_path: Some(PathBuf::from("/music/song.mp3")),
+                    offset_secs: 1.25,
+                    tempo_ratio: 1.01,
+                },
+            )]),
         };
         let json = serde_json::to_string(&settings).expect("serialize");
         let restored: AppSettings = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(settings, restored);
+    }
+
+    #[test]
+    fn settings_from_older_versions_still_load() {
+        // Written before the tab-player fields existed.
+        let json = r#"{"input_device":"Mic","output_device":null,"last_preset":null,"buffer_frames":128}"#;
+        let restored: AppSettings = serde_json::from_str(json).expect("deserialize");
+        assert_eq!(restored.input_device.as_deref(), Some("Mic"));
+        assert_eq!(restored.buffer_frames, Some(128));
+        assert!(restored.tab_sync.is_empty());
     }
 
     #[test]

@@ -15,6 +15,15 @@ desktop (Linux, Windows, macOS) and Android.
   plus saving and loading your own.
 - **Tuner** based on the YIN pitch-detection algorithm, and a sample-accurate **metronome**.
 - **Live oscilloscope and FFT** view of the output signal.
+- **Tab player** (an open Songsterr-style view): opens Guitar Pro files (GP3, GP4, GP5, GPX, GP7/8),
+  draws the tablature with a playback cursor, and plays it with a SoundFont synthesizer
+  (per-track mute/solo, speed control) and/or an original recording (mp3, ogg, flac, wav, m4a)
+  aligned to the score. Guitar Pro 8 embedded audio and sync points are used automatically;
+  for other files you mark where bar 1 starts and, optionally, correct the tempo. The song
+  plays through the same output as your processed guitar, so you can mute a track and play it
+  yourself. The synth needs a `.sf2` SoundFont (e.g. FluidR3_GM, GeneralUser GS): it picks up
+  common system install paths or any file in `<data dir>/guitar_virtual_amp/soundfonts/`, or
+  you can choose one in the UI.
 - **Device selection and buffer-size control** from the UI (32 to 4096 frames), to trade
   latency against stability on your hardware.
 

@@ -58,6 +58,12 @@ Device switching (desktop UI) tears down the old input stream and spawns a new o
 
 Touch four places: add a `*Params` struct + `Default` impl and a new `PedalDescription` variant (with its `name()`) in `shared/pedals.rs`; add the DSP implementation in `backend/pedals/<name>.rs` implementing `Pedal`, and register it in `backend/pedals/mod.rs`; wire the match arm in `PedalChain::from_description` (`backend/pedals/pedal.rs`); add slider UI in `frontend/ui/pedals.rs`'s `render_pedal_ui` match.
 
+### Tab player (`shared::tab`, `backend::song_player`, `frontend::ui::tab_*`)
+- `shared::tab::import` reads Guitar Pro files through the `guitarpro` crate and flattens them into `shared::tab::model::Score` (string 1 = highest string for every format; GPIF files number strings from the lowest one and are flipped on import). It works around gaps in guitarpro 0.5.0: GP3-5 instruments are guessed from track names/tuning, and GP7 tunings are re-read from the raw GPIF.
+- `shared::tab::timeline` expands repeats/alternate endings into bar occurrences, converts ticks to seconds through the tempo map ("score time"), generates synth note events, and holds `SyncMap` (score time <-> backing-track time).
+- `backend::song_player::SongPlayer` is the realtime engine (rustysynth + decoded backing track from `backend::audio_file`). It's an `Arc<Mutex<_>>` that the output callback only `try_lock`s, mixed in after the pedal chain (the visualizer/tuner channel still only gets the guitar). It's passed into `build_output_stream`/`switch_output_device` so it survives stream rebuilds.
+- `frontend::ui::tab_view` lays out and paints the tab; `frontend::ui::tab_player::TabPlayerPanel` is the "Tabs" page (file loading on background threads, mixer, sync controls). Per-tab audio path + manual sync, the SoundFont path and the last tab are persisted in `AppSettings`.
+
 ### Shared config (`guitar_core::shared`)
 
 - `config::GLOBAL_CONFIG` — the single source of truth for sample rate (48000.0 Hz) and buffer sizing constants, referenced by both DSP code (e.g. filter cutoff math) and the audio pipeline.

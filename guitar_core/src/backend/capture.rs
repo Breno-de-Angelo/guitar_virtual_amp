@@ -66,6 +66,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 use crate::backend::pedals::pedal::{MultiChannelPedalChain, PedalChain};
+use crate::backend::song_player::SongPlayer;
 use crate::shared::pedals::PedalInstance;
 use crate::shared::config::GLOBAL_CONFIG;
 
@@ -190,6 +191,9 @@ pub struct AudioSetup {
     /// Current metronome tempo, stored as `f32::to_bits` since `AtomicF32`
     /// doesn't exist in `std`.
     pub metronome_bpm: Arc<AtomicU32>,
+    /// Tab-player song engine (synth + backing track), mixed into the output
+    /// after the pedal chain. See `backend::song_player`.
+    pub song_player: SongPlayer,
 }
 
 pub fn start_audio_processing(
@@ -293,6 +297,7 @@ pub fn start_audio_processing_with_devices(
     let last_output_callback_ns = Arc::new(AtomicU64::new(0));
     let metronome_running = Arc::new(AtomicBool::new(false));
     let metronome_bpm = Arc::new(AtomicU32::new(120.0f32.to_bits()));
+    let song_player = SongPlayer::new();
 
     let (output_stream, output_effective_frames) = build_output_stream(
         &output_device,
@@ -305,6 +310,7 @@ pub fn start_audio_processing_with_devices(
         last_output_callback_ns.clone(),
         metronome_running.clone(),
         metronome_bpm.clone(),
+        song_player.clone(),
     )?;
 
     output_stream.play()?;
@@ -329,6 +335,7 @@ pub fn start_audio_processing_with_devices(
         last_output_callback_ns,
         metronome_running,
         metronome_bpm,
+        song_player,
     })
 }
 
@@ -347,10 +354,16 @@ fn build_output_stream(
     last_output_callback_ns: Arc<AtomicU64>,
     metronome_running: Arc<AtomicBool>,
     metronome_bpm: Arc<AtomicU32>,
+    song_player: SongPlayer,
 ) -> Result<(cpal::Stream, Option<u32>), Box<dyn std::error::Error>> {
     let sample_format = config.sample_format();
     let (stream_config, effective_frames) = resolve_stream_config(&config, buffer_frames);
     let channels = stream_config.channels;
+    song_player.set_output_rate(stream_config.sample_rate);
+    // Song audio for the current callback, rendered in one block before the
+    // per-frame loop. Sized generously up front so the realtime callback
+    // only reallocates if the host hands over an unusually large buffer.
+    let mut song_buffer: Vec<f32> = vec![0.0; 8192];
 
     let mut pedal_chain = PedalChain::from_description(initial_pedals);
     let mut metronome_click = MetronomeClick::new(metronome_running, metronome_bpm);
@@ -365,7 +378,9 @@ fn build_output_stream(
                     pedal_chain.apply_description(msg);
                 }
 
-                for frame in data.chunks_mut(channels as usize) {
+                let song = render_song_block(&song_player, &mut song_buffer, data.len() / channels as usize);
+
+                for (frame, &song_sample) in data.chunks_mut(channels as usize).zip(song.iter()) {
                     let base_sample = if let Ok(in_sample) = input_rx.try_recv() {
                         pedal_chain.process_sample(in_sample)
                     } else {
@@ -373,10 +388,15 @@ fn build_output_stream(
                     };
                     let click_sample = metronome_click.next_sample();
                     let processed = base_sample.saturating_add(click_sample);
+                    // The visualizer/tuner only sees the guitar (+ click),
+                    // never the song playing along with it.
                     let _ = audio_tx.try_send(processed);
+                    let mixed = processed.saturating_add(
+                        (song_sample.clamp(-1.0, 1.0) * i16::MAX as f32) as i16,
+                    );
 
                     for channel_sample in frame.iter_mut() {
-                        *channel_sample = processed;
+                        *channel_sample = mixed;
                     }
                 }
 
@@ -397,7 +417,9 @@ fn build_output_stream(
                     pedal_chain.apply_description(msg);
                 }
 
-                for frame in data.chunks_mut(channels as usize) {
+                let song = render_song_block(&song_player, &mut song_buffer, data.len() / channels as usize);
+
+                for (frame, &song_sample) in data.chunks_mut(channels as usize).zip(song.iter()) {
                     let base_sample = if let Ok(in_sample) = input_rx.try_recv() {
                         pedal_chain.process_sample(in_sample)
                     } else {
@@ -407,7 +429,8 @@ fn build_output_stream(
                     let processed_i16 = base_sample.saturating_add(click_sample);
                     let _ = audio_tx.try_send(processed_i16);
 
-                    let processed_f32 = processed_i16 as f32 / i16::MAX as f32;
+                    let processed_f32 =
+                        (processed_i16 as f32 / i16::MAX as f32 + song_sample).clamp(-1.0, 1.0);
                     for channel_sample in frame.iter_mut() {
                         *channel_sample = processed_f32;
                     }
@@ -425,6 +448,19 @@ fn build_output_stream(
     };
 
     Ok((stream, effective_frames))
+}
+
+/// Renders `frames` frames of tab-player audio into `buffer` (growing it if
+/// the host asks for an unusually large callback) and returns that slice.
+/// Never blocks: see `SongPlayer::try_render`.
+fn render_song_block<'a>(player: &SongPlayer, buffer: &'a mut Vec<f32>, frames: usize) -> &'a [f32] {
+    if buffer.len() < frames {
+        buffer.resize(frames, 0.0);
+    }
+    let block = &mut buffer[..frames];
+    block.fill(0.0);
+    player.try_render(block);
+    block
 }
 
 /// Finds the named output device, builds a fresh output stream for it (seeded with
@@ -446,6 +482,7 @@ pub fn switch_output_device(
     initial_pedals: Vec<PedalInstance>,
     metronome_running: Arc<AtomicBool>,
     metronome_bpm: Arc<AtomicU32>,
+    song_player: SongPlayer,
 ) -> Result<cpal::Stream, String> {
     let host = cpal::default_host();
     let devices = host.output_devices().map_err(|e| e.to_string())?;
@@ -469,6 +506,7 @@ pub fn switch_output_device(
         last_output_callback_ns,
         metronome_running,
         metronome_bpm,
+        song_player,
     )
     .map_err(|e| e.to_string())?;
 
