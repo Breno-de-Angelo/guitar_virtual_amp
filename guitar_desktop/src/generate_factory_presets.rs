@@ -134,6 +134,7 @@ fn factory_presets() -> Vec<Preset> {
                 PedalDescription::Cabinet(CabinetParams {
                     ir_path: None,
                     mix: 1.0,
+                    source: None,
                 }),
             ],
         ),
@@ -308,6 +309,7 @@ fn factory_presets() -> Vec<Preset> {
                 PedalDescription::Cabinet(CabinetParams {
                     ir_path: None,
                     mix: 1.0,
+                    source: None,
                 }),
             ],
         ),
@@ -457,6 +459,7 @@ fn factory_presets() -> Vec<Preset> {
                 PedalDescription::Cabinet(CabinetParams {
                     ir_path: None,
                     mix: 1.0,
+                    source: None,
                 }),
             ],
         ),

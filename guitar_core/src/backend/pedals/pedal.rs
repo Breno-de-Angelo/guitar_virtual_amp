@@ -2,7 +2,7 @@ use crate::{
     backend::pedals::{
         amp::Amp, cabinet::Cabinet, chorus::Chorus, compressor::Compressor, delay::Delay,
         distortion::Distortion, eq::EqPedal, flanger::Flanger, looper::Looper, low_pass::LowPass,
-        noise_gate::NoiseGate, octaver::Octaver, phaser::Phaser, pitch_shifter::PitchShifter,
+        nam::NamPedal, noise_gate::NoiseGate, octaver::Octaver, phaser::Phaser, pitch_shifter::PitchShifter,
         reverb::Reverb, tremolo::Tremolo, wah_wah::WahWah,
     },
     shared::pedals::{PedalDescription, PedalInstance},
@@ -10,6 +10,16 @@ use crate::{
 
 pub trait Pedal: Send {
     fn apply_effect(&mut self, input: i16) -> i16;
+
+    /// Processes a block of consecutive samples in place. The default runs
+    /// `apply_effect` per sample, so it's identical to calling it in a loop.
+    /// Pedals whose DSP is faster on blocks (e.g. `NamPedal`) override it to
+    /// get the speed-up without buffering, so they add no latency.
+    fn process_block(&mut self, samples: &mut [i16]) {
+        for sample in samples.iter_mut() {
+            *sample = self.apply_effect(*sample);
+        }
+    }
 
     /// Attempts to apply `description`'s params to this pedal in place,
     /// preserving internal DSP state (delay lines, loop buffers, LFO phase,
@@ -146,6 +156,7 @@ impl PedalChain {
             PedalDescription::Cabinet(params) => {
                 Box::new(Cabinet::new(params)) as Box<dyn Pedal>
             }
+            PedalDescription::Nam(params) => Box::new(NamPedal::new(params)) as Box<dyn Pedal>,
         }
     }
 
@@ -156,6 +167,17 @@ impl PedalChain {
             }
         }
         sample
+    }
+
+    /// Runs a block of samples through the chain in place, one pedal at a
+    /// time. Pedals are causal and in series, so this gives the same output
+    /// as calling `process_sample` on each sample in order.
+    pub fn process_block(&mut self, samples: &mut [i16]) {
+        for entry in &mut self.pedals {
+            if entry.enabled {
+                entry.pedal.process_block(samples);
+            }
+        }
     }
 }
 
@@ -303,6 +325,34 @@ mod tests {
         // isn't silence (i.e. the buffer wasn't wiped).
         let played_back: Vec<i16> = recorded.iter().map(|_| chain.process_sample(0)).collect();
         assert!(played_back.iter().any(|&s| s != 0));
+    }
+
+    /// The output callback processes blocks; it must sound exactly like the
+    /// per-sample path for every pedal type.
+    #[test]
+    fn process_block_matches_process_sample_for_every_pedal() {
+        use strum::IntoEnumIterator;
+        let description: Vec<PedalInstance> =
+            PedalDescription::iter().map(PedalInstance::new).collect();
+        let mut per_sample = PedalChain::from_description(description.clone());
+        let mut per_block = PedalChain::from_description(description);
+
+        let input: Vec<i16> = (0..4000)
+            .map(|i| ((i as f32 * 0.031).sin() * 9000.0) as i16)
+            .collect();
+        let expected: Vec<i16> = input.iter().map(|&s| per_sample.process_sample(s)).collect();
+        let mut actual = input.clone();
+        // Uneven block sizes, like real callbacks.
+        let mut start = 0;
+        for size in [1, 7, 128, 333, 64].iter().cycle() {
+            if start >= actual.len() {
+                break;
+            }
+            let end = (start + size).min(actual.len());
+            per_block.process_block(&mut actual[start..end]);
+            start = end;
+        }
+        assert_eq!(actual, expected);
     }
 
     /// Proves that two channels run through `MultiChannelPedalChain` are fully

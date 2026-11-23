@@ -111,6 +111,7 @@ mod tests {
         let mut cabinet = Cabinet::new(CabinetParams {
             ir_path: None,
             mix: 1.0,
+            source: None,
         });
 
         for sample in [0i16, 1000, -1000, 32000, -32000] {
@@ -123,6 +124,7 @@ mod tests {
         let mut cabinet = Cabinet::new(CabinetParams {
             ir_path: Some("/nonexistent/path/to/ir.wav".to_string()),
             mix: 1.0,
+            source: None,
         });
 
         assert_eq!(cabinet.apply_effect(1234), 1234);

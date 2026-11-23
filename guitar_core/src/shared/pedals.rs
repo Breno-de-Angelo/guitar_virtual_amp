@@ -20,6 +20,7 @@ pub enum PedalDescription {
     PitchShift(PitchShifterParams),
     Looper(LooperParams),
     Cabinet(CabinetParams),
+    Nam(NamParams),
 }
 
 /// One entry in a pedal chain: a [`PedalDescription`] plus whether it's
@@ -77,6 +78,7 @@ impl PedalDescription {
             PedalDescription::PitchShift(_) => "Pitch Shifter",
             PedalDescription::Looper(_) => "Looper",
             PedalDescription::Cabinet(_) => "Cabinet",
+            PedalDescription::Nam(_) => "NAM Model",
         }
     }
 }
@@ -295,6 +297,10 @@ pub struct CabinetParams {
     pub ir_path: Option<String>,
     /// Wet/dry mix (0.0 dry/bypassed tone, 1.0 fully cabinet-voiced).
     pub mix: f32,
+    /// Set when the IR was downloaded from TONE3000, so the pedal can show
+    /// its creator and license. `None` for files the user loaded by hand.
+    #[serde(default)]
+    pub source: Option<Tone3000Source>,
 }
 
 impl Default for CabinetParams {
@@ -302,6 +308,61 @@ impl Default for CabinetParams {
         Self {
             ir_path: None,
             mix: 1.0,
+            source: None,
+        }
+    }
+}
+
+/// Where a downloaded model or IR came from on TONE3000. Stored in the pedal
+/// params (and therefore in presets) so attribution and license travel with
+/// the file, and so a preset opened on another machine can fetch the same
+/// tone again through the TONE3000 "load tone" flow.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Tone3000Source {
+    pub tone_id: u64,
+    pub model_id: u64,
+    pub tone_title: String,
+    pub model_name: String,
+    /// Creator's display name (or username when they have none).
+    pub creator: String,
+    pub creator_username: String,
+    /// Gear type as TONE3000 reports it, e.g. `amp`, `amp-cab`, `pedal`.
+    pub gear: String,
+    /// Tone format, `nam` or `ir`.
+    pub format: String,
+    /// License chosen by the creator, e.g. `t3k`, `cc-by`.
+    pub license: String,
+    pub tone_url: String,
+    #[serde(default)]
+    pub image_url: Option<String>,
+}
+
+/// Neural Amp Modeler capture (`.nam`): an amp, pedal or full rig modeled by
+/// a neural network. See `backend::pedals::nam`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct NamParams {
+    /// Path to the `.nam` file. `None` passes audio through unchanged.
+    pub model_path: Option<String>,
+    /// Gain applied before the model, in dB. Captures react to input level
+    /// the way the real amp reacts to a hotter or weaker guitar signal.
+    pub input_gain_db: f32,
+    /// Gain applied after the model (and after normalization), in dB.
+    pub output_gain_db: f32,
+    /// Scale the output so every model plays back at a similar loudness,
+    /// using the loudness value stored in the `.nam` file.
+    pub normalize: bool,
+    #[serde(default)]
+    pub source: Option<Tone3000Source>,
+}
+
+impl Default for NamParams {
+    fn default() -> Self {
+        Self {
+            model_path: None,
+            input_gain_db: 0.0,
+            output_gain_db: 0.0,
+            normalize: true,
+            source: None,
         }
     }
 }

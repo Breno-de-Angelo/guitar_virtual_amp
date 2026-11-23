@@ -1,16 +1,22 @@
-use eframe::egui::{ComboBox, Slider, Ui};
+use eframe::egui::{Color32, ComboBox, Slider, Ui};
 
+use crate::backend::pedals::nam;
+use crate::frontend::ui::tone3000::{
+    Tone3000Request, ToneTarget, browse_button, nam_warning, source_block,
+};
 use crate::shared::pedals::{
     AmpParams, AmpVoicing, CabinetParams, ChorusParams, CompressorParams, DelayParams,
     DistortionParams, EqParams, FlangerParams, LooperCommand, LooperParams, LowPassParams,
-    NoiseGateParams, OctaverParams, PedalDescription, PedalInstance, PhaserParams,
-    PitchShifterParams, ReverbParams, TremoloParams, WahWahParams,
+    NamParams, NoiseGateParams, OctaverParams, PedalDescription, PedalInstance, PhaserParams,
+    PitchShifterParams, ReverbParams, TremoloParams, Tone3000Source, WahWahParams,
 };
 
 pub enum PedalAction {
     None,
     Updated,
     Deleted,
+    /// The pedal wants the TONE3000 window (browse, or re-download a tone).
+    Tone3000(Tone3000Request),
 }
 
 /// Returns the action taken this frame (bypass toggle and per-param sliders
@@ -53,6 +59,7 @@ pub fn render_pedal_ui(ui: &mut Ui, instance: &mut PedalInstance) -> PedalAction
         }
 
         let pedal = &mut instance.description;
+        let mut request = None;
         let updated = match pedal {
             PedalDescription::Amp(params) => amp_ui(ui, params),
             PedalDescription::Delay(params) => delay_ui(ui, params),
@@ -70,11 +77,22 @@ pub fn render_pedal_ui(ui: &mut Ui, instance: &mut PedalInstance) -> PedalAction
             PedalDescription::Octaver(params) => octaver_ui(ui, params),
             PedalDescription::PitchShift(params) => pitch_shifter_ui(ui, params),
             PedalDescription::Looper(params) => looper_ui(ui, params),
-            PedalDescription::Cabinet(params) => cabinet_ui(ui, params),
+            PedalDescription::Cabinet(params) => {
+                let (updated, cabinet_request) = cabinet_ui(ui, params);
+                request = cabinet_request;
+                updated
+            }
+            PedalDescription::Nam(params) => {
+                let (updated, nam_request) = nam_ui(ui, params);
+                request = nam_request;
+                updated
+            }
         };
         changed |= updated;
 
-        if changed {
+        if let Some(request) = request {
+            PedalAction::Tone3000(request)
+        } else if changed {
             PedalAction::Updated
         } else {
             PedalAction::None
@@ -453,27 +471,74 @@ fn looper_ui(ui: &mut Ui, params: &mut LooperParams) -> bool {
     .inner
 }
 
-fn cabinet_ui(ui: &mut Ui, params: &mut CabinetParams) -> bool {
+/// File name of `path` for display, falling back to the whole path.
+fn file_name(path: &str) -> String {
+    std::path::Path::new(path)
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.to_string())
+}
+
+/// Shows the loaded file, or a "download again" button when the file is
+/// gone but the pedal remembers which TONE3000 tone it came from.
+fn loaded_file_ui(
+    ui: &mut Ui,
+    path: Option<&str>,
+    source: Option<&Tone3000Source>,
+    target: ToneTarget,
+    empty_label: &str,
+) -> Option<Tone3000Request> {
+    let path = match path {
+        None => {
+            ui.label(empty_label);
+            return None;
+        }
+        Some(path) => path,
+    };
+    if std::path::Path::new(path).exists() {
+        ui.label(file_name(path)).on_hover_text(path);
+        return None;
+    }
+    ui.colored_label(Color32::RED, format!("File not found: {}", file_name(path)))
+        .on_hover_text(path);
+    let source = source?;
+    ui.button("Download again from TONE3000")
+        .clicked()
+        .then_some(Tone3000Request::Reload {
+            target,
+            tone_id: source.tone_id,
+            model_id: Some(source.model_id),
+        })
+}
+
+fn cabinet_ui(ui: &mut Ui, params: &mut CabinetParams) -> (bool, Option<Tone3000Request>) {
     ui.group(|ui| {
         ui.label("Cabinet");
 
         let mut changed = false;
+        let mut request = None;
 
-        // `rfd` (native file picker) has no Android backend, so Android falls
-        // back to a plain text field for entering the IR's on-device path.
-        #[cfg(not(target_os = "android"))]
+        if let Some(source) = &params.source {
+            source_block(ui, source);
+        }
+
         ui.horizontal(|ui| {
+            // `rfd` (native file picker) has no Android backend, so Android
+            // falls back to a plain text field below.
+            #[cfg(not(target_os = "android"))]
             if ui.button("Load IR...").clicked() {
                 if let Some(path) = rfd::FileDialog::new()
                     .add_filter("WAV", &["wav"])
                     .pick_file()
                 {
                     params.ir_path = Some(path.display().to_string());
+                    params.source = None;
                     changed = true;
                 }
             }
-            let loaded = params.ir_path.as_deref().unwrap_or("No IR loaded");
-            ui.label(loaded);
+            if browse_button(ui) {
+                request = Some(Tone3000Request::Browse(ToneTarget::Ir));
+            }
         });
 
         #[cfg(target_os = "android")]
@@ -482,14 +547,104 @@ fn cabinet_ui(ui: &mut Ui, params: &mut CabinetParams) -> bool {
             ui.label("IR file path:");
             if ui.text_edit_singleline(&mut path).changed() {
                 params.ir_path = if path.is_empty() { None } else { Some(path) };
+                params.source = None;
                 changed = true;
             }
         }
 
+        request = request.or(loaded_file_ui(
+            ui,
+            params.ir_path.as_deref(),
+            params.source.as_ref(),
+            ToneTarget::Ir,
+            "No IR loaded",
+        ));
+
         let mix_slider = ui.add(Slider::new(&mut params.mix, 0.0..=1.0).text("Mix"));
         changed |= mix_slider.changed();
 
-        changed
+        (changed, request)
+    })
+    .inner
+}
+
+fn nam_ui(ui: &mut Ui, params: &mut NamParams) -> (bool, Option<Tone3000Request>) {
+    ui.group(|ui| {
+        ui.label("NAM Model");
+
+        let mut changed = false;
+        let mut request = None;
+
+        if let Some(source) = &params.source {
+            source_block(ui, source);
+        }
+
+        ui.horizontal(|ui| {
+            #[cfg(not(target_os = "android"))]
+            if ui.button("Load .nam...").clicked() {
+                if let Some(path) = rfd::FileDialog::new()
+                    .add_filter("NAM model", &["nam"])
+                    .pick_file()
+                {
+                    params.model_path = Some(path.display().to_string());
+                    params.source = None;
+                    changed = true;
+                }
+            }
+            if browse_button(ui) {
+                request = Some(Tone3000Request::Browse(ToneTarget::Nam));
+            }
+        });
+
+        #[cfg(target_os = "android")]
+        {
+            let mut path = params.model_path.clone().unwrap_or_default();
+            ui.label(".nam file path:");
+            if ui.text_edit_singleline(&mut path).changed() {
+                params.model_path = if path.is_empty() { None } else { Some(path) };
+                params.source = None;
+                changed = true;
+            }
+        }
+
+        request = request.or(loaded_file_ui(
+            ui,
+            params.model_path.as_deref(),
+            params.source.as_ref(),
+            ToneTarget::Nam,
+            "No model loaded",
+        ));
+
+        // Filled in by `nam::preload`, which the app runs before sending a
+        // chain to the audio thread.
+        if let Some(path) = params.model_path.as_deref() {
+            match nam::cached_info(path) {
+                Some(Ok(info)) => {
+                    let name = info.name.clone().unwrap_or_else(|| file_name(path));
+                    ui.label(format!("{name} ({})", info.architecture));
+                    if let Some(warning) = nam_warning(&info) {
+                        ui.colored_label(Color32::YELLOW, warning);
+                    }
+                }
+                Some(Err(error)) if std::path::Path::new(path).exists() => {
+                    ui.colored_label(Color32::RED, error);
+                }
+                _ => {}
+            }
+        }
+
+        changed |= ui
+            .add(Slider::new(&mut params.input_gain_db, -24.0..=24.0).text("Input (dB)"))
+            .changed();
+        changed |= ui
+            .add(Slider::new(&mut params.output_gain_db, -24.0..=24.0).text("Output (dB)"))
+            .changed();
+        changed |= ui
+            .checkbox(&mut params.normalize, "Normalize loudness")
+            .on_hover_text("Play every model at a similar level, using the loudness stored in the file")
+            .changed();
+
+        (changed, request)
     })
     .inner
 }

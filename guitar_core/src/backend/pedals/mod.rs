@@ -8,6 +8,7 @@ mod eq;
 mod flanger;
 mod looper;
 mod low_pass;
+pub mod nam;
 mod noise_gate;
 mod octaver;
 pub mod pedal;

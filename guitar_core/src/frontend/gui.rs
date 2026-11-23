@@ -9,20 +9,24 @@ use std::sync::Arc;
 use strum::IntoEnumIterator;
 
 use crate::{
-    backend::capture::{AudioSetup, switch_input_device, switch_output_device},
-    backend::song_player::SongPlayer,
+    backend::{
+        capture::{AudioSetup, INPUT_BACKLOG_SAMPLES, switch_input_device, switch_output_device},
+        pedals::nam,
+        song_player::SongPlayer,
+    },
     frontend::{
         lib::fft::compute_fft,
         ui::metronome::MetronomePanel,
         ui::pedals::{PedalAction, render_pedal_ui},
         ui::presets::PresetPanel,
         ui::tab_player::TabPlayerPanel,
+        ui::tone3000::{LoadedTone, Tone3000Panel, ToneTarget},
         ui::tuner::tuner_ui,
     },
     shared::{
         config::{BUFFER_SIZE_OPTIONS_FRAMES, GLOBAL_CONFIG},
         factory_presets::factory_presets,
-        pedals::{PedalDescription, PedalInstance},
+        pedals::{CabinetParams, NamParams, PedalDescription, PedalInstance},
         preset,
         settings::{save_settings, AppSettings, PresetRef},
     },
@@ -40,6 +44,53 @@ enum MainView {
 
 /// Result of a background buffer-size change: (input stream result, output stream result).
 type BufferSwitchResult = (Result<cpal::Stream, String>, Result<cpal::Stream, String>);
+
+/// Parses every NAM model the chain uses into the model cache, on the UI
+/// thread, so the audio thread doesn't read files when it rebuilds the chain
+/// (see `backend::pedals::nam`). Cache hits are a map lookup, so this is
+/// cheap to call on every chain update.
+fn preload_nam_models(chain: &[PedalInstance]) {
+    let paths: Vec<&str> = chain
+        .iter()
+        .filter_map(|pedal| match &pedal.description {
+            PedalDescription::Nam(params) => params.model_path.as_deref(),
+            _ => None,
+        })
+        .collect();
+    for path in &paths {
+        let _ = nam::preload(path);
+    }
+    nam::retain_only(&paths);
+}
+
+/// Puts a tone downloaded from TONE3000 into the pedal that asked for it.
+/// If that pedal was deleted or replaced meanwhile, appends a new pedal
+/// instead so the download isn't lost.
+fn apply_loaded_tone(chain: &mut Vec<PedalInstance>, loaded: LoadedTone) {
+    let target_pedal = chain.get_mut(loaded.pedal_index).map(|p| &mut p.description);
+    match (target_pedal, loaded.target) {
+        (Some(PedalDescription::Nam(params)), ToneTarget::Nam) => {
+            params.model_path = Some(loaded.path);
+            params.source = Some(loaded.source);
+        }
+        (Some(PedalDescription::Cabinet(params)), ToneTarget::Ir) => {
+            params.ir_path = Some(loaded.path);
+            params.source = Some(loaded.source);
+        }
+        (_, ToneTarget::Nam) => chain.push(PedalInstance::new(PedalDescription::Nam(NamParams {
+            model_path: Some(loaded.path),
+            source: Some(loaded.source),
+            ..Default::default()
+        }))),
+        (_, ToneTarget::Ir) => chain.push(PedalInstance::new(PedalDescription::Cabinet(
+            CabinetParams {
+                ir_path: Some(loaded.path),
+                source: Some(loaded.source),
+                ..Default::default()
+            },
+        ))),
+    }
+}
 
 fn is_valid_input_device(name: &str) -> bool {
     let name_lower = name.to_lowercase();
@@ -99,6 +150,7 @@ pub struct AudioApp {
     refreshing_output_devices_rx: Option<Receiver<Vec<String>>>,
     preset_panel: PresetPanel,
     metronome_panel: MetronomePanel,
+    tone3000_panel: Tone3000Panel,
     /// Nominal round-trip buffer latency in seconds, computed once at stream
     /// setup (Phase 3.2 latency/CPU meter overlay). See `capture.rs` module docs.
     configured_latency_secs: f32,
@@ -194,6 +246,7 @@ impl AudioApp {
             None => Vec::new(),
         };
         if !initial_pedal_chain.is_empty() {
+            preload_nam_models(&initial_pedal_chain);
             let _ = setup.pedal_tx.send(initial_pedal_chain.clone());
         }
 
@@ -217,6 +270,7 @@ impl AudioApp {
             switching_output_rx: None,
             refreshing_output_devices_rx: None,
             preset_panel: PresetPanel::new(),
+            tone3000_panel: Tone3000Panel::new(),
             metronome_panel: MetronomePanel::new(
                 setup.metronome_running.clone(),
                 setup.metronome_bpm.clone(),
@@ -315,6 +369,7 @@ impl eframe::App for AudioApp {
         }
 
         let mut pedal_chain_updated = false;
+        let mut tone3000_request = None;
 
         // Side panel for controls
         egui::SidePanel::right("controls")
@@ -336,9 +391,13 @@ impl eframe::App for AudioApp {
                     } else {
                         egui::Color32::LIGHT_GREEN
                     };
+                    // Audio waiting between the input and output streams, on
+                    // top of the device buffers.
+                    let queue_ms = INPUT_BACKLOG_SAMPLES.load(Ordering::Relaxed) as f32 * 1000.0
+                        / GLOBAL_CONFIG.sample_rate;
                     ui.colored_label(
                         color,
-                        format!("buffer: {buffer_ms:.1}ms, CPU: {cpu_pct:.0}%"),
+                        format!("buffer: {buffer_ms:.1}ms, queue: {queue_ms:.1}ms, CPU: {cpu_pct:.0}%"),
                     );
                 });
 
@@ -633,6 +692,9 @@ impl eframe::App for AudioApp {
                                                 to_remove.push(i);
                                                 pedal_chain_updated = true;
                                             }
+                                            PedalAction::Tone3000(request) => {
+                                                tone3000_request = Some((i, request));
+                                            }
                                         }
                                     });
                                 });
@@ -659,6 +721,14 @@ impl eframe::App for AudioApp {
                     );
                 })
             });
+
+        if let Some((pedal_index, request)) = tone3000_request {
+            self.tone3000_panel.handle_request(pedal_index, request);
+        }
+        if let Some(loaded) = self.tone3000_panel.show(ctx) {
+            apply_loaded_tone(&mut self.pedal_chain, loaded);
+            pedal_chain_updated = true;
+        }
 
         // Central panel: analyzer graphs or the tab player.
         egui::CentralPanel::default().show(ctx, |ui| {
@@ -725,8 +795,16 @@ impl eframe::App for AudioApp {
             });
         });
 
+        // Outside the central panel so it also runs when the Tabs page
+
+        // returns early.
+
         if pedal_chain_updated {
+
+            preload_nam_models(&self.pedal_chain);
+
             let _ = self.pedal_tx.send(self.pedal_chain.clone());
+
         }
 
         ctx.request_repaint();

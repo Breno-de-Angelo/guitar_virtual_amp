@@ -16,6 +16,12 @@ fn android_main(app: android_activity::AndroidApp) {
 
     log::info!("Aplicativo Android iniciado.");
 
+    // `dirs::data_dir()` is `None` on Android; TONE3000 downloads and the
+    // sign-in session go to the app's private internal storage instead.
+    if let Some(path) = app.internal_data_path() {
+        guitar_core::shared::paths::set_app_data_dir(path);
+    }
+
     let (audio_tx, audio_rx) = bounded(1024);
 
     // Inicializa o áudio via CPAL (AAudio/OpenSL ES)

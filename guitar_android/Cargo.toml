@@ -28,6 +28,10 @@ target_sdk_version = 35
 [[package.metadata.android.uses_permission]]
 name = "android.permission.RECORD_AUDIO"
 
+# TONE3000 sign-in, tone lists and model downloads.
+[[package.metadata.android.uses_permission]]
+name = "android.permission.INTERNET"
+
 [package.metadata.android.signing.release]
 path = "/home/breno/.android/debug.keystore"
 keystore_password = "android"
