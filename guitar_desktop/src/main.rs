@@ -3,14 +3,12 @@ use std::error::Error;
 
 use guitar_core::{
     backend::capture::start_audio_processing_with_devices,
-    frontend::gui::AudioApp,
+    frontend::gui::{AudioApp, VISUALIZER_CHANNEL_SAMPLES},
     shared::{config::GLOBAL_CONFIG, settings::load_settings},
 };
 
-const BUFFER_SIZE: usize = 1024;
-
 fn main() -> Result<(), Box<dyn Error>> {
-    let (audio_tx, audio_rx) = bounded(BUFFER_SIZE);
+    let (audio_tx, audio_rx) = bounded(VISUALIZER_CHANNEL_SAMPLES);
 
     // Phase 3.4: restore last-used input/output device (falls back to the
     // host default if unavailable), buffer size, and last-loaded preset

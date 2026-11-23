@@ -3,3 +3,4 @@
 # Never put the secret key (t3k_cs_...) here or anywhere in this repo.
 [env]
 TONE3000_CLIENT_ID = "t3k_pub_DRfUQ9PWLNKmuC5QvYTSzAi_FzwKk9kh"
+SPOTIFY_CLIENT_ID = "24b5a352cf6b473485924a51f7b75849"

@@ -5,3 +5,24 @@ members = [
     "guitar_desktop",
     "guitar_android",
 ]
+
+# The transcription model (tract) is unusably slow unoptimized; optimize it
+# even in dev builds so `cargo run` transcribes in seconds, not minutes.
+[profile.dev.package.tract-core]
+opt-level = 3
+[profile.dev.package.tract-linalg]
+opt-level = 3
+[profile.dev.package.tract-data]
+opt-level = 3
+[profile.dev.package.tract-hir]
+opt-level = 3
+[profile.dev.package.tract-onnx]
+opt-level = 3
+[profile.dev.package.tract-onnx-opl]
+opt-level = 3
+[profile.dev.package.tract-nnef]
+opt-level = 3
+[profile.dev.package.tract-extra]
+opt-level = 3
+[profile.dev.package.tract-transformers]
+opt-level = 3

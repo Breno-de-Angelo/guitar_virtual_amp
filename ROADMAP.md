@@ -189,6 +189,121 @@ Final phase; mostly sequential since it's packaging/release engineering, not fea
 
 ---
 
+## Phase 7 — Play-along: Spotify, tabs and practice
+
+### Done
+- **Practice mode** (`frontend/lib/practice.rs`): per-note right/wrong marks on the tab, accuracy
+  and streak, latency compensation, tolerance and strictness knobs (persisted in
+  `AppSettings::practice`). Checked offline against real Guitar Pro files rendered with a GM
+  SoundFont, clean and through the "Metal High Gain" chain: ~100% for the right notes and
+  0-30% for single-note parts shifted a semitone or a fourth (chord parts shifted a fourth
+  keep some shared notes and score higher).
+- **Tone suggestion** (`shared/tab/tone.rs`): user presets by `song`/`artist`, else a factory
+  preset from the track's GM program, name, tuning and palm muting.
+- **Spotify page** (`spotify/`, `frontend/ui/spotify.rs`): PKCE sign-in, playlists and tracks,
+  play/pause/skip on the user's Spotify Connect device, now-playing with cover art, and tab
+  lookup in the user's own Guitar Pro folder (`shared/tab/library.rs`) or a manual link.
+
+### Spotify Developer Policy constraints (read before extending)
+The [policy](https://developer.spotify.com/policy) and the player endpoints' policy tags rule
+out, unless Spotify grants written permission: synchronizing a recording with visual content
+(a tab cursor following Spotify), overlapping Spotify audio with other audio (the synth or the
+processed guitar mixed with it inside the app), analysing Spotify content (tone or note
+extraction), games (scoring is borderline: keep practice mode independent of Spotify), and
+combining Spotify with other services' content (tabs downloaded from a tab site). Dev-mode
+apps: Premium owner, 5 allow-listed users, `GET /search` capped at 10 results.
+
+### Future features (noted while building this phase)
+- **Spotify <-> tab sync** [decision needed]: blocked by the synchronization policy. Options:
+  ask Spotify for permission/extended quota; keep sync for the user's own audio files (works
+  today via the backing track); or a manual "start both together" flow with no automatic sync.
+- **Onset detection** in practice mode, so a note still ringing from the previous beat doesn't
+  count for a re-picked one, plus per-note "early/late by N ms" feedback and a rhythm-only
+  score for muted chugs.
+- **Dry input tap**: send the pre-chain guitar signal to the UI for practice analysis (reverb,
+  delay and chorus tails currently lower the scores; the strictness knob compensates).
+- **Automatic latency calibration** (click out, detect it back in) instead of the manual
+  "latência extra".
+- **Practice loops and speed trainer**: A-B loop of bars, start slow and raise the speed when
+  accuracy passes a threshold; practice history per tab and a "hardest bars" heat map.
+- **Expressive technique checks**: bends, slides and vibrato (pitch trajectory), harmonics,
+  dead/ghost notes (currently skipped).
+- **Pre-practice tuning check** with the tuner, warning when the guitar doesn't match the tab's
+  tuning (drop D, half step down...).
+- **Bass and drum practice**: bass works with a longer window for low notes; drums need
+  onset-only judging.
+- **Speaker bleed handling** for microphone users (the practiced track is muted in the synth,
+  but the rest of the song still reaches the mic).
+- **Tone from the tab file**: Guitar Pro 6+ files store RSE amp/effect settings per track;
+  mapping them to pedals would give a real per-song chain instead of a GM-program guess.
+- **Tab library**: match by the title/artist inside the file, not only the file name; cache the
+  index; Android folder picker (no `rfd` backend there).
+- **Spotify extras**: Liked Songs (`GET /me/tracks`, needs `user-library-read`), open the tab
+  automatically when the playing track changes, device picker (transfer playback), search.
+- **Licensed tab source**: Songsterr and Ultimate Guitar have no public API; a licensed provider
+  would have to live outside the Spotify-integrated surface (policy: no combining services).
+
+### Automatic tablature (built: `transcribe/`, `shared/tab/repository.rs`)
+- Offline pipeline: Demucs `htdemucs_6s` (external, `scripts/install_demucs.sh`) -> Beat This!
+  beats/downbeats/meter -> guitar CRNN (GAPS weights) for the guitar, Basic Pitch for the bass,
+  all in pure Rust (tract 0.23) -> chord grouping, per-beat 16th/triplet quantization,
+  string/fret Viterbi with a learned string prior, tuning -> GP5 + `.gvtab.json` sidecar in the
+  local tab repository. GUI on the Tabs and Spotify pages, batch CLI `transcribe`. The guitar
+  CRNN and Beat This! are optional downloads (`scripts/install_transcription_models.sh`);
+  without them the pipeline uses Basic Pitch and the DSP beat tracker in 4/4. Tab catalogs
+  (Songsterr, Ultimate Guitar) stay link-only: their terms forbid pulling their content into
+  the app.
+- Measured (`transcribe/eval.rs`; note F1 = onset within 80 ms + pitch, on the final tab):
+  | | before | Basic Pitch + new rhythm | guitar CRNN + new rhythm |
+  |---|---|---|---|
+  | GuitarSet, 60 excerpts: F1 median | 0.70 | 0.73 | 0.83 (model alone 0.84 at 50 ms) |
+  | GuitarSet: tempo right / bar lines aligned | 44/60, 4/60 | 59/60, 56/60 | 59/60, 56/60 |
+  | GP renders, isolated guitar: F1 median | 0.82 | 0.81 | 0.85 |
+  | GP renders, full mix without Demucs | 0.52 | 0.52 | 0.68 |
+  Fingering alone (true notes, share on the human's string): GuitarSet players 03-05, never
+  used for fitting, 65.9% -> 75.4%; 10 human Guitar Pro tabs 58.5% -> 65.4% (the weights were
+  fitted on those tabs + GuitarSet 00-02, and the string prior comes from GuitarSet 00-02, so
+  the `eval_guitarset` string/fret median, 71% -> 90%, is optimistic). The guitar CRNN
+  (trained on classical guitar) makes octave errors on very low, heavily distorted riffs: the
+  8-string SoundFont render of "Meshuggah - Bleed" drops from 0.24 to 0.02. A 4-minute song
+  without Demucs takes ~48 s (before: 42 s, mostly in the old per-sample resampler, now
+  polyphase) and ~2.3 GB peak: each CRNN window in flight takes ~600 MB in tract, so it runs on
+  at most 4 threads.
+- Sources: Riley et al., "GAPS" (ISMIR 2024) and "High Resolution Guitar Transcription via
+  Domain Adaptation" (ICASSP 2024); Kong et al., high-resolution piano transcription (2021);
+  Foscarin et al., "Beat This!" (ISMIR 2024); TART (2025, onset clustering, 30 ms minimum note,
+  16th quantization); Fretting-Transformer (2025) and MIDI-to-Tab (ISMIR 2024) for fingering
+  metrics; spotify/basic-pitch#190 for the Basic Pitch frame hop.
+- YouTube as audio source (built: `transcribe/youtube.rs`): search or link, ranked
+  preselection (duration from Spotify), download with yt-dlp into a private cache, then the
+  same pipeline. YouTube's ToS forbid downloading without permission, and Google Play bans
+  apps that download from YouTube: keep it out of the Android build/store listing, and
+  revisit before any public release.
+
+### Future work on transcription
+- **YouTube**: batch from a Spotify playlist (search + transcribe every track missing a
+  tab); show the match confidence and let the user confirm before downloading in batch
+  mode; trim intros/outros of music videos against the Spotify duration.
+- **Real band-recording benchmark**: GP8 files with embedded audio and sync points give real
+  mixes with aligned tabs; collect a set and add it to `transcribe/eval.rs`.
+- **Rhythm**: meters other than 3/4 and 4/4 (6/8, 7/8, odd bars), tempo changes inside a song
+  (Beat This! already follows them, but the meter is global), 16th-note triplets and 32nds.
+- **Techniques**: bends, slides, hammer-ons/pull-offs, vibrato, palm mute from the pitch
+  contour output (model output 2) and onset strength.
+- **Several guitar tracks** (rhythm vs lead) by register/polyphony clustering; **drums**
+  (onset classification on the drum stem) and **vocal melody** tracks.
+- **Fingering**: the string prior and weights come from GuitarSet + 10 tabs. A learned model
+  (MIDI-to-Tab, Fretting-Transformer, or TART's audio-conditioned AudioFret, +4.8 points from
+  timbre) needs weights we can ship; DadaGP-scale statistics would also help the prior.
+- **Guitar CRNN on distorted low riffs**: octave errors on 7/8-string metal; a fallback to Basic
+  Pitch for very low tunings, or a model fine-tuned on electric guitar (GOAT, EGDB).
+- **Native Demucs** (ONNX via `ort` or demucs.cpp) so separation needs no Python and could
+  run on Android; today Android can only transcribe from the mix.
+- **Tab editor** to fix transcriptions in the app, and **repository sync**: share tabs by
+  audio hash + Spotify track ID, with per-tab provenance already in the sidecar.
+
+---
+
 ## Suggested parallel dispatch order
 
 1. Phase 3 is done (see status snapshot above).

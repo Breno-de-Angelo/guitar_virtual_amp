@@ -5,6 +5,9 @@ use eframe::egui::{
     self, Align, Align2, Color32, FontId, Pos2, Rect, Sense, Stroke, Ui, pos2, vec2,
 };
 
+use std::collections::HashMap;
+
+use crate::frontend::lib::practice::NoteKey;
 use crate::shared::tab::model::{Score, ScoreTrack, TabBeat, TabNote, TICKS_PER_QUARTER};
 
 const LINE_SPACING: f32 = 13.0;
@@ -161,6 +164,8 @@ struct Palette {
     cursor: Color32,
     bar_highlight: Color32,
     note_bg: Color32,
+    hit: Color32,
+    miss: Color32,
 }
 
 impl Palette {
@@ -179,6 +184,8 @@ impl Palette {
                 Color32::from_rgba_unmultiplied(255, 170, 0, 40)
             },
             note_bg: v.extreme_bg_color,
+            hit: if dark { Color32::from_rgb(90, 210, 110) } else { Color32::from_rgb(20, 140, 50) },
+            miss: if dark { Color32::from_rgb(255, 95, 95) } else { Color32::from_rgb(200, 30, 30) },
         }
     }
 }
@@ -213,6 +220,10 @@ fn note_suffix(note: &TabNote) -> &'static str {
     }
 }
 
+/// Practice-mode results: `true` = played correctly. Notes without an entry
+/// haven't been judged and keep their normal color.
+pub type NoteMarks = HashMap<NoteKey, bool>;
+
 /// Draws the whole tab for `track` inside a vertical scroll area.
 /// `follow_row` scrolls the row containing the cursor into view.
 pub fn tab_view(
@@ -222,6 +233,7 @@ pub fn tab_view(
     layout: &TabLayout,
     cursor: Option<CursorPos>,
     follow_row: bool,
+    marks: Option<&NoteMarks>,
 ) -> TabViewResponse {
     let palette = Palette::from_ui(ui);
     let mut clicked_bar = None;
@@ -290,6 +302,7 @@ pub fn tab_view(
                         bar_layout,
                         pos2(origin.x + bar_layout.x, staff_top),
                         staff_height,
+                        marks,
                     );
                 }
                 // Closing line of the row.
@@ -333,6 +346,7 @@ fn hit_test(layout: &TabLayout, local: Pos2) -> Option<usize> {
         .map(|b| b.bar)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn paint_bar(
     painter: &egui::Painter,
     palette: &Palette,
@@ -341,6 +355,7 @@ fn paint_bar(
     layout: &BarLayout,
     staff_origin: Pos2,
     staff_height: f32,
+    marks: Option<&NoteMarks>,
 ) {
     let master = &score.bars[layout.bar];
     let x = staff_origin.x;
@@ -384,16 +399,31 @@ fn paint_bar(
 
     let Some(track_bar) = track.bars.get(layout.bar) else { return };
     for (voice_index, voice) in track_bar.voices.iter().enumerate() {
-        let color = if voice_index == 0 { palette.text } else { palette.dim };
-        for beat in voice {
+        let voice_color = if voice_index == 0 { palette.text } else { palette.dim };
+        for (beat_index, beat) in voice.iter().enumerate() {
             let bx = x + layout.tick_x(beat.start as f64);
-            for note in &beat.notes {
+            for (note_index, note) in beat.notes.iter().enumerate() {
+                let key = NoteKey {
+                    bar: layout.bar,
+                    voice: voice_index as u8,
+                    beat: beat_index as u16,
+                    note: note_index as u8,
+                };
+                let mark = marks.and_then(|m| m.get(&key)).copied();
+                let color = match mark {
+                    Some(true) => palette.hit,
+                    Some(false) => palette.miss,
+                    None => voice_color,
+                };
                 let string = (note.string as usize).clamp(1, track.string_count());
                 let y = top + (string - 1) as f32 * LINE_SPACING;
                 let label = note_label(note, track.percussion);
                 let galley = painter.layout_no_wrap(label, fret_font.clone(), color);
                 let rect = Rect::from_center_size(pos2(bx, y), galley.size() + vec2(2.0, -2.0));
                 painter.rect_filled(rect, 1.0, palette.note_bg);
+                if mark.is_some() {
+                    painter.rect_stroke(rect.expand(1.0), 2.0, Stroke::new(1.0_f32, color), egui::StrokeKind::Outside);
+                }
                 painter.galley(rect.min + vec2(1.0, -1.0), galley, color);
                 let suffix = note_suffix(note);
                 if !suffix.is_empty() {

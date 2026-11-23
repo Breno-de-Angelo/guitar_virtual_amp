@@ -16,6 +16,10 @@ path = "src/generate_factory_presets.rs"
 name = "bench_pedal_chain"
 path = "src/bench_pedal_chain.rs"
 
+[[bin]]
+name = "transcribe"
+path = "src/transcribe.rs"
+
 [dependencies]
 guitar_core = { path = "../guitar_core" }
 eframe = "0.32.1"

@@ -22,7 +22,7 @@ fn android_main(app: android_activity::AndroidApp) {
         guitar_core::shared::paths::set_app_data_dir(path);
     }
 
-    let (audio_tx, audio_rx) = bounded(1024);
+    let (audio_tx, audio_rx) = bounded(guitar_core::frontend::gui::VISUALIZER_CHANNEL_SAMPLES);
 
     // Inicializa o áudio via CPAL (AAudio/OpenSL ES)
     let audio_setup = match start_audio_processing(audio_tx) {

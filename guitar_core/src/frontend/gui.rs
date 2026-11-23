@@ -19,6 +19,7 @@ use crate::{
         ui::metronome::MetronomePanel,
         ui::pedals::{PedalAction, render_pedal_ui},
         ui::presets::PresetPanel,
+        ui::spotify::{SpotifyAction, SpotifyPanel},
         ui::tab_player::TabPlayerPanel,
         ui::tone3000::{LoadedTone, Tone3000Panel, ToneTarget},
         ui::tuner::tuner_ui,
@@ -33,6 +34,11 @@ use crate::{
 };
 
 const BUFFER_SIZE: usize = 2048;
+
+/// Capacity of the `audio_rx` channel the entry points create. The audio
+/// thread drops samples when it's full, so it holds about a second: tab
+/// practice mode needs a gap-free signal, and a UI frame can be late.
+pub const VISUALIZER_CHANNEL_SAMPLES: usize = 48_000;
 const FFT_FREQ_RESOLUTION: f64 = GLOBAL_CONFIG.sample_rate as f64 / BUFFER_SIZE as f64;
 
 /// Which page the central panel shows.
@@ -40,6 +46,7 @@ const FFT_FREQ_RESOLUTION: f64 = GLOBAL_CONFIG.sample_rate as f64 / BUFFER_SIZE 
 enum MainView {
     Analyzer,
     Tabs,
+    Spotify,
 }
 
 /// Result of a background buffer-size change: (input stream result, output stream result).
@@ -165,6 +172,7 @@ pub struct AudioApp {
     /// handed to a rebuilt stream on device/buffer changes.
     song_player: SongPlayer,
     tab_panel: TabPlayerPanel,
+    spotify_panel: SpotifyPanel,
     main_view: MainView,
     /// Index (in `pedal_chain`) of the pedal currently being dragged for
     /// reordering, if any.
@@ -280,6 +288,7 @@ impl AudioApp {
             metronome_running: setup.metronome_running,
             metronome_bpm: setup.metronome_bpm,
             tab_panel: TabPlayerPanel::new(setup.song_player.clone(), &settings),
+            spotify_panel: SpotifyPanel::new(),
             main_view: if settings.last_tab.is_some() { MainView::Tabs } else { MainView::Analyzer },
             song_player: setup.song_player,
             dragged_pedal: None,
@@ -295,12 +304,17 @@ impl AudioApp {
 impl eframe::App for AudioApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         // Consumes samples
+        let mut fresh: Vec<f32> = Vec::with_capacity(self.audio_rx.len());
         while let Ok(sample) = self.audio_rx.try_recv() {
             if self.buffer.len() >= BUFFER_SIZE {
                 self.buffer.pop_front();
             }
-            self.buffer.push_back(sample as f64 / i16::MAX as f64);
+            let normalized = sample as f64 / i16::MAX as f64;
+            self.buffer.push_back(normalized);
+            fresh.push(normalized as f32);
         }
+        // Tab practice mode needs every sample, not just the display window.
+        self.tab_panel.feed_input(&fresh, self.configured_latency_secs);
 
         // Verifica canais assíncronos
         if let Some(ref rx) = self.switching_rx {
@@ -730,16 +744,32 @@ impl eframe::App for AudioApp {
             pedal_chain_updated = true;
         }
 
-        // Central panel: analyzer graphs or the tab player.
+        // Central panel: analyzer graphs, the tab player or Spotify.
+        let mut tone_choice = None;
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.horizontal(|ui| {
                 ui.selectable_value(&mut self.main_view, MainView::Analyzer, "📈 Analyzer");
                 ui.selectable_value(&mut self.main_view, MainView::Tabs, "🎼 Tabs");
+                ui.selectable_value(&mut self.main_view, MainView::Spotify, "🎧 Spotify");
             });
             ui.separator();
 
             if self.main_view == MainView::Tabs {
-                self.tab_panel.ui(ui, &mut self.settings);
+                tone_choice = self.tab_panel.ui(ui, &mut self.settings);
+                return;
+            }
+            if self.main_view == MainView::Spotify {
+                match self.spotify_panel.ui(ui, &mut self.settings) {
+                    Some(SpotifyAction::OpenTab(path)) => {
+                        self.tab_panel.open_tab(path);
+                        self.main_view = MainView::Tabs;
+                    }
+                    Some(SpotifyAction::Transcribe { title, artist, track_id, duration_secs }) => {
+                        self.tab_panel.start_transcription_for(title, artist, Some(track_id), duration_secs);
+                        self.main_view = MainView::Tabs;
+                    }
+                    None => {}
+                }
                 return;
             }
 
@@ -798,6 +828,15 @@ impl eframe::App for AudioApp {
         // Outside the central panel so it also runs when the Tabs page
 
         // returns early.
+
+        // A tone suggestion applied on the Tabs page replaces the chain, like
+        // loading a preset.
+        if let Some((pedals, preset_ref)) = tone_choice {
+            self.pedal_chain = pedals;
+            pedal_chain_updated = true;
+            self.settings.last_preset = Some(preset_ref);
+            save_settings(&self.settings);
+        }
 
         if pedal_chain_updated {
 

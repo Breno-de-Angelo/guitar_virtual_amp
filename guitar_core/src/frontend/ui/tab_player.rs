@@ -4,6 +4,13 @@
 //!
 //! File parsing, audio decoding and SoundFont loading run on background
 //! threads; results are polled once per frame.
+//!
+//! Practice mode (`frontend::lib::practice`) listens to the guitar input
+//! while the song plays and colors each note of the selected track green
+//! (played right) or red (wrong or missing).
+//!
+//! The "Timbre" row suggests a pedal chain for the selected track (see
+//! `shared::tab::tone`); applying it is returned to the app from [`TabPlayerPanel::ui`].
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -14,9 +21,17 @@ use rustysynth::SoundFont;
 
 use crate::backend::audio_file::{self, DecodedAudio, AUDIO_EXTENSIONS};
 use crate::backend::song_player::SongPlayer;
+use crate::frontend::lib::practice::{expected_beats, PracticeSession, PracticeSettings};
 use crate::frontend::ui::tab_view::{tab_view, CursorPos, TabLayout};
-use crate::shared::settings::{save_settings, AppSettings, TabSyncSettings};
+use crate::frontend::ui::transcribe::TranscribePanel;
+use crate::shared::config::GLOBAL_CONFIG;
+use crate::shared::factory_presets::factory_presets;
+use crate::shared::pedals::PedalInstance;
+use crate::shared::preset::{self, Preset};
+use crate::shared::settings::{save_settings, AppSettings, PracticePrefs, PresetRef, TabSyncSettings};
+use crate::shared::tab::tone::{guess_tone, preset_fits_song};
 use crate::shared::tab::import::{load_score_file, SUPPORTED_EXTENSIONS};
+use crate::shared::tab::repository;
 use crate::shared::tab::model::Score;
 use crate::shared::tab::timeline::{SyncMap, Timeline};
 
@@ -123,8 +138,30 @@ pub struct TabPlayerPanel {
     /// Sync from the file itself (Guitar Pro 8 embedded audio).
     file_sync: Option<SyncMap>,
     show_mixer: bool,
+    practice_on: bool,
+    /// Built for `(tab path, track index)`; rebuilt when either changes.
+    practice: Option<(PathBuf, usize, PracticeSession)>,
+    practice_prefs: PracticePrefs,
+    /// User presets whose song/artist metadata names the open tab's song.
+    song_presets: Vec<(Preset, PathBuf)>,
+    loading_song_presets: Pending<Vec<(Preset, PathBuf)>>,
+    transcriber: TranscribePanel,
+    /// Audio file and bar-accurate sync from a transcribed tab's sidecar.
+    sidecar_sync: Option<(PathBuf, SyncMap)>,
     #[cfg(target_os = "android")]
     path_input: String,
+}
+
+/// User presets made for this song (or artist), read on a worker thread.
+fn find_song_presets(title: String, artist: String) -> Result<Vec<(Preset, PathBuf)>, String> {
+    let Some(dir) = preset::user_preset_dir() else { return Ok(Vec::new()) };
+    Ok(preset::list_presets(&dir)
+        .into_iter()
+        .filter_map(|listing| {
+            let loaded = preset::load_from_file(&listing.path).ok()?;
+            preset_fits_song(&loaded, &title, &artist).then_some((loaded, listing.path))
+        })
+        .collect())
 }
 
 impl TabPlayerPanel {
@@ -151,6 +188,13 @@ impl TabPlayerPanel {
             tempo_ratio: 1.0,
             file_sync: None,
             show_mixer: true,
+            practice_on: false,
+            practice: None,
+            practice_prefs: settings.practice.clone(),
+            song_presets: Vec::new(),
+            loading_song_presets: None,
+            transcriber: TranscribePanel::new(),
+            sidecar_sync: None,
             #[cfg(target_os = "android")]
             path_input: String::new(),
         };
@@ -170,6 +214,50 @@ impl TabPlayerPanel {
 
     fn set_message(&mut self, text: impl Into<String>, is_error: bool) {
         self.message = Some((text.into(), is_error));
+    }
+
+    /// Opens a tab file (e.g. one picked on the Spotify page).
+    pub fn open_tab(&mut self, path: PathBuf) {
+        self.load_tab(path);
+    }
+
+    /// Opens the transcription form, prefilled (e.g. from a Spotify track).
+    pub fn start_transcription_for(
+        &mut self,
+        title: String,
+        artist: String,
+        spotify_track_id: Option<String>,
+        duration_secs: Option<f64>,
+    ) {
+        self.transcriber.show_form(Some(title), Some(artist), spotify_track_id, duration_secs);
+    }
+
+    fn on_transcribed(&mut self, output: crate::transcribe::Output, settings: &mut AppSettings) {
+        if let Some(id) = &output.metadata.spotify_track_id {
+            settings.spotify_tab_links.insert(id.clone(), output.tab_path.clone());
+            save_settings(settings);
+        }
+        let tracks: Vec<String> = output
+            .metadata
+            .tracks
+            .iter()
+            .map(|t| format!("{} ({} notas, afinação {})", t.name, t.notes, t.tuning_name))
+            .collect();
+        self.set_message(
+            format!(
+                "Tab gerada{}: {} · {:.0} bpm · {}",
+                if output.replaced { " de novo" } else { "" },
+                tracks.join(", "),
+                output.metadata.tempo_bpm,
+                output.tab_path.display()
+            ),
+            false,
+        );
+        self.load_tab(output.tab_path);
+    }
+
+    fn sidecar_sync_for(&self, path: &Path) -> Option<&SyncMap> {
+        self.sidecar_sync.as_ref().filter(|(p, _)| p == path).map(|(_, s)| s)
     }
 
     fn load_tab(&mut self, path: PathBuf) {
@@ -203,6 +291,9 @@ impl TabPlayerPanel {
     fn active_sync(&self) -> SyncMap {
         match (&self.backing, &self.file_sync) {
             (Some(Backing { source: BackingSource::Embedded, .. }), Some(sync)) => sync.clone(),
+            (Some(Backing { source: BackingSource::File(path), .. }), _) => {
+                self.sidecar_sync_for(path).cloned().unwrap_or_else(|| self.manual_sync())
+            }
             _ => self.manual_sync(),
         }
     }
@@ -238,18 +329,29 @@ impl TabPlayerPanel {
         self.muted = vec![false; score.tracks.len()];
         self.soloed = vec![false; score.tracks.len()];
         self.layout = None;
+        self.practice = None;
+        self.song_presets.clear();
+        let (title, artist) = (score.title.clone(), score.artist.clone());
+        self.loading_song_presets = Some(spawn(move || find_song_presets(title, artist)));
         self.backing = None;
         self.file_sync = SyncMap::from_file_points(&score.sync_points, &tab.timeline);
 
         let saved = settings.tab_sync.get(&tab_key(&tab.path)).cloned().unwrap_or_default();
         self.sync_offset = saved.offset_secs;
         self.tempo_ratio = saved.tempo_ratio;
+        // A transcribed tab knows its recording and where every bar starts.
+        self.sidecar_sync = repository::load_metadata(&tab.path).and_then(|meta| {
+            let audio = meta.source.path.clone().filter(|p| p.is_file())?;
+            Some((audio, meta.sync_map(&tab.timeline)?))
+        });
         if let Some(bytes) = score.backing_audio.clone() {
             self.loading_backing = Some(spawn(move || {
                 let audio = audio_file::decode_bytes(bytes)?;
                 Ok((BackingSource::Embedded, Arc::new(audio)))
             }));
         } else if let Some(path) = saved.audio_path.filter(|p| p.is_file()) {
+            self.load_backing_file(path);
+        } else if let Some((path, _)) = self.sidecar_sync.clone() {
             self.load_backing_file(path);
         }
 
@@ -283,6 +385,9 @@ impl TabPlayerPanel {
             Some(Err(e)) => self.set_message(e, true),
             None => {}
         }
+        if let Some(Ok(found)) = poll(&mut self.loading_song_presets) {
+            self.song_presets = found;
+        }
         match poll(&mut self.loading_backing) {
             Some(Ok((source, audio))) => {
                 self.backing = Some(Backing { source, duration_secs: audio.duration_secs() });
@@ -312,6 +417,74 @@ impl TabPlayerPanel {
         }
     }
 
+    /// Practice settings in score seconds. `audio_latency_secs` is the
+    /// stream's round-trip latency; the synth's speed setting stretches it.
+    fn practice_settings(&self, audio_latency_secs: f64) -> PracticeSettings {
+        let backing_on = self.use_backing && self.backing.is_some();
+        let speed = if backing_on { 1.0 } else { self.speed as f64 };
+        let prefs = &self.practice_prefs;
+        PracticeSettings {
+            latency_secs: (audio_latency_secs + prefs.extra_latency_ms as f64 / 1000.0) * speed,
+            tolerance_secs: prefs.tolerance_ms as f64 / 1000.0 * speed,
+            strictness: prefs.strictness as f64,
+        }
+    }
+
+    /// Makes sure the practice session matches the open tab and track.
+    fn ensure_practice(&mut self) {
+        if !self.practice_on {
+            self.practice = None;
+            return;
+        }
+        let Some(tab) = &self.tab else { return };
+        let up_to_date = matches!(&self.practice, Some((path, track, _)) if *path == tab.path && *track == self.selected_track);
+        if up_to_date {
+            return;
+        }
+        let Some(track) = tab.score.tracks.get(self.selected_track) else { return };
+        let rate = match self.player.status().output_rate() {
+            0 => GLOBAL_CONFIG.sample_rate as f64,
+            rate => rate as f64,
+        };
+        let beats = expected_beats(track, &tab.timeline);
+        let settings = self.practice_settings(0.0);
+        self.practice = Some((tab.path.clone(), self.selected_track, PracticeSession::new(beats, rate, settings)));
+    }
+
+    /// Hands the guitar samples that arrived this frame to practice mode.
+    /// Call every frame, also while another page is shown.
+    pub fn feed_input(&mut self, samples: &[f32], audio_latency_secs: f32) {
+        if !self.practice_on {
+            return;
+        }
+        self.ensure_practice();
+        let settings = self.practice_settings(audio_latency_secs as f64);
+        let status = self.player.status();
+        let (score_secs, playing) = (status.score_secs(), status.playing());
+        if let Some((_, _, session)) = &mut self.practice {
+            session.settings = settings;
+            session.feed(samples, score_secs, playing);
+        }
+    }
+
+    fn set_practice(&mut self, on: bool) {
+        self.practice_on = on;
+        if !on {
+            self.practice = None;
+            return;
+        }
+        // The synth playing the same part would be "heard" as the guitar
+        // through a microphone, so mute it.
+        if let Some(muted) = self.muted.get_mut(self.selected_track)
+            && !*muted
+        {
+            *muted = true;
+            self.player.set_track_enabled(self.track_enabled());
+            self.set_message("Modo prática: a faixa selecionada foi mutada no sintetizador.", false);
+        }
+        self.ensure_practice();
+    }
+
     fn toggle_play(&self) {
         if self.player.status().playing() {
             self.player.pause();
@@ -320,7 +493,9 @@ impl TabPlayerPanel {
         }
     }
 
-    pub fn ui(&mut self, ui: &mut Ui, settings: &mut AppSettings) {
+    /// Draws the page. Returns a pedal chain to load when the user applies
+    /// a tone suggestion.
+    pub fn ui(&mut self, ui: &mut Ui, settings: &mut AppSettings) -> Option<(Vec<PedalInstance>, PresetRef)> {
         self.poll_background(settings);
         self.handle_dropped_files(ui.ctx());
 
@@ -336,15 +511,23 @@ impl TabPlayerPanel {
             let color = if *is_error { Color32::LIGHT_RED } else { ui.visuals().weak_text_color() };
             ui.colored_label(color, text);
         }
+        if let Some(output) = self.transcriber.ui(ui, settings) {
+            self.on_transcribed(output, settings);
+        }
         if self.tab.is_none() {
             ui.add_space(20.0);
             ui.label(
                 "Abra (ou arraste para a janela) um arquivo Guitar Pro: .gp3, .gp4, .gp5, .gpx ou .gp.",
             );
-            return;
+            return None;
         }
+        let tone = self.tone_row(ui);
         ui.separator();
         self.transport_row(ui);
+        if self.practice_on {
+            ui.separator();
+            self.practice_row(ui, settings);
+        }
         if self.show_mixer {
             ui.separator();
             self.mixer(ui);
@@ -353,6 +536,40 @@ impl TabPlayerPanel {
         }
         ui.separator();
         self.tab_area(ui);
+        tone
+    }
+
+    /// Tone suggestions for the selected track.
+    fn tone_row(&mut self, ui: &mut Ui) -> Option<(Vec<PedalInstance>, PresetRef)> {
+        let tab = self.tab.as_ref()?;
+        let guess = tab.score.tracks.get(self.selected_track).and_then(guess_tone);
+        if guess.is_none() && self.song_presets.is_empty() {
+            return None;
+        }
+        let mut chosen = None;
+        ui.horizontal_wrapped(|ui| {
+            ui.label("💡 Timbre:")
+                .on_hover_text("Ponto de partida para o timbre. Não há como copiar o timbre exato da gravação.");
+            for (preset, path) in &self.song_presets {
+                let label = format!("⭐ {}", preset.name);
+                if ui.button(label).on_hover_text("Seu preset salvo para esta música/artista").clicked() {
+                    chosen = Some((preset.pedals.clone(), PresetRef::User(path.clone())));
+                }
+            }
+            if let Some(guess) = &guess {
+                let response = ui.button(format!("Aplicar \"{}\"", guess.factory_preset)).on_hover_text(guess.reason.as_str());
+                if response.clicked()
+                    && let Some(preset) = factory_presets().into_iter().find(|p| p.name == guess.factory_preset)
+                {
+                    chosen = Some((preset.pedals, PresetRef::Factory(preset.name)));
+                }
+                ui.label(RichText::new(guess.reason.as_str()).weak());
+            }
+        });
+        if chosen.is_some() {
+            self.set_message("Timbre aplicado à cadeia de pedais.", false);
+        }
+        chosen
     }
 
     fn file_row(&mut self, ui: &mut Ui) {
@@ -372,6 +589,13 @@ impl TabPlayerPanel {
                 if ui.button("Abrir tab").clicked() {
                     self.load_tab(PathBuf::from(self.path_input.trim()));
                 }
+            }
+            if ui
+                .add_enabled(!self.transcriber.is_running(), egui::Button::new("🤖 Transcrever áudio..."))
+                .on_hover_text("Gera uma tab (guitarra e baixo) a partir de um arquivo de música")
+                .clicked()
+            {
+                self.transcriber.show_form(None, None, None, None);
             }
             if self.loading_tab.is_some() {
                 ui.spinner();
@@ -438,7 +662,67 @@ impl TabPlayerPanel {
                 self.player.set_speed(self.speed as f64);
             }
             ui.toggle_value(&mut self.show_mixer, "🎚 Mixer");
+            let mut practice = self.practice_on;
+            if ui
+                .toggle_value(&mut practice, "🎯 Prática")
+                .on_hover_text("Confere, nota a nota, se você tocou a faixa selecionada corretamente")
+                .changed()
+            {
+                self.set_practice(practice);
+            }
         });
+    }
+
+    fn practice_row(&mut self, ui: &mut Ui, settings: &mut AppSettings) {
+        self.ensure_practice();
+        let Some((_, _, session)) = &mut self.practice else { return };
+        let mut prefs_changed = false;
+        ui.horizontal_wrapped(|ui| {
+            if session.beat_count() == 0 {
+                ui.colored_label(Color32::YELLOW, "Esta faixa não tem notas para conferir (bateria ou vazia).");
+                return;
+            }
+            let stats = session.stats();
+            let accuracy = stats
+                .note_accuracy()
+                .map(|a| format!("{:.0}%", a * 100.0))
+                .unwrap_or_else(|| "—".to_string());
+            ui.label(RichText::new(format!("🎯 {accuracy}")).strong())
+                .on_hover_text("Notas certas / notas conferidas");
+            ui.label(format!(
+                "notas {}/{} · tempos {}/{} · sequência {} (melhor {})",
+                stats.notes_hit,
+                stats.notes_judged,
+                stats.beats_hit,
+                stats.beats_judged,
+                stats.streak,
+                stats.best_streak
+            ));
+            if ui.button("Zerar").clicked() {
+                session.reset();
+            }
+            ui.separator();
+            let prefs = &mut self.practice_prefs;
+            prefs_changed |= ui
+                .add(egui::DragValue::new(&mut prefs.extra_latency_ms).range(-200.0..=500.0).suffix(" ms"))
+                .on_hover_text(
+                    "Latência extra, somada à do buffer de áudio. Aumente se notas tocadas no tempo aparecem como erradas.",
+                )
+                .changed();
+            ui.label("latência extra");
+            prefs_changed |= ui
+                .add(egui::Slider::new(&mut prefs.tolerance_ms, 30.0..=300.0).suffix(" ms").text("tolerância"))
+                .on_hover_text("Quanto antes ou depois do tempo a nota ainda vale")
+                .changed();
+            prefs_changed |= ui
+                .add(egui::Slider::new(&mut prefs.strictness, 0.0..=1.0).fixed_decimals(2).text("exigência"))
+                .on_hover_text("Baixe se notas certas aparecem em vermelho (ex.: muita distorção ou reverb)")
+                .changed();
+        });
+        if prefs_changed {
+            settings.practice = self.practice_prefs.clone();
+            save_settings(settings);
+        }
     }
 
     fn mixer(&mut self, ui: &mut Ui) {
@@ -550,7 +834,10 @@ impl TabPlayerPanel {
         let embedded_sync =
             matches!(&self.backing, Some(Backing { source: BackingSource::Embedded, .. }))
                 && self.file_sync.is_some();
-        if self.backing.is_some() && embedded_sync {
+        let transcribed_sync = matches!(&self.backing, Some(Backing { source: BackingSource::File(p), .. }) if self.sidecar_sync_for(p).is_some());
+        if transcribed_sync {
+            ui.label(RichText::new("Sincronização: compassos detectados na transcrição.").weak());
+        } else if self.backing.is_some() && embedded_sync {
             ui.label(RichText::new("Sincronização: pontos de sincronia do próprio arquivo (Guitar Pro 8).").weak());
         } else if self.backing.is_some() {
             let player = self.player.clone();
@@ -639,7 +926,13 @@ impl TabPlayerPanel {
             CursorPos { bar: occ.bar, tick: occ.secs_to_tick(score_secs.max(occ.start_secs)) }
         });
         let follow = self.follow_cursor && status.playing();
-        let response = tab_view(ui, &tab.score, track, layout, cursor, follow);
+        let marks = match &self.practice {
+            Some((_, track_index, session)) if self.practice_on && *track_index == self.selected_track => {
+                Some(session.marks())
+            }
+            _ => None,
+        };
+        let response = tab_view(ui, &tab.score, track, layout, cursor, follow, marks);
         if let Some(bar) = response.clicked_bar
             && let Some(occ) = tab.timeline.closest_occurrence(bar, score_secs)
         {
@@ -667,6 +960,106 @@ mod tests {
         assert_eq!(panel.track_enabled(), vec![true, false, true]);
         panel.soloed = vec![false, true, false];
         assert_eq!(panel.track_enabled(), vec![false, true, false]);
+    }
+
+    #[test]
+    fn practice_mode_and_tone_row_render_with_a_tab() {
+        use crate::shared::tab::model::{MasterBar, ScoreTrack, TabBeat, TabNote, TrackBar};
+        let beat = TabBeat {
+            duration: 960,
+            value: 4,
+            notes: vec![TabNote { string: 6, fret: 0, velocity: 100, ..Default::default() }],
+            ..Default::default()
+        };
+        let track = ScoreTrack {
+            name: "Distortion Guitar".into(),
+            program: 30,
+            tuning: vec![64, 59, 55, 50, 45, 40],
+            bars: vec![TrackBar { voices: vec![vec![beat]] }],
+            ..Default::default()
+        };
+        let score = Score {
+            initial_tempo: 120.0,
+            bars: vec![MasterBar { numerator: 4, denominator: 4, ..Default::default() }],
+            tracks: vec![track],
+            ..Default::default()
+        };
+        let timeline = Timeline::build(&score);
+        let mut panel = TabPlayerPanel::new(SongPlayer::new(), &AppSettings::default());
+        panel.tab = Some(LoadedTab { path: PathBuf::from("/t/x.gp5"), score: Arc::new(score), timeline: Arc::new(timeline) });
+        panel.muted = vec![false];
+        panel.soloed = vec![false];
+        panel.set_practice(true);
+        assert_eq!(panel.muted, vec![true], "practiced track is muted in the synth");
+        panel.feed_input(&[0.0; 800], 0.01);
+        assert_eq!(panel.practice.as_ref().map(|p| p.2.beat_count()), Some(1));
+
+        let ctx = egui::Context::default();
+        let mut settings = AppSettings::default();
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                assert!(panel.ui(ui, &mut settings).is_none());
+            });
+        });
+        panel.set_practice(false);
+        assert!(panel.practice.is_none());
+    }
+
+    #[test]
+    fn transcribed_tabs_open_with_their_recording_in_sync() {
+        use crate::shared::tab::model::{MasterBar, ScoreTrack, TabBeat, TabNote, TrackBar};
+        use crate::shared::tab::repository::{save, SourceAudio, TabMetadata};
+        let dir = std::env::temp_dir().join(format!("gva_tab_sidecar_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let wav = dir.join("song.wav");
+        let spec = hound::WavSpec { channels: 1, sample_rate: 8000, bits_per_sample: 16, sample_format: hound::SampleFormat::Int };
+        let mut writer = hound::WavWriter::create(&wav, spec).unwrap();
+        for _ in 0..8000 * 6 {
+            writer.write_sample(0i16).unwrap();
+        }
+        writer.finalize().unwrap();
+        let beat = TabBeat {
+            duration: 3840,
+            value: 1,
+            notes: vec![TabNote { string: 6, fret: 0, velocity: 90, ..Default::default() }],
+            ..Default::default()
+        };
+        let score = Score {
+            initial_tempo: 120.0,
+            bars: vec![MasterBar { numerator: 4, denominator: 4, ..Default::default() }; 2],
+            tracks: vec![ScoreTrack {
+                tuning: vec![64, 59, 55, 50, 45, 40],
+                bars: vec![TrackBar { voices: vec![vec![beat]] }, TrackBar::default()],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let meta = TabMetadata {
+            title: "Song".into(),
+            source: SourceAudio { path: Some(wav.clone()), sha256: "h".into(), ..Default::default() },
+            bar_audio_secs: vec![0.5, 2.6, 4.7],
+            ..Default::default()
+        };
+        let tab_path = save(&dir.join("repo"), &score, &meta).unwrap();
+
+        let mut settings = AppSettings::default();
+        let mut panel = TabPlayerPanel::new(SongPlayer::new(), &settings);
+        panel.open_tab(tab_path);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while (panel.tab.is_none() || panel.backing.is_none()) && std::time::Instant::now() < deadline {
+            panel.poll_background(&mut settings);
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(panel.backing.is_some(), "recording loaded");
+        match panel.active_sync() {
+            SyncMap::Points(points) => {
+                assert_eq!(points.len(), 3);
+                assert!((points[1].0 - 2.0).abs() < 1e-9 && (points[1].1 - 2.6).abs() < 1e-9);
+            }
+            other => panic!("expected bar sync, got {other:?}"),
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

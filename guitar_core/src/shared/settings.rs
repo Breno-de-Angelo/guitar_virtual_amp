@@ -38,6 +38,25 @@ impl Default for TabSyncSettings {
     }
 }
 
+/// Tab-player practice mode knobs (see `frontend::lib::practice`).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PracticePrefs {
+    /// Added to the measured audio round-trip latency, for interfaces whose
+    /// real latency is higher than what the driver reports.
+    pub extra_latency_ms: f32,
+    /// How early/late a note may be picked and still count.
+    pub tolerance_ms: f32,
+    /// 0 = lenient, 1 = strict.
+    pub strictness: f32,
+}
+
+impl Default for PracticePrefs {
+    fn default() -> Self {
+        Self { extra_latency_ms: 0.0, tolerance_ms: 120.0, strictness: 0.5 }
+    }
+}
+
 // `serde(default)` keeps settings files written by older versions loadable
 // when fields are added (a parse failure would reset every setting).
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -56,6 +75,14 @@ pub struct AppSettings {
     pub last_tab: Option<PathBuf>,
     /// Keyed by the tab file's path.
     pub tab_sync: BTreeMap<String, TabSyncSettings>,
+    pub practice: PracticePrefs,
+    /// Folder of Guitar Pro files matched against Spotify tracks by name.
+    pub tab_library_dir: Option<PathBuf>,
+    /// Tabs the user linked by hand, keyed by Spotify track ID.
+    pub spotify_tab_links: BTreeMap<String, PathBuf>,
+    /// Where transcriptions are saved; `None` uses
+    /// `shared::tab::repository::default_repository_dir`.
+    pub tab_repository_dir: Option<PathBuf>,
 }
 
 const SETTINGS_SUBPATH: &str = "guitar_virtual_amp/settings.json";
@@ -64,6 +91,11 @@ const SETTINGS_SUBPATH: &str = "guitar_virtual_amp/settings.json";
 /// Returns `None` on platforms without a resolvable config directory (e.g.
 /// Android), same caveat as `preset::user_preset_dir`.
 pub fn settings_path() -> Option<PathBuf> {
+    // Unit tests drive UI panels that save settings; never let them touch
+    // the developer's real settings file.
+    if cfg!(test) {
+        return None;
+    }
     dirs::config_dir().map(|base| base.join(SETTINGS_SUBPATH))
 }
 
@@ -113,6 +145,10 @@ mod tests {
                     tempo_ratio: 1.01,
                 },
             )]),
+            practice: PracticePrefs { extra_latency_ms: 15.0, tolerance_ms: 80.0, strictness: 0.7 },
+            tab_library_dir: Some(PathBuf::from("/tabs")),
+            spotify_tab_links: BTreeMap::from([("4uLU6hMCjMI75M1A2tKUQC".to_string(), PathBuf::from("/tabs/acdc.gp5"))]),
+            tab_repository_dir: Some(PathBuf::from("/repo")),
         };
         let json = serde_json::to_string(&settings).expect("serialize");
         let restored: AppSettings = serde_json::from_str(&json).expect("deserialize");
@@ -127,6 +163,7 @@ mod tests {
         assert_eq!(restored.input_device.as_deref(), Some("Mic"));
         assert_eq!(restored.buffer_frames, Some(128));
         assert!(restored.tab_sync.is_empty());
+        assert_eq!(restored.practice, PracticePrefs::default());
     }
 
     #[test]

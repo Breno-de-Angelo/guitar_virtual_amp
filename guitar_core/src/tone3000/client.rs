@@ -160,7 +160,7 @@ pub(crate) struct Pkce {
     pub challenge: String,
 }
 
-fn random_token(bytes: usize) -> Result<String, Tone3000Error> {
+pub(crate) fn random_token(bytes: usize) -> Result<String, Tone3000Error> {
     let mut buf = vec![0u8; bytes];
     getrandom::fill(&mut buf).map_err(|e| Tone3000Error::Other(format!("no randomness: {e}")))?;
     Ok(base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(buf))
@@ -282,7 +282,7 @@ impl PendingBrowserFlow {
         client: &Tone3000Client,
         cancel: &AtomicBool,
     ) -> Result<BrowserFlowResult, Tone3000Error> {
-        let params = wait_for_callback(&self.listener, cancel)?;
+        let params = wait_for_callback(&self.listener, cancel, CALLBACK_PAGE)?;
         if params.state.as_deref() != Some(self.state.as_str()) {
             return Err(Tone3000Error::OAuth(
                 "sign-in response did not match this request (state mismatch)".into(),
@@ -318,9 +318,12 @@ fn respond(stream: &mut TcpStream, status: &str, body: &str) {
     let _ = stream.flush();
 }
 
-fn wait_for_callback(
+/// Serves the loopback redirect: waits for `GET /callback?...`, answers it
+/// with `page` and returns its parameters. Also used by the Spotify sign-in.
+pub(crate) fn wait_for_callback(
     listener: &TcpListener,
     cancel: &AtomicBool,
+    page: &str,
 ) -> Result<CallbackParams, Tone3000Error> {
     listener
         .set_nonblocking(true)
@@ -346,7 +349,7 @@ fn wait_for_callback(
                 }
                 match parse_callback(&request_line) {
                     Some(params) => {
-                        respond(&mut stream, "200 OK", CALLBACK_PAGE);
+                        respond(&mut stream, "200 OK", page);
                         return Ok(params);
                     }
                     None => respond(&mut stream, "404 Not Found", ""),
