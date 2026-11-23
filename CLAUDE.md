@@ -54,6 +54,12 @@ Device switching (desktop UI) tears down the old input stream and spawns a new o
 - Each pedal (`amp.rs`, `delay.rs`, `distortion.rs`, `flanger.rs`, `low_pass.rs`, `reverb.rs`, `wah_wah.rs`) is self-contained: owns its `*Params` struct (defined in `shared::pedals`) plus whatever internal DSP state it needs, and implements `Pedal`.
 - Generic DSP building blocks (`backend::dsp::all_pass`, `comb_filter`) are used by pedals like `reverb` that need delay-line primitives; `backend::ring_buffer::RingBuffer<const N, T>` is a fixed-capacity ring buffer used for delay lines and is the one module in the codebase with unit tests.
 
+### NAM pedal and TONE3000 (`backend::pedals::nam`, `tone3000`, `frontend::ui::tone3000`)
+- `NamPedal` runs `.nam` captures via `nam-rs`. It overrides `Pedal::process_block` so the model runs on the output callback's whole block with no added latency (the output callback calls `PedalChain::process_block`; pedals that don't override it get a per-sample loop). Parsed model files live in a process-wide cache: the UI calls `nam::preload` (via `preload_nam_models` in `gui.rs`) before every `pedal_tx.send`, so the audio thread only builds the network from memory. Knob changes go through `update_in_place`; only a new path rebuilds the pedal.
+- `tone3000::Tone3000Client` is a blocking client (ureq): OAuth PKCE with a loopback redirect, device-code flow, token refresh, list/tone/model endpoints and downloads. Only call it from worker threads. The access token is only sent to `https://*.tone3000.com`.
+- `Tone3000Panel` (egui window) owns the client and runs every request on a spawned thread, reporting back through a channel. Pedals ask for it by returning `PedalAction::Tone3000(..)`; a finished download comes back from `Tone3000Panel::show` and `apply_loaded_tone` puts it in the chain.
+- TONE3000 API terms apply: no bulk download, caching or bundling of catalog content, only the bounded list endpoints (no search) for independent integrations, and creator/license metadata (`Tone3000Source`) must stay with the file.
+
 ### Adding a new pedal
 
 Touch four places: add a `*Params` struct + `Default` impl and a new `PedalDescription` variant (with its `name()`) in `shared/pedals.rs`; add the DSP implementation in `backend/pedals/<name>.rs` implementing `Pedal`, and register it in `backend/pedals/mod.rs`; wire the match arm in `PedalChain::from_description` (`backend/pedals/pedal.rs`); add slider UI in `frontend/ui/pedals.rs`'s `render_pedal_ui` match.

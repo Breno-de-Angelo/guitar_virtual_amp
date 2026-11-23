@@ -17,6 +17,13 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 dirs = "5.0"
 hound = "3.5"
+nam-rs = "0.4.0"
+ureq = { version = "3.5.2", features = ["json"] }
+sha2 = "0.11.1"
+base64 = "0.23.1"
+getrandom = "0.4.3"
+webbrowser = "1.2.7"
+image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "webp"] }
 
 # rfd has no Android backend at all (it only supports desktop/web toolkits),
 # so it must not be built for the Android target or `cargo apk build` fails

@@ -69,6 +69,114 @@ use crate::backend::pedals::pedal::{MultiChannelPedalChain, PedalChain};
 use crate::shared::pedals::PedalInstance;
 use crate::shared::config::GLOBAL_CONFIG;
 
+/// Samples waiting in the input→output queue at the start of the latest
+/// output callback, i.e. latency added on top of the device buffers. A
+/// static rather than an `AudioSetup` field because output streams get
+/// rebuilt on device/buffer changes and only one exists at a time; the UI
+/// meter reads it.
+pub static INPUT_BACKLOG_SAMPLES: AtomicU32 = AtomicU32::new(0);
+
+/// How long the backlog trimmer watches before deciding (~0.5 s at 48 kHz).
+const BACKLOG_WINDOW_SAMPLES: usize = 24_000;
+/// Extra queued audio the trimmer always leaves, to absorb callback jitter.
+const BACKLOG_MARGIN_SAMPLES: usize = 64;
+
+/// Keeps the input→output queue from holding more audio than it needs.
+///
+/// Input and output callbacks run at the same nominal rate, so anything
+/// that piles up in the queue (a slow callback, a chain rebuild, the output
+/// stream starting after the input, or two devices whose clocks drift
+/// apart) never drains by itself and stays as extra latency, up to the
+/// queue's 85 ms capacity. The trimmer tracks the smallest surplus seen
+/// over a window: if even the leanest callback had `surplus` samples more
+/// than it needed, those were pure delay, so all but a safety margin are
+/// dropped. Dropping makes a small click, but only after audio actually
+/// piled up.
+#[derive(Default)]
+struct BacklogTrimmer {
+    min_surplus: Option<usize>,
+    window_samples: usize,
+}
+
+impl BacklogTrimmer {
+    /// Call at the start of each output callback with the queue length and
+    /// the frames this callback will consume. Returns how many queued
+    /// samples to drop.
+    fn samples_to_drop(&mut self, queued: usize, frames: usize) -> usize {
+        let surplus = queued.saturating_sub(frames);
+        self.min_surplus = Some(self.min_surplus.map_or(surplus, |m| m.min(surplus)));
+        self.window_samples += frames;
+        if self.window_samples < BACKLOG_WINDOW_SAMPLES {
+            return 0;
+        }
+        let excess = self.min_surplus.unwrap_or(0).saturating_sub(BACKLOG_MARGIN_SAMPLES);
+        *self = Self::default();
+        excess
+    }
+}
+
+/// Largest block the output callback processes at once (matches the
+/// biggest buffer size the UI offers); longer callbacks are split.
+const OUTPUT_BLOCK_SAMPLES: usize = 4096;
+
+/// State the output callback owns: chain, metronome, scratch buffer.
+struct OutputRenderer {
+    pedal_chain: PedalChain,
+    metronome_click: MetronomeClick,
+    trimmer: BacklogTrimmer,
+    block: Vec<i16>,
+}
+
+impl OutputRenderer {
+    fn new(pedal_chain: PedalChain, metronome_click: MetronomeClick) -> Self {
+        Self {
+            pedal_chain,
+            metronome_click,
+            trimmer: BacklogTrimmer::default(),
+            block: vec![0; OUTPUT_BLOCK_SAMPLES],
+        }
+    }
+
+    /// Renders `frames` mono samples, calling `write(frame_index, sample)`
+    /// for each. Pulls input from `input_rx` (silence if it runs dry), runs
+    /// the chain on whole blocks, adds the metronome click, and forwards
+    /// each sample to the visualizer.
+    fn render(
+        &mut self,
+        frames: usize,
+        pedal_rx: &Receiver<Vec<PedalInstance>>,
+        input_rx: &Receiver<i16>,
+        audio_tx: &Sender<i16>,
+        mut write: impl FnMut(usize, i16),
+    ) {
+        for msg in pedal_rx.try_iter() {
+            self.pedal_chain.apply_description(msg);
+        }
+
+        let queued = input_rx.len();
+        INPUT_BACKLOG_SAMPLES.store(queued as u32, Ordering::Relaxed);
+        for _ in 0..self.trimmer.samples_to_drop(queued, frames) {
+            let _ = input_rx.try_recv();
+        }
+
+        let mut done = 0;
+        while done < frames {
+            let len = (frames - done).min(self.block.len());
+            let block = &mut self.block[..len];
+            for sample in block.iter_mut() {
+                *sample = input_rx.try_recv().unwrap_or(0);
+            }
+            self.pedal_chain.process_block(block);
+            for (i, &sample) in block.iter().enumerate() {
+                let processed = sample.saturating_add(self.metronome_click.next_sample());
+                let _ = audio_tx.try_send(processed);
+                write(done + i, processed);
+            }
+            done += len;
+        }
+    }
+}
+
 /// Length of the metronome's click sound, in samples at `GLOBAL_CONFIG.sample_rate`.
 const METRONOME_CLICK_SAMPLES: u32 = 1440; // ~30ms at 48kHz
 /// Tone frequency of the metronome click, in Hz.
@@ -352,8 +460,10 @@ fn build_output_stream(
     let (stream_config, effective_frames) = resolve_stream_config(&config, buffer_frames);
     let channels = stream_config.channels;
 
-    let mut pedal_chain = PedalChain::from_description(initial_pedals);
-    let mut metronome_click = MetronomeClick::new(metronome_running, metronome_bpm);
+    let pedal_chain = PedalChain::from_description(initial_pedals);
+    let metronome_click = MetronomeClick::new(metronome_running, metronome_bpm);
+    let mut renderer = OutputRenderer::new(pedal_chain, metronome_click);
+    let channels_usize = (channels as usize).max(1);
 
     let stream = match sample_format {
         cpal::SampleFormat::I16 => device.build_output_stream(
@@ -361,24 +471,11 @@ fn build_output_stream(
             move |data: &mut [i16], _| {
                 let callback_start = Instant::now();
 
-                for msg in pedal_rx.try_iter() {
-                    pedal_chain.apply_description(msg);
-                }
-
-                for frame in data.chunks_mut(channels as usize) {
-                    let base_sample = if let Ok(in_sample) = input_rx.try_recv() {
-                        pedal_chain.process_sample(in_sample)
-                    } else {
-                        0
-                    };
-                    let click_sample = metronome_click.next_sample();
-                    let processed = base_sample.saturating_add(click_sample);
-                    let _ = audio_tx.try_send(processed);
-
-                    for channel_sample in frame.iter_mut() {
-                        *channel_sample = processed;
-                    }
-                }
+                let frames = data.len() / channels_usize;
+                renderer.render(frames, &pedal_rx, &input_rx, &audio_tx, |i, processed| {
+                    let start = i * channels_usize;
+                    data[start..start + channels_usize].fill(processed);
+                });
 
                 last_output_callback_ns.store(
                     callback_start.elapsed().as_nanos() as u64,
@@ -393,25 +490,11 @@ fn build_output_stream(
             move |data: &mut [f32], _| {
                 let callback_start = Instant::now();
 
-                for msg in pedal_rx.try_iter() {
-                    pedal_chain.apply_description(msg);
-                }
-
-                for frame in data.chunks_mut(channels as usize) {
-                    let base_sample = if let Ok(in_sample) = input_rx.try_recv() {
-                        pedal_chain.process_sample(in_sample)
-                    } else {
-                        0
-                    };
-                    let click_sample = metronome_click.next_sample();
-                    let processed_i16 = base_sample.saturating_add(click_sample);
-                    let _ = audio_tx.try_send(processed_i16);
-
-                    let processed_f32 = processed_i16 as f32 / i16::MAX as f32;
-                    for channel_sample in frame.iter_mut() {
-                        *channel_sample = processed_f32;
-                    }
-                }
+                let frames = data.len() / channels_usize;
+                renderer.render(frames, &pedal_rx, &input_rx, &audio_tx, |i, processed| {
+                    let start = i * channels_usize;
+                    data[start..start + channels_usize].fill(processed as f32 / i16::MAX as f32);
+                });
 
                 last_output_callback_ns.store(
                     callback_start.elapsed().as_nanos() as u64,
@@ -748,6 +831,49 @@ mod tests {
 
     fn supported_config(buffer_size: cpal::SupportedBufferSize) -> cpal::SupportedStreamConfig {
         cpal::SupportedStreamConfig::new(2, 48000, buffer_size, cpal::SampleFormat::F32)
+    }
+
+    #[test]
+    fn trimmer_keeps_a_lean_queue_untouched() {
+        let mut trimmer = BacklogTrimmer::default();
+        let mut dropped = 0;
+        // Queue oscillates around one callback's worth: nothing is surplus.
+        for i in 0..1000 {
+            dropped += trimmer.samples_to_drop(if i % 2 == 0 { 128 } else { 200 }, 128);
+        }
+        assert_eq!(dropped, 0);
+    }
+
+    #[test]
+    fn trimmer_drops_backlog_that_never_drains() {
+        let mut trimmer = BacklogTrimmer::default();
+        let mut queued = 128 + 2000; // e.g. a stall left 2000 extra samples
+        let mut dropped_total = 0;
+        for _ in 0..(BACKLOG_WINDOW_SAMPLES / 128 + 1) {
+            let dropped = trimmer.samples_to_drop(queued, 128);
+            queued -= dropped;
+            dropped_total += dropped;
+        }
+        assert_eq!(dropped_total, 2000 - BACKLOG_MARGIN_SAMPLES);
+        assert_eq!(queued, 128 + BACKLOG_MARGIN_SAMPLES);
+    }
+
+    #[test]
+    fn renderer_passes_input_through_and_pads_silence() {
+        let (input_tx, input_rx) = bounded::<i16>(64);
+        let (_pedal_tx, pedal_rx) = bounded::<Vec<PedalInstance>>(1);
+        let (audio_tx, _audio_rx) = bounded::<i16>(64);
+        let metronome = MetronomeClick::new(
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(AtomicU32::new(120.0f32.to_bits())),
+        );
+        let mut renderer = OutputRenderer::new(PedalChain::new(), metronome);
+        for s in [10, 20, 30] {
+            input_tx.send(s).unwrap();
+        }
+        let mut out = [99i16; 5];
+        renderer.render(5, &pedal_rx, &input_rx, &audio_tx, |i, s| out[i] = s);
+        assert_eq!(out, [10, 20, 30, 0, 0]);
     }
 
     #[test]

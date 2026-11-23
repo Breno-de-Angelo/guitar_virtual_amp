@@ -6,9 +6,15 @@ desktop (Linux, Windows, macOS) and Android.
 
 ## Features
 
-- **17 effect pedals**, chained in any order: amp, cabinet, chorus, compressor, delay,
-  distortion, EQ, flanger, looper, low-pass filter, noise gate, octaver, phaser,
+- **18 effect pedals**, chained in any order: amp, cabinet, chorus, compressor, delay,
+  distortion, EQ, flanger, looper, low-pass filter, NAM model, noise gate, octaver, phaser,
   pitch shifter, reverb, tremolo and wah.
+- **NAM Model pedal** that runs [Neural Amp Modeler](https://www.neuralampmodeler.com/) captures
+  (`.nam` WaveNet and LSTM captures, A1 and most A2 files) through the pure-Rust [nam-rs](https://github.com/OpenSauce/nam-rs)
+  runtime, with input/output gain and loudness normalization.
+- **TONE3000 integration** (Powered by [TONE3000](https://www.tone3000.com)): sign in, pick NAM
+  captures and IRs from your favorites, uploads, downloads, trending and latest tones, or browse
+  the whole catalog, and load them straight into the NAM Model or Cabinet pedal. See below.
 - **Cabinet simulator** that convolves the signal with a speaker impulse response (any `.wav` IR),
   using partitioned convolution so latency stays at one block regardless of IR length.
 - **20 factory presets** (clean jazz, blues crunch, metal djent, shoegaze wall, surf rock, …),
@@ -62,6 +68,8 @@ Check that the full pedal chain fits the real-time budget (about 20.8 µs per sa
 
 ```bash
 cargo run --release -p guitar_desktop --bin bench_pedal_chain
+# also measure a NAM capture:
+NAM_MODEL=/path/to/capture.nam cargo run --release -p guitar_desktop --bin bench_pedal_chain
 ```
 
 Android (armv7, min SDK 26), using [cargo-apk](https://github.com/rust-mobile/cargo-apk):
@@ -69,6 +77,30 @@ Android (armv7, min SDK 26), using [cargo-apk](https://github.com/rust-mobile/ca
 ```bash
 cargo apk build -p guitar_android
 ```
+
+## TONE3000
+
+The NAM Model and Cabinet pedals each have a **Browse TONE3000** button. It signs you in to
+[TONE3000](https://www.tone3000.com) in the system browser (OAuth with PKCE and a redirect to
+`http://127.0.0.1:47823/callback`), lets you pick a tone, and downloads the chosen model into the
+pedal. Devices without a browser can sign in with a code at `tone3000.com/activate` instead.
+Without TONE3000 you can still load any `.nam` or `.wav` file from disk with **Load .nam...** /
+**Load IR...**.
+
+Setup:
+
+1. Create API keys in your TONE3000 account settings.
+2. Set the **publishable** key in `TONE3000_CLIENT_ID`, either when building
+   (`TONE3000_CLIENT_ID=... cargo build --release`) or when starting the app. Never put the secret
+   key (`t3k_cs_...`) in the app.
+3. If you register redirect URIs in the TONE3000 settings, add `http://127.0.0.1:47823/callback`.
+   `TONE3000_REDIRECT_PORT` changes the port.
+
+Downloads go to `<data dir>/guitar_virtual_amp/tone3000/models/<tone id>/`, next to a `.json` file
+with the tone's creator and license. The sign-in session is in `tone3000/session.json`, readable
+only by your user. Each tone keeps the license its creator chose (T3K, CC BY, CC BY-NC, ...), and
+use of the API follows the [TONE3000 API terms](https://www.tone3000.com/api/terms): models are
+downloaded only when you ask for one, and none are bundled with the app.
 
 ## Roadmap
 
