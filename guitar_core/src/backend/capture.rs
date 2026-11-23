@@ -134,6 +134,66 @@ impl MetronomeClick {
     }
 }
 
+/// Mono capture for a sample type without a hand-written path: takes the
+/// first channel of each frame and converts it to `i16` through `f32`.
+fn build_typed_input_stream<T>(
+    device: &cpal::Device,
+    config: cpal::StreamConfig,
+    channels: u16,
+    input_tx: Sender<i16>,
+) -> Result<cpal::Stream, cpal::Error>
+where
+    T: cpal::SizedSample + Send + 'static,
+    f32: cpal::FromSample<T>,
+{
+    device.build_input_stream(
+        config,
+        move |data: &[T], _| {
+            for frame in data.chunks(channels.max(1) as usize) {
+                if let Some(&sample) = frame.first() {
+                    let value = <f32 as cpal::FromSample<T>>::from_sample_(sample);
+                    let sample_i16 = (value.clamp(-1.0, 1.0) * i16::MAX as f32) as i16;
+                    // Non-blocking, like the I16/F32 paths (see module docs).
+                    let _ = input_tx.try_send(sample_i16);
+                }
+            }
+        },
+        |err| eprintln!("Erro no input stream: {}", err),
+        None,
+    )
+}
+
+/// Builds a mono input stream for sample formats other than I16/F32 (which
+/// have their own paths), e.g. the 24-bit integer default of many ALSA
+/// hardware devices.
+fn build_converted_input_stream(
+    device: &cpal::Device,
+    config: cpal::StreamConfig,
+    format: cpal::SampleFormat,
+    channels: u16,
+    input_tx: Sender<i16>,
+) -> Result<cpal::Stream, Box<dyn std::error::Error>> {
+    use cpal::SampleFormat as F;
+    let stream = match format {
+        F::I8 => build_typed_input_stream::<i8>(device, config, channels, input_tx)?,
+        F::I16 => build_typed_input_stream::<i16>(device, config, channels, input_tx)?,
+        F::I24 => build_typed_input_stream::<cpal::I24>(device, config, channels, input_tx)?,
+        F::I32 => build_typed_input_stream::<i32>(device, config, channels, input_tx)?,
+        F::I64 => build_typed_input_stream::<i64>(device, config, channels, input_tx)?,
+        F::U8 => build_typed_input_stream::<u8>(device, config, channels, input_tx)?,
+        F::U16 => build_typed_input_stream::<u16>(device, config, channels, input_tx)?,
+        F::U24 => build_typed_input_stream::<cpal::U24>(device, config, channels, input_tx)?,
+        F::U32 => build_typed_input_stream::<u32>(device, config, channels, input_tx)?,
+        F::U64 => build_typed_input_stream::<u64>(device, config, channels, input_tx)?,
+        F::F32 => build_typed_input_stream::<f32>(device, config, channels, input_tx)?,
+        F::F64 => build_typed_input_stream::<f64>(device, config, channels, input_tx)?,
+        other => {
+            return Err(format!("Formato de amostra de entrada não suportado: {other:?}").into());
+        }
+    };
+    Ok(stream)
+}
+
 /// Turns a device's `SupportedStreamConfig` into a concrete `StreamConfig`,
 /// overriding the buffer size to `requested_frames` when the device reports a
 /// queryable supported range (clamping into that range), or leaving it at
@@ -286,7 +346,13 @@ pub fn start_audio_processing_with_devices(
             |err| eprintln!("Erro no input stream (F32): {}", err),
             None
         )?,
-        _ => return Err("Formato de amostra de entrada não suportado pelo CPAL".into()),
+        other => build_converted_input_stream(
+            &input_device,
+            input_stream_config,
+            other,
+            input_channels,
+            input_tx_clone,
+        )?,
     };
 
     input_stream.play()?;
@@ -567,7 +633,8 @@ pub fn switch_input_device(
                 None,
             )
             .map_err(|e| e.to_string())?,
-        _ => return Err("Formato de amostra de entrada não suportado".to_string()),
+        other => build_converted_input_stream(&device, stream_config, other, channels, input_tx)
+            .map_err(|e| e.to_string())?,
     };
 
     stream.play().map_err(|e| e.to_string())?;
