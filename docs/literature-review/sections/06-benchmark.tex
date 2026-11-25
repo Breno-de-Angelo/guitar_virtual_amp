@@ -1,0 +1,185 @@
+% !TeX root = ../main.tex
+\section{Benchmark of Available Models}
+\label{sec:benchmark}
+
+Published results use different test sets and metrics
+(Section~\ref{sec:task}), so we ran the models with released weights under
+one protocol. The aim is the use case of this review: electric guitar, in
+mixes, written as tablature.
+
+\subsection{Setup}
+\emph{Test sets.} EGDB test clips (ids divisible by five) as DI and through
+three amplifier models, plus its five real recordings~\cite{chen2022egdb};
+EGSet12, twelve real electric performances through a miked amplifier with
+string labels~\cite{pedroza2024tones}; the GOAT test split as DI and five
+amplifier renders~\cite{loth2025goat}; the Guitar-TECHS musical excerpts as DI
+and miked amplifier~\cite{pedroza2025guitartechs}; GuitarSet players 03--05,
+accompaniment and solo~\cite{xi2018guitarset}; and band mixes built by placing
+EGDB and Guitar-TECHS guitar over the drums, bass and vocals of MUSDB18
+songs~\cite{rafii2017musdb18}. At most twelve items per group are used,
+spread evenly; GOAT has seven per tone and EGDB real five. Guitar-TECHS and GOAT
+labels were shifted per recording to remove a constant timing offset.
+
+\emph{Models.} Note transcription: the GAPS model~\cite{riley2024gaps}; a
+version of it fine-tuned by us on EGDB, Guitar-TECHS and GuitarSet players
+00--02 in many amplifier tones (``tone-augmented CRNN''); Basic
+Pitch~\cite{bittner2022basicpitch}; YourMT3+ (YPTF.MoE+Multi)~\cite{chang2024yourmt3};
+and MuScriptor small, medium and large conditioned on the guitar classes (and
+on bass, drums and voice for the mixes)~\cite{rouard2026muscriptor}. For the
+multi-instrument models we score the notes of the three guitar classes.
+Separation: \texttt{htdemucs\_6s}~\cite{rouard2023htdemucs} and a community
+BS-RoFormer six-stem checkpoint run through MSST~\cite{lu2023bsroformer,solovyev2026msst}.
+Fingering: a hand-position Viterbi with a string prior learned from
+GuitarSet players 00--02. End-to-end: TabCNN~\cite{wiggins2019tabcnn} trained
+on GuitarSet and its tone-augmented variant~\cite{pedroza2024tones}. Beats:
+Beat This!~\cite{foscarin2024beatthis}. Everything ran on one NVIDIA GB10
+(DGX Spark), except Basic Pitch and TabCNN, which ran on CPU.
+
+\emph{Metrics.} F50 on raw notes (Section~\ref{sec:task}); Tab F1, an F50
+match that is also on the reference string; for fingering alone, the share of
+reference notes placed on the reference string.
+
+\emph{Caveats.} The band mixes combine a guitar part with an unrelated song,
+so guitar and backing share neither key nor tempo; models that use musical
+context, such as the sequence-to-sequence transcribers, may be penalised.
+Both TabCNN models were trained on GuitarSet, probably including players
+03--05. MuScriptor's training set is private, so overlap with these test sets
+cannot be ruled out. Our tone-augmented CRNN saw other clips and players of
+EGDB, Guitar-TECHS and GuitarSet, but no GOAT, EGSet12 or MUSDB18 audio.
+
+\subsection{Note transcription}
+Table~\ref{tab:bench-notes} gives F50 per set. No model wins everywhere.
+On amplified electric guitar the models trained on many tones lead:
+MuScriptor large reaches 0.77 F50 on the GOAT amplifier renders, against 0.71
+for the tone-augmented CRNN and 0.56 for the GAPS model, with the fewest
+octave-low errors (2.1\% of notes, against 8.0\% for GAPS) and the best note
+ends (offset F1 0.68). MuScriptor improves steadily with size on amplified
+material (0.66, 0.76, 0.77). On EGSet12, real electric guitar through a clean
+amplifier, the GAPS model, the tone-augmented CRNN and MuScriptor large tie
+(0.88--0.89). YourMT3+ is the best model on acoustic GuitarSet (0.92--0.93,
+offset F1 0.83--0.85) but labels much amplified guitar as other instruments
+(0.39 on GOAT amplifier renders, 0.54 on EGSet12). Basic Pitch trails the
+tone-augmented CRNN by about 0.1--0.2 on every set.
+
+\begin{table*}[t]
+\centering
+\caption{Note F50 (mean per item) on held-out sets. MS: MuScriptor
+conditioned on the guitar classes; multi-instrument models are scored on
+their guitar notes. Speed: audio seconds per second on one GB10 GPU (Basic
+Pitch on CPU).}
+\label{tab:bench-notes}
+\footnotesize
+\begin{tabular}{@{}lccccccc@{}}
+\toprule
+Set & GAPS & Tone-aug.\ CRNN & Basic Pitch & YourMT3+ & MS small & MS medium & MS large \\
+\midrule
+EGDB, DI + 3 amp models & 0.74 & \textbf{0.84} & 0.67 & 0.71 & 0.73 & 0.74 & 0.76 \\
+EGDB real recordings (5) & 0.89 & \textbf{0.90} & 0.69 & 0.83 & 0.71 & 0.79 & 0.59 \\
+EGSet12, real, miked amp & \textbf{0.89} & 0.88 & 0.76 & 0.54 & 0.85 & 0.88 & \textbf{0.89} \\
+GOAT DI & 0.82 & \textbf{0.84} & 0.74 & 0.81 & 0.74 & 0.83 & 0.82 \\
+GOAT, 5 amp renders & 0.56 & 0.71 & 0.56 & 0.39 & 0.66 & 0.76 & \textbf{0.77} \\
+Guitar-TECHS excerpts & \textbf{0.81} & 0.78 & 0.61 & 0.70 & 0.66 & 0.73 & 0.71 \\
+GuitarSet comp & 0.87 & 0.89 & 0.75 & \textbf{0.92} & 0.77 & 0.77 & 0.77 \\
+GuitarSet solo & 0.91 & 0.92 & 0.81 & \textbf{0.93} & 0.86 & 0.89 & 0.86 \\
+\midrule
+Speed (\(\times\) real time) & 34 & 89 & 165 & 14 & 6.4 & 4.0 & 1.3 \\
+\bottomrule
+\end{tabular}
+\end{table*}
+
+\subsection{Separation}
+Table~\ref{tab:bench-sep} scores each separator by the F50 of a transcription
+of its guitar stem. Separation is decisive for the guitar-specific models:
+the tone-augmented CRNN goes from 0.50 on the raw mix to 0.74 with
+\texttt{htdemucs\_6s} and 0.81 with BS-RoFormer, close to its 0.82 on the same
+guitar parts without backing. BS-RoFormer runs at 4.8 times real time against 39 for
+\texttt{htdemucs\_6s}. The multi-instrument models gain less: MuScriptor large
+rises from 0.44 to 0.75, and YourMT3+ is no better on the stem than on the
+mix. Contrary to expectation, both transcribe the raw mixes worse than the
+guitar-specific CRNNs; the unrelated backing described above is a plausible
+cause that this benchmark cannot exclude.
+
+\begin{table}[t]
+\centering
+\caption{F50 of the guitar notes in band mixes (41 mixes), transcribed from
+the raw mix or from a separated guitar stem.}
+\label{tab:bench-sep}
+\footnotesize
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{@{}lccc@{}}
+\toprule
+Note model & Raw mix & htdemucs\_6s & BS-RoFormer \\
+\midrule
+GAPS & \textbf{0.51} & 0.72 & \textbf{0.81} \\
+Tone-augmented CRNN & 0.50 & \textbf{0.74} & \textbf{0.81} \\
+Basic Pitch & 0.36 & 0.58 & 0.64 \\
+YourMT3+ & \textbf{0.51} & 0.45 & 0.52 \\
+MuScriptor large & 0.44 & 0.64 & 0.75 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Tablature: modular versus end-to-end}
+Table~\ref{tab:bench-tab} compares Tab F1. The modular pipelines lead on
+every electric-guitar and mix condition. With the same Viterbi fingering,
+MuScriptor large gives the best tablature on EGSet12 (0.63, against 0.57 for
+the CRNNs at equal F50), and the tone-augmented CRNN the best on EGDB and on
+separated mixes (0.59). End-to-end TabCNN is limited by note detection on
+electric guitar (F50 0.36--0.50 on EGDB) rather than by string choice. The
+exception is GuitarSet solo lines, where TabCNN-GPFX scores 0.81 against
+0.42--0.55 for the modular pipelines. The cause is the fingering stage: from
+the true notes, the Viterbi puts 80\% of accompaniment notes on the
+reference string but only 56\% of solo notes, because its costs favour low
+positions while solos move along the neck. On EGSet12 it reaches 69\%.
+
+\begin{table*}[t]
+\centering
+\caption{Tablature F1 (note match on the same string). Modular rows place the
+transcribed notes with the Viterbi fingering. The last row is the share of
+reference notes the Viterbi puts on the reference string when given the true
+notes. EGDB amps: mean of three amplifier models; mix columns: EGDB clips in
+band mixes.}
+\label{tab:bench-tab}
+\footnotesize
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{@{}lccccccc@{}}
+\toprule
+Method & EGDB DI & EGDB amps & EGSet12 & GuitarSet comp & GuitarSet solo & Raw mix & BS-RoFormer stem \\
+\midrule
+GAPS + Viterbi & 0.52 & 0.44 & 0.57 & 0.71 & 0.55 & 0.36 & 0.47 \\
+Tone-aug.\ CRNN + Viterbi & \textbf{0.60} & \textbf{0.55} & 0.57 & 0.73 & 0.53 & 0.33 & \textbf{0.59} \\
+Basic Pitch + Viterbi & 0.45 & 0.43 & 0.40 & 0.46 & 0.42 & 0.28 & 0.45 \\
+YourMT3+ + Viterbi & 0.59 & 0.48 & 0.30 & \textbf{0.76} & 0.54 & \textbf{0.43} & 0.46 \\
+MuScriptor large + Viterbi & 0.53 & 0.53 & \textbf{0.63} & 0.64 & 0.50 & 0.37 & 0.54 \\
+\midrule
+TabCNN (end-to-end) & 0.40 & 0.32 & 0.31 & 0.71 & 0.76 & 0.18 & 0.34 \\
+TabCNN-GPFX (end-to-end) & 0.43 & 0.37 & 0.40 & 0.74 & \textbf{0.81} & 0.20 & 0.37 \\
+\midrule
+Viterbi on true notes (string acc.) & \multicolumn{2}{c}{0.74} & 0.69 & 0.80 & 0.56 & -- & -- \\
+\bottomrule
+\end{tabular}
+\end{table*}
+
+\subsection{Beats and Noise2Fret}
+On GuitarSet players 03--05, the larger Beat This! checkpoint reaches a beat
+F-measure of 0.97 and a downbeat F-measure of 0.94 on accompaniment
+(0.92 and 0.92 for the small one), but every tracker, including a
+dynamic-programming baseline~\cite{ellis2007beat}, falls to about 0.5 beat
+F-measure on unaccompanied solo lines.
+
+Noise2Fret's released checkpoints~\cite{simionato2026noise2fret} reproduce
+the scale of its reported results under its own protocol: tablature F-measure
+0.92 on GuitarSet player 00 with and without the auxiliary losses. That
+protocol scores 100\,ms windows and keeps only windows that contain an onset,
+so silent passages cannot produce false notes; the number is not comparable
+with the note-level Tab F1 of Table~\ref{tab:bench-tab}, and applying the
+model to whole recordings needs an onset stage it does not include.
+
+\subsection{Summary}
+For transcribing electric guitar from a song, the strongest configuration we
+measured is modular: a band-split separator, a guitar note model trained on
+many tones (the tone-augmented CRNN, or MuScriptor large when speed allows),
+and a fingering stage. Separation recovers most of the gap between mixes and
+isolated guitar; the remaining weakness is fingering on melodic lines, where
+a frame-level end-to-end model trained on acoustic guitar does better than a
+hand-tuned Viterbi.

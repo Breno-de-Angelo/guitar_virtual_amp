@@ -52,15 +52,18 @@ TART~\cite{gupta2026tart} & hybrid & solo guitar & tab + techniques & no & 81.35
 
 \subsection{Known and expected failure modes}
 \emph{Distorted electric guitar.} Models trained on clean or classical guitar
-lose accuracy on amplified tones~\cite{chen2022egdb}; in our measurements
-(below) most of the added errors are notes estimated an octave too low.
+lose accuracy on amplified tones~\cite{chen2022egdb}; in our benchmark
+(Section~\ref{sec:benchmark}) the GAPS model misses 8\% of the notes of GOAT
+amplifier renders an octave too low, against 2\% for MuScriptor large.
 Tone-diverse training data is the documented
 remedy~\cite{chen2025egdbpg,pedroza2024tones}.
 
 \emph{Separation residue.} Note models trained on solo guitar see bleed from
 other instruments and smeared transients after separation, which become
 false and missed onsets. No published guitar transcriber is trained on
-separated stems.
+separated stems. In our benchmark the residue of a band-split separator costs
+little (0.81 F50 on stems against 0.82 on the isolated guitar), while that of
+\texttt{htdemucs\_6s} costs 0.08.
 
 \emph{Several guitars.} Separators produce one guitar stem and
 multi-instrument transcribers one stream per instrument class; two guitars
@@ -74,7 +77,10 @@ repeated notes.
 \emph{Fingering conventions.} Symbolic fingering models learn the conventions
 of their training tablatures; DadaGP consists of user-made tablatures, so
 models pre-trained on it reproduce their choices, and they cannot use
-timbre unless conditioned on audio.
+timbre unless conditioned on audio. Search-based fingering with
+position-favouring costs fails on solos that move along the neck: our
+Viterbi places 56\% of GuitarSet solo notes on the reference string, against
+80\% for accompaniment.
 
 \emph{Expressive and unusual rhythm.} Beat trackers fail on slow, expressive
 or rubato music~\cite{ahn2026smc}; compound meters and tuplets are rarely
@@ -83,39 +89,6 @@ notated correctly by GTT systems.
 \emph{Techniques under distortion.} Contour-based detection assumes a clean
 pitch track and a visible pick attack; both degrade with distortion and
 compression.
-
-\subsection{Observations from our own measurements}
-As a reference point for the use case, we scored the GAPS model and two
-versions fine-tuned on electric guitar in many tones (EGDB, Guitar-TECHS and,
-for the second, GuitarSet players 00--02) on held-out sets, with
-\texttt{mir\_eval} F50 on raw notes. The fine-tuned model raised F50 on
-GOAT amplifier renders, which it never saw, from 0.56 to 0.71 and halved
-octave-low errors there (8\% to 5\% of notes), while staying at 0.89--0.92 on
-GuitarSet. Fed band mixes (labelled guitar over MUSDB18 backing tracks)
-without separation, every variant scored 0.50--0.51.
-
-We then ran one available model per stage and approach on the same sets.
-\emph{Separation:} transcribing the guitar stem raised the fine-tuned model
-from 0.50 (raw mix) to 0.74 with \texttt{htdemucs\_6s} and 0.81 with a
-BS-RoFormer six-stem checkpoint, close to its 0.83 on isolated amplified
-guitar. \emph{Multi-instrument transcription:} YourMT3+ was the best model on
-GuitarSet (F50 0.92--0.93, with much better offsets) but scored 0.39 on GOAT
-amplifier renders and did not benefit from separation (0.51 on the mix, 0.52
-on the BS-RoFormer stem). \emph{Beats:} on GuitarSet accompaniment, Beat This!
-reached a beat F-measure of 0.97 with its larger checkpoint, but about 0.5 on
-unaccompanied solo lines. \emph{Modular versus end-to-end:} with Tab F1 as the
-metric, the modular pipeline (fine-tuned note model, separation, Viterbi
-fingering) beat TabCNN and its tone-augmented variant on electric guitar
-(0.55 vs 0.37 on EGDB amplifier tones; 0.59 vs 0.37 on separated mixes), while
-TabCNN was better on GuitarSet solo lines (0.81 vs 0.53), where the Viterbi
-placed only 56\% of the reference notes on the human's string. Noise2Fret's
-released checkpoints reproduce its reported scale (tablature F 0.92 on
-GuitarSet player 00) under its own window-based protocol, which scores only
-windows containing an onset and is not comparable to note-level F1.
-
-These numbers support three points of this review: tone augmentation
-addresses distortion; band-split separation removes most of the mix penalty;
-and fingering, not note detection, is the weakest stage on melodic lines.
 
 \subsection{Open problems}
 \begin{enumerate}

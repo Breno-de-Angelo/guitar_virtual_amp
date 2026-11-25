@@ -222,7 +222,7 @@ def f1_match(ref, est, key):
         buckets[key(n)][1].append(n)
     for r, e in buckets.values():
         if r and e:
-            iv = lambda ns: np.array([[a, max(b, a + 0.001)] for a, b, *_ in ns])  # noqa: E731
+            iv = lambda ns: np.array([[max(a, 0.0), max(b, max(a, 0.0) + 0.001)] for a, b, *_ in ns])  # noqa: E731
             tp += len(mir_eval.transcription.match_notes(iv(r), hz([x[2] for x in r]), iv(e), hz([x[2] for x in e]), onset_tolerance=0.05, offset_ratio=None))
     return 2 * tp / max(1, len(ref) + len(est))
 

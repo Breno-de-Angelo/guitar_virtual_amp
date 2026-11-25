@@ -412,7 +412,8 @@ def hz(p):
 
 
 def intervals(notes):
-    iv = np.array([[s, max(e, s + 0.001)] for s, e, *_ in notes], float).reshape(-1, 2)
+    # Lag correction (MuScriptor) can move a note a few ms before 0.
+    iv = np.array([[max(s, 0.0), max(e, max(s, 0.0) + 0.001)] for s, e, *_ in notes], float).reshape(-1, 2)
     return iv, hz([n[2] for n in notes])
 
 

@@ -430,7 +430,7 @@ drums/bass/vocals (`make_mixes.py`), 41 mixes.
   0.51, htdemucs_6s stem 0.45, BS-RoFormer stem 0.52), so it cannot use the separator's gain.
 - YourMT3+ "any instrument" notes on the Guitar-TECHS sets score higher than its guitar-class
   notes (0.75 vs 0.70): it labels part of the electric guitar as another instrument.
-- MuScriptor: see EGSet12 below; full runs in progress.
+- MuScriptor: see the MuScriptor section below.
 
 **Beats and downbeats** (GuitarSet 03-05, all 180 excerpts, mir_eval):
 
@@ -516,10 +516,28 @@ separator to try), All-In-One beats (needs NATTEN on ARM).
 
 ### MuScriptor
 
-Access granted 2026-11-24. The package and all three checkpoints are on the Spark (`~/gva/venv`);
-EGSet12 results are above. Runs of small, medium and large (instrument conditioning on the
-guitar classes, plus backing instruments on the mixes) and large without conditioning over all
-the sets are in progress (`~/gva/run_muscriptor.sh`); score with `bench_notes.py score`.
+Access granted 2026-11-24; all three sizes run on the Spark (`~/gva/run_muscriptor.sh`). F50,
+conditioned on the guitar classes (plus bass, drums and voice on the mixes), guitar-class notes:
+
+| Set | v2 CRNN | MS small | MS medium | MS large | MS large, no conditioning |
+|---|---|---|---|---|---|
+| EGDB test, 4 tones | **0.84** | 0.73 | 0.74 | 0.76 | 0.76 |
+| EGSet12 (real, miked amp) | 0.88 | 0.85 | 0.88 | **0.89** | - |
+| GOAT amp renders (5) | 0.71 | 0.66 | 0.76 | **0.77** | **0.77** |
+| Guitar-TECHS P3 | **0.78** | 0.66 | 0.73 | 0.71 | 0.69 |
+| GuitarSet comp / solo | **0.89 / 0.92** | 0.77 / 0.86 | 0.77 / 0.89 | 0.77 / 0.86 | 0.79 / 0.87 |
+| Mixes: raw / htdemucs_6s / BS-RoFormer | 0.50 / 0.74 / **0.81** | 0.36 / 0.61 / 0.71 | 0.45 / 0.63 / 0.74 | 0.44 / 0.64 / 0.75 | 0.36 / 0.57 / 0.73 |
+| Speed on the GB10 (x real time) | 89 | 6.4 | 4.0 | 1.3 | 1.3 |
+
+- MuScriptor large is the best model on amplified guitar it did not see (GOAT amps 0.77, offset F1
+  0.68, octave-low errors 2.1% vs 8.0% for GAPS) and gives the best tablature on EGSet12 (Tab F1
+  0.63 with the app's Viterbi, vs 0.57 for the CRNNs at the same F50).
+- It is worse than the CRNNs on our band mixes, raw or separated. The mixes put a guitar part
+  over an unrelated song (different key and tempo), which may penalise a model that uses musical
+  context; a real-song benchmark (0.3) is needed to settle this.
+- Instrument conditioning helps on mixes (raw 0.36 to 0.44), not on solo guitar.
+- At 1.3x real time on the GPU, large is too slow for the app's CPU path; medium (4x) is close
+  to large on electric guitar.
 
 ## Order of work
 

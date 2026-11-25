@@ -51,11 +51,18 @@ diffusion-based Noise2Fret, but remain trained and evaluated on solo guitar,
 mostly acoustic. In parallel, large sequence-to-sequence transcription models
 (MT3, YourMT3+, MuScriptor) now transcribe real multi-instrument mixes,
 including distorted electric guitar, yet output notes without fingering. We
-compare datasets, metrics and reported results, list where each method is known
-or expected to fail, and identify the gaps that matter for transcribing real
-songs: no method combines mix-level robustness with fingering, distorted
-guitar and several simultaneous guitar parts remain weak points, and no public
-benchmark pairs commercial recordings with reference tablatures.
+compare datasets, metrics and reported results, and then benchmark the
+models with released weights under one protocol on electric guitar, band
+mixes and acoustic guitar. In that benchmark a modular pipeline leads on
+electric guitar and mixes: band-split separation raises note F1 on mixes
+from 0.50 to 0.81, MuScriptor and a tone-augmented guitar model lead on
+amplified tones, and the best tablature F1 reaches 0.55--0.63 on electric
+guitar against 0.37--0.40 for end-to-end TabCNN. Fingering is the weakest
+stage on melodic lines, where TabCNN does better (0.81 against at most
+0.55). We list where each method is known or expected to fail and the gaps
+that remain: no method combines mix-level robustness with fingering, several
+simultaneous guitar parts are merged, and no public benchmark pairs commercial
+recordings with reference tablatures.
 \end{abstract}
 
 \begin{IEEEkeywords}
@@ -68,8 +75,9 @@ beat tracking, sequence-to-sequence models, music information retrieval
 \input{sections/03-datasets}
 \input{sections/04-modular}
 \input{sections/05-end-to-end}
-\input{sections/06-comparison}
-\input{sections/07-conclusion}
+\input{sections/06-benchmark}
+\input{sections/07-comparison}
+\input{sections/08-conclusion}
 
 \bibliographystyle{IEEEtran}
 \bibliography{references}
