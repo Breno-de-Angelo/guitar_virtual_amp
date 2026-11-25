@@ -10,7 +10,9 @@
 #   environment when it exists, else a temporary CPU-only one made with
 #   `uv` (https://docs.astral.sh/uv/).
 # - Beat This! beat/downbeat tracker (Foscarin et al., ISMIR 2024; MIT):
-#   ONNX files of the small0 checkpoint and its log-mel front end (~15 MB).
+#   ONNX files of the final0 checkpoint (~83 MB; the app uses it when
+#   present), the small0 one (~11 MB, the fallback) and their log-mel front
+#   end (~4 MB).
 #
 # Without these files the app falls back to Basic Pitch and the DSP beat
 # tracker.
@@ -44,6 +46,8 @@ fetch() {
 }
 
 BEAT_REPO="https://huggingface.co/nilsbc/beat-this-onnx/resolve/0d66b58ee1b3b42ec5e82334949626295f3ed82b"
+fetch "$BEAT_REPO/beat_this_final0.onnx" "$MODELS/beat_this_final0.onnx" \
+  a7e2c68b27f9db6a73416017f784ea8551a01373f4955a98db018827760c4a14
 fetch "$BEAT_REPO/beat_this_small0.onnx" "$MODELS/beat_this_small0.onnx" \
   53fda6e96afae7f44d898fa5f020272eda967a92839306bf7a3d0898fb8a0d9a
 fetch "$BEAT_REPO/logmel.onnx" "$MODELS/beat_this_logmel.onnx" \

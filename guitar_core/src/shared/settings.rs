@@ -11,6 +11,8 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+use crate::transcribe::guitar_crnn::GuitarModel;
+
 /// Identifies which preset was last loaded, so it can be reloaded on the next
 /// launch. User presets are referenced by their file path (works even if
 /// renamed by editing the file, though a rename via the UI changes the path);
@@ -83,6 +85,9 @@ pub struct AppSettings {
     /// Where transcriptions are saved; `None` uses
     /// `shared::tab::repository::default_repository_dir`.
     pub tab_repository_dir: Option<PathBuf>,
+    /// Guitar CRNN for transcriptions when the electric fine-tune is
+    /// installed (see `transcribe::guitar_crnn::GuitarModel`).
+    pub transcription_guitar_model: GuitarModel,
 }
 
 const SETTINGS_SUBPATH: &str = "guitar_virtual_amp/settings.json";
@@ -149,6 +154,7 @@ mod tests {
             tab_library_dir: Some(PathBuf::from("/tabs")),
             spotify_tab_links: BTreeMap::from([("4uLU6hMCjMI75M1A2tKUQC".to_string(), PathBuf::from("/tabs/acdc.gp5"))]),
             tab_repository_dir: Some(PathBuf::from("/repo")),
+            transcription_guitar_model: GuitarModel::Electric,
         };
         let json = serde_json::to_string(&settings).expect("serialize");
         let restored: AppSettings = serde_json::from_str(&json).expect("deserialize");
@@ -164,6 +170,7 @@ mod tests {
         assert_eq!(restored.buffer_frames, Some(128));
         assert!(restored.tab_sync.is_empty());
         assert_eq!(restored.practice, PracticePrefs::default());
+        assert_eq!(restored.transcription_guitar_model, GuitarModel::Gaps);
     }
 
     #[test]

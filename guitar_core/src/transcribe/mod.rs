@@ -2,8 +2,8 @@
 //! models:
 //!
 //! 1. decode the file (Symphonia) and hash it;
-//! 2. separate guitar and bass with Demucs `htdemucs_6s`, when installed
-//!    ([`separation`]); otherwise transcribe from the mix;
+//! 2. separate guitar and bass with BS-RoFormer SW or Demucs `htdemucs_6s`,
+//!    when installed ([`separation`]); otherwise transcribe from the mix;
 //! 3. track beats and downbeats with Beat This! ([`beat_net`]; bars of 2 to
 //!    7 beats, the meter may change mid-song), or with the spectral-flux
 //!    tracker in 4/4 ([`beats`]) when that model isn't installed;
@@ -18,7 +18,7 @@
 //!    (`shared::tab::repository`).
 //!
 //! The optional models come from `scripts/install_transcription_models.sh`.
-//! With Demucs, the stereo guitar stem is also split by pan position
+//! With separation, the stereo guitar stem is also split by pan position
 //! ([`stereo`]): guitars on different sides of the mix that play different
 //! parts become separate tracks.
 //!
@@ -53,8 +53,10 @@ pub struct Request {
     pub audio_path: PathBuf,
     pub title: String,
     pub artist: String,
-    /// Use Demucs when it's installed.
+    /// Separate the instruments when a separator is installed.
     pub separate: bool,
+    /// Which guitar CRNN to run when both are installed.
+    pub guitar_model: guitar_crnn::GuitarModel,
     pub guitar: bool,
     pub bass: bool,
     /// Tab repository folder.
@@ -81,7 +83,7 @@ impl Stage {
         match self {
             Stage::Downloading => "Baixando o áudio do YouTube",
             Stage::Decoding => "Lendo o áudio",
-            Stage::Separating => "Separando instrumentos (Demucs)",
+            Stage::Separating => "Separando instrumentos",
             Stage::Beats => "Detectando andamento e compassos",
             Stage::Guitar => "Transcrevendo a guitarra",
             Stage::Techniques => "Detectando bends, slides e vibratos",
@@ -244,21 +246,45 @@ pub(crate) fn parallel_map<T: Send>(
         .collect()
 }
 
-/// Which optional models (`scripts/install_transcription_models.sh`) are
-/// installed: `(guitar CRNN, Beat This!)`.
-pub fn installed_models() -> (bool, bool) {
-    (
-        guitar_crnn::find_model().is_some(),
-        beat_net::find_models().is_some(),
-    )
+/// Which optional models are installed.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct InstalledModels {
+    /// The GAPS guitar CRNN (`scripts/install_transcription_models.sh`), or
+    /// the `GVA_GUITAR_MODEL` file.
+    pub guitar_crnn: bool,
+    /// The local electric fine-tune ([`guitar_crnn::ELECTRIC_MODEL_FILE`]).
+    pub electric_crnn: bool,
+    /// Engine name of the Beat This! checkpoint that will run.
+    pub beat_tracker: Option<&'static str>,
+}
+
+impl InstalledModels {
+    /// Everything `scripts/install_transcription_models.sh` installs.
+    pub fn complete(&self) -> bool {
+        self.guitar_crnn && self.beat_tracker == Some(beat_net::FINAL_ENGINE_NAME)
+    }
+}
+
+pub fn installed_models() -> InstalledModels {
+    InstalledModels {
+        guitar_crnn: guitar_crnn::find_model().is_some(),
+        electric_crnn: guitar_crnn::find_electric_model().is_some(),
+        beat_tracker: beat_net::find_models().map(|m| m.name),
+    }
+}
+
+/// Engine name of the guitar notes model for `choice`, as recorded in
+/// the tab's metadata.
+pub fn guitar_engine_name(choice: guitar_crnn::GuitarModel) -> &'static str {
+    guitar_engine(choice).name()
 }
 
 /// Note transcription model for a stem.
 #[derive(Clone, Debug, PartialEq)]
 enum Engine {
     BasicPitch(NoteParams),
-    /// Guitar CRNN at this ONNX path.
-    GuitarCrnn(PathBuf, guitar_crnn::CrnnParams),
+    /// Guitar CRNN at this ONNX path, with its engine name.
+    GuitarCrnn(PathBuf, guitar_crnn::CrnnParams, &'static str),
 }
 
 impl Engine {
@@ -275,17 +301,19 @@ impl Engine {
     fn name(&self) -> &'static str {
         match self {
             Engine::BasicPitch(_) => "basic-pitch icassp_2022 (tract)",
-            Engine::GuitarCrnn(..) => guitar_crnn::ENGINE_NAME,
+            Engine::GuitarCrnn(_, _, name) => name,
         }
     }
 }
 
-/// The guitar CRNN when installed (unless `GVA_GUITAR_ENGINE=basic-pitch`),
-/// else Basic Pitch.
-fn guitar_engine() -> Engine {
+/// The guitar CRNN `choice` when installed (GAPS when the electric one
+/// isn't; unless `GVA_GUITAR_ENGINE=basic-pitch`), else Basic Pitch.
+fn guitar_engine(choice: guitar_crnn::GuitarModel) -> Engine {
     let forced_basic = std::env::var("GVA_GUITAR_ENGINE").is_ok_and(|v| v == "basic-pitch");
-    match guitar_crnn::find_model() {
-        Some(path) if !forced_basic => Engine::GuitarCrnn(path, guitar_crnn::CrnnParams::guitar()),
+    match guitar_crnn::find_model_for(choice) {
+        Some((path, name)) if !forced_basic => {
+            Engine::GuitarCrnn(path, guitar_crnn::CrnnParams::guitar(), name)
+        }
         _ => Engine::BasicPitch(NoteParams::guitar()),
     }
 }
@@ -359,7 +387,7 @@ fn transcribe_stem_uncached(
             let notes = basic_pitch::extract_notes(&post, params);
             Ok((notes, Some(post)))
         }
-        Engine::GuitarCrnn(path, params) => {
+        Engine::GuitarCrnn(path, params, _) => {
             let post = guitar_crnn::posteriors(
                 path,
                 &audio.at(guitar_crnn::SAMPLE_RATE),
@@ -615,14 +643,15 @@ struct Rhythm {
 /// when there is one (kick and snare mark the beats far better than
 /// strummed chords) or the mix, in 4/4.
 fn track_rhythm(mix: &Mono, drums: Option<&Mono>, cancel: &AtomicBool) -> Result<Rhythm, String> {
-    if let Some((front, net)) = beat_net::find_models() {
-        let track = beat_net::track(&front, &net, &mix.at(beat_net::SAMPLE_RATE), cancel)?;
+    if let Some(models) = beat_net::find_models() {
+        let audio = mix.at(beat_net::SAMPLE_RATE);
+        let track = beat_net::track(&models.front, &models.net, &audio, cancel)?;
         if track.beats.len() >= 8 {
             return Ok(Rhythm {
                 bpm: track.bpm().unwrap_or(120.0),
                 beats: track.beats,
                 downbeats: track.downbeats,
-                engine: beat_net::ENGINE_NAME,
+                engine: models.name,
             });
         }
     }
@@ -695,8 +724,8 @@ pub fn run(
     if !request.guitar && !request.bass {
         return Err("escolha pelo menos um instrumento".into());
     }
-    let demucs = request.separate.then(separation::find_demucs).flatten();
-    let separating = demucs.is_some();
+    let separator = request.separate.then(separation::find_separator).flatten();
+    let separating = separator.is_some();
     let report = |progress: &mut dyn FnMut(Progress), stage: Stage, fraction: f32| {
         let (base, share) = stage.span(separating);
         progress(Progress {
@@ -713,17 +742,17 @@ pub fn run(
     let duration = mix.duration();
     check(cancel)?;
 
-    // Stems (or the mix, without Demucs).
+    // Stems (or the mix, without separation).
     let work_dir = std::env::temp_dir().join(format!(
         "gva_transcribe_{}_{}",
         std::process::id(),
         &sha256[..12]
     ));
-    let (guitar_stem, guitar_stereo, bass_stem, drums_audio, separation_name) = match &demucs {
-        Some(demucs) => {
+    let (guitar_stem, guitar_stereo, bass_stem, drums_audio, separation_name) = match &separator {
+        Some(separator) => {
             let (base, share) = Stage::Separating.span(true);
             let stems = separation::separate(
-                demucs,
+                separator,
                 &request.audio_path,
                 &work_dir,
                 &mut |p| {
@@ -758,8 +787,7 @@ pub fn run(
             };
             let drums = Mono::load(&stems.path("drums")).ok();
             let _ = std::fs::remove_dir_all(&work_dir);
-            let name = format!("demucs {}", separation::MODEL);
-            (guitar, guitar_stereo, bass, drums, name)
+            (guitar, guitar_stereo, bass, drums, separator.name())
         }
         None => (None, None, None, None, String::new()),
     };
@@ -771,7 +799,7 @@ pub fn run(
     let rhythm = track_rhythm(&mix, drums_audio.as_ref(), cancel)?;
     check(cancel)?;
 
-    let guitar_engine = guitar_engine();
+    let guitar_engine = guitar_engine(request.guitar_model);
     let bass_engine = Engine::BasicPitch(NoteParams::bass());
     let guitar_parts = match guitar_audio {
         Some(audio) => transcribe_guitars(
@@ -1069,6 +1097,7 @@ mod tests {
             title,
             artist,
             separate: false,
+            guitar_model: Default::default(),
             guitar: true,
             bass: false,
             output_dir: dir.join("repo"),
@@ -1088,8 +1117,13 @@ mod tests {
         assert!(output.tab_path.ends_with("Band - Riff.gp5"));
         let meta = repository::load_metadata(&output.tab_path).unwrap();
         assert_eq!(meta.spotify_track_id.as_deref(), Some("abc"));
+        // 100 BPM, or its double: Beat This! final0 counts this short
+        // synthetic riff in eighths (eval_guitarset also accepts a tempo
+        // octave). The notes below are checked either way.
         assert!(
-            (meta.tempo_bpm - 100.0).abs() < 3.0,
+            [100.0, 200.0]
+                .iter()
+                .any(|bpm| (meta.tempo_bpm - bpm).abs() < 3.0 * bpm / 100.0),
             "tempo {}",
             meta.tempo_bpm
         );

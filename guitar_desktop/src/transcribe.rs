@@ -6,7 +6,12 @@
 //!
 //! Options:
 //!   --repo DIR        repository folder (default: the app's tab repository)
-//!   --no-separation   don't use Demucs even if it's installed
+//!   --no-separation   don't separate the instruments even if a separator is
+//!                     installed (BS-RoFormer, scripts/install_bs_roformer.sh,
+//!                     is preferred over Demucs; GVA_SEPARATOR=demucs|bs-roformer
+//!                     forces one)
+//!   --guitar-model M  gaps (default) or electric: the local electric fine-tune
+//!                     (guitar_electric_crnn.onnx in the models folder)
 //!   --no-bass / --no-guitar
 //!   --force           redo files already in the repository (same audio hash)
 //!   --artist A --title T   only with a single file/video; otherwise taken from
@@ -22,6 +27,7 @@ use guitar_core::backend::audio_file::AUDIO_EXTENSIONS;
 use guitar_core::shared::tab::repository::{
     default_repository_dir, file_sha256, find_by_audio_hash, find_by_youtube_id,
 };
+use guitar_core::transcribe::guitar_crnn::{self, GuitarModel};
 use guitar_core::transcribe::{self, Request, separation, youtube};
 
 fn is_audio(path: &Path) -> bool {
@@ -53,6 +59,7 @@ fn main() {
     let (mut repo, mut separate, mut guitar, mut bass, mut force) = (None, true, true, true, false);
     let (mut artist, mut title) = (None, None);
     let mut youtube_queries: Vec<String> = Vec::new();
+    let mut guitar_model = GuitarModel::Gaps;
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--repo" => repo = args.next().map(PathBuf::from),
@@ -63,6 +70,14 @@ fn main() {
             "--artist" => artist = args.next(),
             "--title" => title = args.next(),
             "--youtube" => youtube_queries.extend(args.next()),
+            "--guitar-model" => match args.next().as_deref() {
+                Some("gaps") => guitar_model = GuitarModel::Gaps,
+                Some("electric") => guitar_model = GuitarModel::Electric,
+                other => {
+                    eprintln!("--guitar-model: use gaps ou electric (não {other:?})");
+                    std::process::exit(2);
+                }
+            },
             "-h" | "--help" => {
                 println!(
                     "{}",
@@ -97,28 +112,27 @@ fn main() {
         eprintln!("--artist/--title só valem para um arquivo");
         std::process::exit(2);
     }
-    match (separate, separation::find_demucs()) {
-        (true, Some(path)) => println!("Separação: Demucs ({})", path.display()),
+    if guitar_model == GuitarModel::Electric && guitar_crnn::find_electric_model().is_none() {
+        eprintln!(
+            "--guitar-model electric: {} não está na pasta de modelos",
+            guitar_crnn::ELECTRIC_MODEL_FILE
+        );
+        std::process::exit(2);
+    }
+    match (separate, separation::find_separator()) {
+        (true, Some(separator)) => println!("Separação: {}", separator.name()),
         (true, None) => println!(
-            "Separação: Demucs não encontrado (rode scripts/install_demucs.sh); transcrevendo da mixagem"
+            "Separação: nenhum separador encontrado (rode scripts/install_bs_roformer.sh ou install_demucs.sh); transcrevendo da mixagem"
         ),
         (false, _) => println!("Separação: desligada"),
     }
-    let (guitar_model, beat_model) = transcribe::installed_models();
+    let models = transcribe::installed_models();
     println!(
         "Notas: {}; tempos: {}",
-        if guitar_model {
-            "modelo de guitarra (CRNN)"
-        } else {
-            "Basic Pitch"
-        },
-        if beat_model {
-            "Beat This!"
-        } else {
-            "detector simples"
-        }
+        transcribe::guitar_engine_name(guitar_model),
+        models.beat_tracker.unwrap_or("detector simples")
     );
-    if !(guitar_model && beat_model) {
+    if !models.complete() {
         println!("  (rode scripts/install_transcription_models.sh para os modelos melhores)");
     }
     println!("Repositório: {}\n", repo.display());
@@ -141,6 +155,7 @@ fn main() {
             title: title.clone().unwrap_or(file_title),
             artist: artist.clone().unwrap_or(file_artist),
             separate,
+            guitar_model,
             guitar,
             bass,
             output_dir: repo.clone(),
@@ -238,6 +253,7 @@ fn main() {
                 title: title.clone().unwrap_or(video_title),
                 artist: artist.clone().unwrap_or(video_artist),
                 separate,
+                guitar_model,
                 guitar,
                 bass,
                 output_dir: repo.clone(),

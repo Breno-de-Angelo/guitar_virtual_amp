@@ -44,6 +44,67 @@ const LOWEST_MIDI: u8 = 21;
 pub const MODEL_FILE: &str = "guitar_gaps_crnn.onnx";
 /// Name recorded in the tab's metadata.
 pub const ENGINE_NAME: &str = "guitar CRNN (Riley et al., GAPS 2024; tract)";
+/// The same CRNN fine-tuned on electric guitar (amp renders of EGDB and
+/// GuitarSet, `scripts/train/finetune_crnn.py`). EGDB has no license, so
+/// this model is never downloaded or bundled: users who trained one copy it
+/// into the models folder under this name, and the app then offers it.
+pub const ELECTRIC_MODEL_FILE: &str = "guitar_electric_crnn.onnx";
+pub const ELECTRIC_ENGINE_NAME: &str = "guitar CRNN, electric fine-tune (local; tract)";
+/// Name recorded when `GVA_GUITAR_MODEL` picked the file.
+pub const CUSTOM_ENGINE_NAME: &str = "guitar CRNN (GVA_GUITAR_MODEL; tract)";
+
+/// Which guitar CRNN to run, when both are installed.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum GuitarModel {
+    /// Riley et al.'s GAPS weights (the default).
+    #[default]
+    Gaps,
+    /// [`ELECTRIC_MODEL_FILE`].
+    Electric,
+}
+
+impl GuitarModel {
+    pub fn label(self) -> &'static str {
+        match self {
+            GuitarModel::Gaps => "GAPS",
+            GuitarModel::Electric => "elétrica (ajuste local)",
+        }
+    }
+}
+
+/// The electric fine-tune in the models folder, if any.
+pub fn find_electric_model() -> Option<PathBuf> {
+    models_dir()
+        .map(|d| d.join(ELECTRIC_MODEL_FILE))
+        .filter(|p| p.is_file())
+}
+
+/// Model file and engine name for `choice`: the `custom` file
+/// (`GVA_GUITAR_MODEL`) whatever the choice, else the electric model when
+/// chosen and present in `dir`, else GAPS when present.
+fn pick_model(
+    choice: GuitarModel,
+    custom: Option<PathBuf>,
+    dir: Option<&Path>,
+) -> Option<(PathBuf, &'static str)> {
+    if let Some(path) = custom {
+        return path.is_file().then_some((path, CUSTOM_ENGINE_NAME));
+    }
+    let dir = dir?;
+    let electric = dir.join(ELECTRIC_MODEL_FILE);
+    if choice == GuitarModel::Electric && electric.is_file() {
+        return Some((electric, ELECTRIC_ENGINE_NAME));
+    }
+    let gaps = dir.join(MODEL_FILE);
+    gaps.is_file().then_some((gaps, ENGINE_NAME))
+}
+
+/// The installed model to run for `choice` (see [`pick_model`]), with the
+/// name to record in the tab's metadata.
+pub fn find_model_for(choice: GuitarModel) -> Option<(PathBuf, &'static str)> {
+    let custom = std::env::var("GVA_GUITAR_MODEL").ok().map(PathBuf::from);
+    pick_model(choice, custom, models_dir().as_deref())
+}
 
 /// `GVA_GUITAR_MODEL` if set, else `<data dir>/guitar_virtual_amp/tools/models/`.
 pub fn default_model_path() -> Option<PathBuf> {
@@ -323,6 +384,41 @@ pub fn extract_notes(post: &Posteriors, params: &CrnnParams) -> Vec<NoteEstimate
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn electric_model_is_used_only_when_chosen_and_installed() {
+        let dir = std::env::temp_dir().join(format!("gva_crnn_pick_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let pick = |choice, custom: Option<PathBuf>| pick_model(choice, custom, Some(&dir));
+        assert_eq!(pick(GuitarModel::Gaps, None), None);
+        assert_eq!(pick(GuitarModel::Electric, None), None);
+        let gaps = dir.join(MODEL_FILE);
+        std::fs::write(&gaps, b"").unwrap();
+        // Electric chosen but not installed: GAPS.
+        assert_eq!(
+            pick(GuitarModel::Electric, None),
+            Some((gaps.clone(), ENGINE_NAME))
+        );
+        let electric = dir.join(ELECTRIC_MODEL_FILE);
+        std::fs::write(&electric, b"").unwrap();
+        assert_eq!(pick(GuitarModel::Gaps, None), Some((gaps, ENGINE_NAME)));
+        assert_eq!(
+            pick(GuitarModel::Electric, None),
+            Some((electric.clone(), ELECTRIC_ENGINE_NAME))
+        );
+        // GVA_GUITAR_MODEL wins over the choice, and only if the file exists.
+        assert_eq!(
+            pick(GuitarModel::Gaps, Some(electric.clone())),
+            Some((electric, CUSTOM_ENGINE_NAME))
+        );
+        assert_eq!(
+            pick(GuitarModel::Gaps, Some(dir.join("missing.onnx"))),
+            None
+        );
+        assert_eq!(pick_model(GuitarModel::Gaps, None, None), None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn regression_peaks_have_sub_frame_shifts() {

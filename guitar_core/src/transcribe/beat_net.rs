@@ -2,10 +2,12 @@
 //! and Widmer, ISMIR 2024; code and weights MIT, CPJKU/beat_this), the
 //! current state of the art across genres and the best option for solo
 //! guitar, where the spectral-flux tracker in [`super::beats`] has no drums
-//! to lock to. Runs the `small0` checkpoint (ONNX conversion from
-//! `nilsbc/beat-this-onnx`) with its log-mel front end in tract.
-//! `scripts/install_transcription_models.sh` downloads both into the models folder;
-//! without them the pipeline keeps the DSP tracker.
+//! to lock to. Runs the `final0` checkpoint, or the smaller `small0` when
+//! that's the only one installed (ONNX conversions from
+//! `nilsbc/beat-this-onnx`), with their log-mel front end in tract. On
+//! GuitarSet accompaniment final0 gets beat CMLt 0.92 against 0.80.
+//! `scripts/install_transcription_models.sh` downloads them into the models
+//! folder; without them the pipeline keeps the DSP tracker.
 //!
 //! The network gives beat and downbeat logits at 50 frames per second. Beats
 //! are its peaks (the paper's "minimal" post-processing, no DBN), repaired
@@ -28,20 +30,46 @@ pub const FRAME_RATE: f64 = 50.0;
 const CHUNK: usize = 1500;
 const BORDER: usize = 6;
 const MEL_BINS: usize = 128;
-pub const MODEL_FILE: &str = "beat_this_small0.onnx";
+pub const FINAL_MODEL_FILE: &str = "beat_this_final0.onnx";
+pub const SMALL_MODEL_FILE: &str = "beat_this_small0.onnx";
 pub const FRONTEND_FILE: &str = "beat_this_logmel.onnx";
-pub const ENGINE_NAME: &str = "beat-this small0 (tract)";
+pub const FINAL_ENGINE_NAME: &str = "beat-this final0 (tract)";
+pub const SMALL_ENGINE_NAME: &str = "beat-this small0 (tract)";
 
-/// `(front end, network)` paths when both are installed next to the guitar
-/// model (`GVA_BEAT_MODEL_DIR` overrides the folder).
-pub fn find_models() -> Option<(PathBuf, PathBuf)> {
+/// An installed Beat This! checkpoint and its front end.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BeatModels {
+    pub front: PathBuf,
+    pub net: PathBuf,
+    /// Recorded in the tab's metadata.
+    pub name: &'static str,
+}
+
+/// final0 when it's in `dir` with the front end, else small0.
+fn models_in(dir: &Path) -> Option<BeatModels> {
+    let front = dir.join(FRONTEND_FILE);
+    if !front.is_file() {
+        return None;
+    }
+    [
+        (FINAL_MODEL_FILE, FINAL_ENGINE_NAME),
+        (SMALL_MODEL_FILE, SMALL_ENGINE_NAME),
+    ]
+    .into_iter()
+    .map(|(file, name)| (dir.join(file), name))
+    .find(|(net, _)| net.is_file())
+    .map(|(net, name)| BeatModels { front, net, name })
+}
+
+/// The models installed next to the guitar model (`GVA_BEAT_MODEL_DIR`
+/// overrides the folder).
+pub fn find_models() -> Option<BeatModels> {
     let dir = match std::env::var("GVA_BEAT_MODEL_DIR") {
         Ok(d) => PathBuf::from(d),
         // Not next to `GVA_GUITAR_MODEL`: that may point at a custom model.
         Err(_) => models_dir()?,
     };
-    let (front, net) = (dir.join(FRONTEND_FILE), dir.join(MODEL_FILE));
-    (front.is_file() && net.is_file()).then_some((front, net))
+    models_in(&dir)
 }
 
 type Model = Arc<TypedRunnableModel>;
@@ -383,6 +411,35 @@ pub fn track_from_activations(act: &Activations) -> BeatTrack {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn final0_is_preferred_over_small0() {
+        let dir = std::env::temp_dir().join(format!("gva_beat_pick_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let touch = |file: &str| std::fs::write(dir.join(file), b"").unwrap();
+        touch(SMALL_MODEL_FILE);
+        touch(FINAL_MODEL_FILE);
+        // No front end, no tracker.
+        assert_eq!(models_in(&dir), None);
+        touch(FRONTEND_FILE);
+        let found = models_in(&dir).unwrap();
+        assert_eq!(
+            (found.net, found.name),
+            (dir.join(FINAL_MODEL_FILE), FINAL_ENGINE_NAME)
+        );
+        std::fs::remove_file(dir.join(FINAL_MODEL_FILE)).unwrap();
+        let found = models_in(&dir).unwrap();
+        assert_eq!(
+            (found.front, found.net, found.name),
+            (
+                dir.join(FRONTEND_FILE),
+                dir.join(SMALL_MODEL_FILE),
+                SMALL_ENGINE_NAME
+            )
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     /// Logits with a peak of `height` every `period` frames from `offset`.
     fn pulses(n: usize, period: usize, offset: usize, height: f32) -> Vec<f32> {

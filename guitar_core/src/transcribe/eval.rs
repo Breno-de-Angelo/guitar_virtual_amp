@@ -9,9 +9,12 @@
 //! ```
 //!
 //! Optional: `GVA_EVAL_SECS` (seconds per song, default 40),
-//! `GVA_EVAL_DEMUCS=1` to also run the full mix through Demucs,
+//! `GVA_EVAL_DEMUCS=1` to also run the full mix through the separator
+//! (BS-RoFormer when installed, else Demucs; `GVA_SEPARATOR` forces one),
 //! `GVA_EVAL_PITCHES=1` to print pitch histograms (octave errors show up
-//! there) and `GVA_EVAL_CACHE=<dir>` to reuse transcribed notes.
+//! there) and `GVA_EVAL_CACHE=<dir>` to reuse transcribed notes. Every
+//! benchmark runs the GAPS guitar CRNN unless `GVA_EVAL_GUITAR_MODEL=electric`
+//! (the local electric fine-tune, when installed).
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -26,6 +29,14 @@ use crate::shared::tab::repository::load_metadata;
 use crate::shared::tab::timeline::Timeline;
 
 const RATE: u32 = 44_100;
+
+/// `GVA_EVAL_GUITAR_MODEL=electric` runs the electric fine-tune.
+fn eval_guitar_model() -> super::guitar_crnn::GuitarModel {
+    match std::env::var("GVA_EVAL_GUITAR_MODEL").as_deref() {
+        Ok("electric") => super::guitar_crnn::GuitarModel::Electric,
+        _ => super::guitar_crnn::GuitarModel::Gaps,
+    }
+}
 
 /// `GVA_EVAL_CACHE=<dir>` keeps each stem's transcribed notes (keyed by the
 /// audio and the engine settings), so benchmarks of the later stages
@@ -448,6 +459,7 @@ fn eval_guitarset() {
             title: stem.clone(),
             artist: "GuitarSet".into(),
             separate: demucs,
+            guitar_model: eval_guitar_model(),
             guitar: true,
             bass: false,
             output_dir: work.join("repo"),
@@ -633,6 +645,7 @@ fn eval_transcription() {
                 title: name.clone(),
                 artist: case.into(),
                 separate,
+                guitar_model: eval_guitar_model(),
                 guitar: true,
                 bass: false,
                 output_dir: work.join("repo"),
@@ -1008,6 +1021,7 @@ fn eval_real() {
             title: name.clone(),
             artist: "eval".into(),
             separate,
+            guitar_model: eval_guitar_model(),
             guitar: true,
             bass: false,
             output_dir: work.join("repo"),
@@ -1262,6 +1276,7 @@ fn eval_guitar_pairs() {
                 title: comp_stem.clone(),
                 artist: layout.to_string(),
                 separate: true,
+                guitar_model: eval_guitar_model(),
                 guitar: true,
                 bass: false,
                 output_dir: work.join("repo"),
@@ -1419,6 +1434,7 @@ fn eval_manifest() {
                 .into_owned(),
             artist: group.to_string(),
             separate,
+            guitar_model: eval_guitar_model(),
             guitar: true,
             bass: false,
             output_dir: work.join("repo"),

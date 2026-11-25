@@ -13,10 +13,12 @@ use eframe::egui::{self, Color32, Key, RichText, Ui, Vec2};
 
 use crate::backend::audio_file::AUDIO_EXTENSIONS;
 use crate::frontend::ui::tone3000::remote_image;
-use crate::shared::settings::AppSettings;
+use crate::shared::settings::{AppSettings, save_settings};
 use crate::shared::tab::repository::default_repository_dir;
+use crate::transcribe::guitar_crnn::GuitarModel;
+use crate::transcribe::separation::{self, Separator};
 use crate::transcribe::youtube::{self, Video};
-use crate::transcribe::{self, Output, Progress, Request, separation};
+use crate::transcribe::{self, InstalledModels, Output, Progress, Request};
 
 const SEARCH_RESULTS: usize = 10;
 
@@ -50,9 +52,9 @@ pub struct TranscribePanel {
     spotify_track_id: Option<String>,
     /// Expected song length (e.g. from Spotify), to pick the right video.
     duration_hint: Option<f64>,
-    demucs: Option<PathBuf>,
-    /// Optional models installed: (guitar CRNN, beat tracker).
-    models: (bool, bool),
+    separator: Option<Separator>,
+    /// Optional models installed.
+    models: InstalledModels,
     ytdlp: Option<PathBuf>,
     query: String,
     searching: Option<Receiver<Result<Vec<Video>, String>>>,
@@ -78,6 +80,28 @@ pub fn repository_dir(settings: &AppSettings) -> Option<PathBuf> {
         .or_else(default_repository_dir)
 }
 
+/// One line naming the separator and models a transcription would use.
+fn engines_summary(
+    separator: Option<&Separator>,
+    models: &InstalledModels,
+    choice: GuitarModel,
+) -> String {
+    let separation = separator.map_or("nenhuma", Separator::label);
+    let notes = if choice == GuitarModel::Electric && models.electric_crnn {
+        "CRNN elétrica (ajuste local)"
+    } else if models.guitar_crnn {
+        "CRNN GAPS"
+    } else {
+        "Basic Pitch"
+    };
+    let beats = match models.beat_tracker {
+        Some(transcribe::beat_net::FINAL_ENGINE_NAME) => "Beat This! final0",
+        Some(_) => "Beat This! small0",
+        None => "detector simples",
+    };
+    format!("Separação: {separation} · notas: {notes} · tempos: {beats}")
+}
+
 fn format_secs(secs: f64) -> String {
     let s = secs.max(0.0) as u64;
     format!("{}:{:02}", s / 60, s % 60)
@@ -96,8 +120,8 @@ impl TranscribePanel {
             bass: true,
             spotify_track_id: None,
             duration_hint: None,
-            demucs: None,
-            models: (false, false),
+            separator: None,
+            models: InstalledModels::default(),
             ytdlp: None,
             query: String::new(),
             searching: None,
@@ -125,7 +149,7 @@ impl TranscribePanel {
     ) {
         self.open = true;
         self.error = None;
-        self.demucs = separation::find_demucs();
+        self.separator = separation::find_separator();
         self.models = crate::transcribe::installed_models();
         self.ytdlp = youtube::find_ytdlp();
         if self.prefill(title, artist, spotify_track_id, duration_hint) {
@@ -278,7 +302,8 @@ impl TranscribePanel {
             audio_path,
             title: self.title.trim().to_string(),
             artist: self.artist.trim().to_string(),
-            separate: self.separate && self.demucs.is_some(),
+            separate: self.separate && self.separator.is_some(),
+            guitar_model: settings.transcription_guitar_model,
             guitar: self.guitar,
             bass: self.bass,
             output_dir,
@@ -345,7 +370,7 @@ impl TranscribePanel {
     }
 
     /// Draws the form (when open) and returns a finished transcription.
-    pub fn ui(&mut self, ui: &mut Ui, settings: &AppSettings) -> Option<Output> {
+    pub fn ui(&mut self, ui: &mut Ui, settings: &mut AppSettings) -> Option<Output> {
         let finished = self.poll();
         self.poll_search();
         if let Some(job) = &self.job {
@@ -396,17 +421,59 @@ impl TranscribePanel {
                 ui.checkbox(&mut self.guitar, "Guitarra");
                 ui.checkbox(&mut self.bass, "Baixo");
                 ui.separator();
-                let has_demucs = self.demucs.is_some();
-                ui.add_enabled_ui(has_demucs, |ui| {
-                    ui.checkbox(&mut self.separate, "Separar instrumentos (Demucs)")
+                let label = match &self.separator {
+                    Some(separator) => format!("Separar instrumentos ({})", separator.label()),
+                    None => "Separar instrumentos".to_string(),
+                };
+                ui.add_enabled_ui(self.separator.is_some(), |ui| {
+                    ui.checkbox(&mut self.separate, label)
                         .on_hover_text("Isola guitarra e baixo antes de transcrever. Melhor em gravações com banda.");
                 });
-                if !has_demucs {
-                    ui.label(RichText::new("Demucs não instalado: rode scripts/install_demucs.sh").color(Color32::YELLOW))
+                match &self.separator {
+                    None => {
+                        ui.label(
+                            RichText::new("Separador não instalado: rode scripts/install_bs_roformer.sh (ou install_demucs.sh)")
+                                .color(Color32::YELLOW),
+                        )
                         .on_hover_text("Sem separação, guitarra e baixo são transcritos da mixagem inteira (pior com banda).");
+                    }
+                    Some(Separator::Demucs(_)) => {
+                        ui.label(RichText::new("scripts/install_bs_roformer.sh separa melhor a guitarra").small().weak())
+                            .on_hover_text(
+                                "O BS-RoFormer SW (6 instrumentos) isola a guitarra melhor que o Demucs; \
+                                 o app passa a usá-lo quando está instalado. Precisa de ~4 GB de memória na placa de vídeo.",
+                            );
+                    }
+                    Some(Separator::BsRoformer(_)) => {}
                 }
             });
-            if self.models != (true, true) {
+            if self.models.electric_crnn {
+                ui.horizontal(|ui| {
+                    ui.label("Modelo de notas:");
+                    let mut choice = settings.transcription_guitar_model;
+                    ui.selectable_value(&mut choice, GuitarModel::Gaps, "GAPS (padrão)")
+                        .on_hover_text("O modelo de guitarra do install_transcription_models.sh (Riley et al., violão clássico).");
+                    ui.selectable_value(&mut choice, GuitarModel::Electric, "Elétrica (ajuste local)")
+                        .on_hover_text(
+                            "guitar_electric_crnn.onnx da pasta de modelos: o mesmo modelo ajustado em guitarra \
+                             elétrica com amplificador. Treinado com dados sem licença: só para uso local.",
+                        );
+                    if choice != settings.transcription_guitar_model {
+                        settings.transcription_guitar_model = choice;
+                        save_settings(settings);
+                    }
+                });
+            }
+            ui.label(
+                RichText::new(engines_summary(
+                    self.separate.then_some(self.separator.as_ref()).flatten(),
+                    &self.models,
+                    settings.transcription_guitar_model,
+                ))
+                .small()
+                .weak(),
+            );
+            if !self.models.complete() {
                 ui.label(
                     RichText::new("Modelos de guitarra/tempo não instalados: rode scripts/install_transcription_models.sh")
                         .color(Color32::YELLOW),
@@ -593,7 +660,7 @@ mod tests {
             panel.source = source;
             let _ = ctx.run(egui::RawInput::default(), |ctx| {
                 egui::CentralPanel::default().show(ctx, |ui| {
-                    assert!(panel.ui(ui, &AppSettings::default()).is_none());
+                    assert!(panel.ui(ui, &mut AppSettings::default()).is_none());
                 });
             });
         }
@@ -626,6 +693,60 @@ mod tests {
         from_spotify.results = vec![video];
         from_spotify.select(0);
         assert_eq!(from_spotify.title, "Tempo Perdido - Remastered");
+    }
+
+    #[test]
+    fn engines_summary_names_the_separator_and_models() {
+        let none = InstalledModels::default();
+        assert_eq!(
+            engines_summary(None, &none, GuitarModel::Electric),
+            "Separação: nenhuma · notas: Basic Pitch · tempos: detector simples"
+        );
+        let all = InstalledModels {
+            guitar_crnn: true,
+            electric_crnn: true,
+            beat_tracker: Some(transcribe::beat_net::FINAL_ENGINE_NAME),
+        };
+        let roformer = Separator::BsRoformer(separation::Roformer {
+            python: "/p".into(),
+            runner: "/r".into(),
+            msst: "/m".into(),
+            config: "/c".into(),
+            checkpoint: "/k".into(),
+        });
+        assert_eq!(
+            engines_summary(Some(&roformer), &all, GuitarModel::Electric),
+            "Separação: BS-RoFormer · notas: CRNN elétrica (ajuste local) · tempos: Beat This! final0"
+        );
+        let demucs = Separator::Demucs("/d".into());
+        let small = InstalledModels {
+            electric_crnn: false,
+            beat_tracker: Some(transcribe::beat_net::SMALL_ENGINE_NAME),
+            ..all
+        };
+        // The electric choice falls back to GAPS when that file is gone.
+        assert_eq!(
+            engines_summary(Some(&demucs), &small, GuitarModel::Electric),
+            "Separação: Demucs · notas: CRNN GAPS · tempos: Beat This! small0"
+        );
+    }
+
+    #[test]
+    fn model_choice_renders_when_the_electric_model_is_installed() {
+        let mut panel = TranscribePanel::new();
+        panel.open = true;
+        panel.models.electric_crnn = true;
+        let mut settings = AppSettings {
+            transcription_guitar_model: GuitarModel::Electric,
+            ..Default::default()
+        };
+        let ctx = egui::Context::default();
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                assert!(panel.ui(ui, &mut settings).is_none());
+            });
+        });
+        assert_eq!(settings.transcription_guitar_model, GuitarModel::Electric);
     }
 
     #[test]
