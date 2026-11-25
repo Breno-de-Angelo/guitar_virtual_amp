@@ -38,6 +38,15 @@ fn eval_guitar_model() -> super::guitar_crnn::GuitarModel {
     }
 }
 
+/// `GVA_EVAL_FINGERING=learned` uses the learned fingering tagger when
+/// installed; benchmarks use the Viterbi otherwise.
+fn eval_fingering_choice() -> super::fingering_net::Fingering {
+    match std::env::var("GVA_EVAL_FINGERING").as_deref() {
+        Ok("learned") => super::fingering_net::Fingering::Learned,
+        _ => super::fingering_net::Fingering::Viterbi,
+    }
+}
+
 /// `GVA_EVAL_CACHE=<dir>` keeps each stem's transcribed notes (keyed by the
 /// audio and the engine settings), so benchmarks of the later stages
 /// (beats, quantization, fingering) don't rerun the models.
@@ -460,6 +469,7 @@ fn eval_guitarset() {
             artist: "GuitarSet".into(),
             separate: demucs,
             guitar_model: eval_guitar_model(),
+            fingering: eval_fingering_choice(),
             guitar: true,
             bass: false,
             output_dir: work.join("repo"),
@@ -646,6 +656,7 @@ fn eval_transcription() {
                 artist: case.into(),
                 separate,
                 guitar_model: eval_guitar_model(),
+                fingering: eval_fingering_choice(),
                 guitar: true,
                 bass: false,
                 output_dir: work.join("repo"),
@@ -747,6 +758,7 @@ fn fingering_accuracy(
                 secs: g[0].0,
                 pitches: g.iter().map(|n| (n.1, 0.8)).collect(),
                 techniques: Vec::new(),
+                timing: Vec::new(),
             })
             .collect();
         let prior = super::arrange::StringPrior::guitarset();
@@ -1022,6 +1034,7 @@ fn eval_real() {
             artist: "eval".into(),
             separate,
             guitar_model: eval_guitar_model(),
+            fingering: eval_fingering_choice(),
             guitar: true,
             bass: false,
             output_dir: work.join("repo"),
@@ -1277,6 +1290,7 @@ fn eval_guitar_pairs() {
                 artist: layout.to_string(),
                 separate: true,
                 guitar_model: eval_guitar_model(),
+                fingering: eval_fingering_choice(),
                 guitar: true,
                 bass: false,
                 output_dir: work.join("repo"),
@@ -1435,6 +1449,7 @@ fn eval_manifest() {
             artist: group.to_string(),
             separate,
             guitar_model: eval_guitar_model(),
+            fingering: eval_fingering_choice(),
             guitar: true,
             bass: false,
             output_dir: work.join("repo"),

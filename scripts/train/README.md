@@ -174,3 +174,8 @@ $PY fingering/bench.py --data ~/.cache/gva_test/prepared --guitarset ~/.cache/gv
   and `cont` [1, T, 16] float32 with T symbolic. tract-onnx 0.23.10 runs it (max |diff|
   < 1e-5 against onnxruntime). Recordings longer than 128 notes run in windows of 128 with
   hop 64 (`common.windowed`).
+- To use a model in the app, copy its `model.onnx` to
+  `~/.local/share/guitar_virtual_amp/tools/models/fingering_tagger.onnx` (or point
+  `GVA_FINGERING_MODEL` at it). `guitar_core/src/transcribe/fingering_net.rs` is a port of
+  `common.py`'s `features`, `windowed` and `decode`: change both together, and check with
+  `cargo run --release --example fingering -- --learned model.onnx` against `Model.place`.

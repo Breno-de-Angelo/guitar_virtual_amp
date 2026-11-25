@@ -15,6 +15,7 @@ use crate::backend::audio_file::AUDIO_EXTENSIONS;
 use crate::frontend::ui::tone3000::remote_image;
 use crate::shared::settings::{AppSettings, save_settings};
 use crate::shared::tab::repository::default_repository_dir;
+use crate::transcribe::fingering_net::Fingering;
 use crate::transcribe::guitar_crnn::GuitarModel;
 use crate::transcribe::separation::{self, Separator};
 use crate::transcribe::youtube::{self, Video};
@@ -85,6 +86,7 @@ fn engines_summary(
     separator: Option<&Separator>,
     models: &InstalledModels,
     choice: GuitarModel,
+    fingering: Fingering,
 ) -> String {
     let separation = separator.map_or("nenhuma", Separator::label);
     let notes = if choice == GuitarModel::Electric && models.electric_crnn {
@@ -99,7 +101,12 @@ fn engines_summary(
         Some(_) => "Beat This! small0",
         None => "detector simples",
     };
-    format!("Separação: {separation} · notas: {notes} · tempos: {beats}")
+    let fingering = if fingering == Fingering::Learned && models.fingering_tagger {
+        "aprendido"
+    } else {
+        "Viterbi"
+    };
+    format!("Separação: {separation} · notas: {notes} · tempos: {beats} · dedilhado: {fingering}")
 }
 
 fn format_secs(secs: f64) -> String {
@@ -304,6 +311,7 @@ impl TranscribePanel {
             artist: self.artist.trim().to_string(),
             separate: self.separate && self.separator.is_some(),
             guitar_model: settings.transcription_guitar_model,
+            fingering: settings.transcription_fingering,
             guitar: self.guitar,
             bass: self.bass,
             output_dir,
@@ -464,11 +472,30 @@ impl TranscribePanel {
                     }
                 });
             }
+            if self.models.fingering_tagger {
+                ui.horizontal(|ui| {
+                    ui.label("Dedilhado:");
+                    let mut choice = settings.transcription_fingering;
+                    ui.selectable_value(&mut choice, Fingering::Learned, "Aprendido (padrão)")
+                        .on_hover_text(
+                            "fingering_tagger.onnx da pasta de modelos: escolhe a corda de cada nota como \
+                             guitarristas tocam (mais acertos em solos e guitarra elétrica). Treinado com dados \
+                             sem licença: só para uso local.",
+                        );
+                    ui.selectable_value(&mut choice, Fingering::Viterbi, "Viterbi")
+                        .on_hover_text("O método antigo: menos esticadas e mudanças de posição.");
+                    if choice != settings.transcription_fingering {
+                        settings.transcription_fingering = choice;
+                        save_settings(settings);
+                    }
+                });
+            }
             ui.label(
                 RichText::new(engines_summary(
                     self.separate.then_some(self.separator.as_ref()).flatten(),
                     &self.models,
                     settings.transcription_guitar_model,
+                    settings.transcription_fingering,
                 ))
                 .small()
                 .weak(),
@@ -699,13 +726,14 @@ mod tests {
     fn engines_summary_names_the_separator_and_models() {
         let none = InstalledModels::default();
         assert_eq!(
-            engines_summary(None, &none, GuitarModel::Electric),
-            "Separação: nenhuma · notas: Basic Pitch · tempos: detector simples"
+            engines_summary(None, &none, GuitarModel::Electric, Fingering::Learned),
+            "Separação: nenhuma · notas: Basic Pitch · tempos: detector simples · dedilhado: Viterbi"
         );
         let all = InstalledModels {
             guitar_crnn: true,
             electric_crnn: true,
             beat_tracker: Some(transcribe::beat_net::FINAL_ENGINE_NAME),
+            fingering_tagger: true,
         };
         let roformer = Separator::BsRoformer(separation::Roformer {
             python: "/p".into(),
@@ -715,8 +743,9 @@ mod tests {
             checkpoint: "/k".into(),
         });
         assert_eq!(
-            engines_summary(Some(&roformer), &all, GuitarModel::Electric),
-            "Separação: BS-RoFormer · notas: CRNN elétrica (ajuste local) · tempos: Beat This! final0"
+            engines_summary(Some(&roformer), &all, GuitarModel::Electric, Fingering::Learned),
+            "Separação: BS-RoFormer · notas: CRNN elétrica (ajuste local) · tempos: Beat This! final0 \
+             · dedilhado: aprendido"
         );
         let demucs = Separator::Demucs("/d".into());
         let small = InstalledModels {
@@ -726,8 +755,8 @@ mod tests {
         };
         // The electric choice falls back to GAPS when that file is gone.
         assert_eq!(
-            engines_summary(Some(&demucs), &small, GuitarModel::Electric),
-            "Separação: Demucs · notas: CRNN GAPS · tempos: Beat This! small0"
+            engines_summary(Some(&demucs), &small, GuitarModel::Electric, Fingering::Viterbi),
+            "Separação: Demucs · notas: CRNN GAPS · tempos: Beat This! small0 · dedilhado: Viterbi"
         );
     }
 

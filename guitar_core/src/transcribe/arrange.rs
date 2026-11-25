@@ -144,6 +144,22 @@ impl BeatGrid {
         let span = (g[b + 1] - g[b]).max(1e-6);
         b as f64 + (t - g[b]) / span
     }
+
+    /// Audio time of grid position `tick` (the inverse of
+    /// [`Self::beat_position`], extrapolated the same way).
+    pub fn tick_secs(&self, tick: i64) -> f64 {
+        let g = &self.times;
+        let n = g.len();
+        match n {
+            0 => 0.0,
+            1 => g[0],
+            _ => {
+                let pos = tick as f64 / TICKS_PER_BEAT as f64;
+                let b = (pos.floor().max(0.0) as usize).min(n - 2);
+                g[b] + (pos - b as f64) * (g[b + 1] - g[b])
+            }
+        }
+    }
 }
 
 /// Beats are quarter notes.
@@ -189,6 +205,9 @@ pub struct GridEvent {
     pub pitches: Vec<(u8, f32)>,
     /// Playing techniques of single-note events, by pitch.
     pub techniques: Vec<(u8, Technique)>,
+    /// `(pitch, onset, end)` in audio seconds, as transcribed (before
+    /// snapping); the learned fingering reads them. May be empty.
+    pub timing: Vec<(u8, f64, f64)>,
 }
 
 impl GridEvent {
@@ -201,7 +220,7 @@ impl GridEvent {
     }
 
     /// A single note that slides or hammers into the next event.
-    fn links_next(&self) -> bool {
+    pub(crate) fn links_next(&self) -> bool {
         self.pitches.len() == 1 && self.technique(self.pitches[0].0).links_next()
     }
 }
@@ -339,6 +358,7 @@ pub fn quantize(
                     secs: *t,
                     pitches: Vec::new(),
                     techniques: Vec::new(),
+                    timing: Vec::new(),
                 });
                 events.len() - 1
             }
@@ -350,6 +370,13 @@ pub fn quantize(
             match event.pitches.iter_mut().find(|(p, _)| *p == n.pitch) {
                 Some(existing) => existing.1 = existing.1.max(n.amplitude),
                 None => event.pitches.push((n.pitch, n.amplitude)),
+            }
+            match event.timing.iter_mut().find(|(p, ..)| *p == n.pitch) {
+                Some(existing) => {
+                    existing.1 = existing.1.min(n.start);
+                    existing.2 = existing.2.max(n.end);
+                }
+                None => event.timing.push((n.pitch, n.start, n.end)),
             }
             let t = techniques.get(i).copied().unwrap_or_default();
             if !t.is_none() {
@@ -996,6 +1023,7 @@ mod tests {
             secs: tick as f64 / 1920.0,
             pitches: pitches.to_vec(),
             techniques: Vec::new(),
+            timing: Vec::new(),
         }
     }
 

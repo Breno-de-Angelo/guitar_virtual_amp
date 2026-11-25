@@ -340,9 +340,10 @@ apps: Premium owner, 5 allow-listed users, `GET /search` capped at 10 results.
   (checkpoint license unknown: local use only; find a licensed RoFormer guitar checkpoint before
   shipping one);
   **drums** (onset classification on the drum stem) and **vocal melody** tracks.
-- **Fingering**: a learned tagger (`scripts/train/fingering/`) beats the Viterbi on true notes
-  (GuitarSet solo 0.55 -> 0.62, EGDB 0.68 -> 0.81) and still has to be ported into
-  `arrange::fret_events`. The string prior and weights come from GuitarSet + 10 tabs. A learned model
+- **Fingering**: a learned tagger (`transcribe/fingering_net.rs`, a local model file) is now the
+  default for 6-string guitars when installed: true-note string accuracy GuitarSet solo 0.55 ->
+  0.62, EGDB 0.68 -> 0.81; final-tab string/fret on GuitarSet 03-05 68% -> 78% (GAPS notes).
+  It is trained on EGDB, so it can't ship until EGDB's authors allow it or it is retrained. The string prior and weights come from GuitarSet + 10 tabs. A learned model
   (MIDI-to-Tab, Fretting-Transformer, or TART's audio-conditioned AudioFret, +4.8 points from
   timbre) needs weights we can ship; DadaGP-scale statistics would also help the prior.
 - **Electric-guitar model**: it is already a local user option (`guitar_electric_crnn.onnx`;

@@ -219,9 +219,9 @@ Targets: the 65-75% string accuracy ceiling of the Viterbi.
 
 Step 1 done: an encoder tagger (results under "Learned fingering" below) beats the Viterbi on every
 set with true notes, most on EGDB and solos. Next:
-- Integrate the "ship" tagger in `arrange::fret_events` behind a setting: port `common.features`,
-  `windowed` and `decode` to Rust and keep the Viterbi as fallback. Retrain without EGDB if its
-  authors don't allow redistribution.
+- Integrated (2026-11-25): `transcribe/fingering_net.rs` runs the "ship" tagger (seed 3, best
+  validation) in tract with the Viterbi as fallback; see "Learned fingering" below for the
+  in-app numbers. Retrain without EGDB if its authors don't allow redistribution.
 - Data for player diversity: DadaGP (research access on request) for pre-training, then fine-tune
   on the current sets.
 - The T5-style seq2seq below only after DadaGP pre-training: without it, larger models don't help.
@@ -615,6 +615,13 @@ notes, all test items, mean of 3 seeds:
   limit, not model size (3.3 M parameters did no better).
 - The ONNX (2.3 MB, standard ops) runs in tract 0.23 with a dynamic note count, ~6-10 ms per
   128-note window on the CPU. Checkpoints: `~/.cache/gva_test/runs/fingering_runs/`.
+- In the app (`transcribe/fingering_net.rs`, ship_s3 as `fingering_tagger.onnx`): the Rust port
+  puts 99.94% of 41,293 true test notes on the same string as the Python model (string accuracy
+  0.844 / 0.621 / 0.805 / 0.698 / 0.658 on comp / solo / EGDB / EGSet12 / GOAT). It needs each
+  note's own onset: giving every chord note the chord's onset costs 0.02 on comp and EGDB.
+  `eval_guitarset` players 03-05, final-tab string/fret median, Viterbi -> tagger: GAPS clean 68% ->
+  78%; electric clean 72% -> 75%, Blues Crunch 72% -> 75%, Metal High Gain 67% -> 76% (note F1
+  unchanged). A 4.4-minute song takes the same 70 s and ~2.4 GB.
 
 ## Order of work
 
@@ -627,8 +634,7 @@ the real-song set on the laptop.
 3. Phase 0.3 real-song set: aligner done; collect and hand-check song + tab pairs.
 4. Data generation on the Sparks: tone renders, separated mixes, DadaGP renders, pseudo-labels.
 5. T1 sweep with separation-aware data; Phase 1.1 separators and 1.5 fingering candidates.
-6. T2: integrate the tagger (step 1 done), request DadaGP, then audio conditioning. T3 in
-   parallel.
+6. T2: tagger integrated; request DadaGP, then audio conditioning. T3 in parallel.
 7. T4 small, then T4 large if small wins. With the Sparks this no longer waits on a rented GPU,
    so it moves up from "only if needed" to the main bet for full mixes.
 8. T5 only if multi-guitar songs remain the main error source.

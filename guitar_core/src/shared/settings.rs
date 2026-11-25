@@ -11,6 +11,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+use crate::transcribe::fingering_net::Fingering;
 use crate::transcribe::guitar_crnn::GuitarModel;
 
 /// Identifies which preset was last loaded, so it can be reloaded on the next
@@ -88,6 +89,9 @@ pub struct AppSettings {
     /// Guitar CRNN for transcriptions when the electric fine-tune is
     /// installed (see `transcribe::guitar_crnn::GuitarModel`).
     pub transcription_guitar_model: GuitarModel,
+    /// Learned fingering when its model is installed, or the Viterbi
+    /// (see `transcribe::fingering_net::Fingering`).
+    pub transcription_fingering: Fingering,
 }
 
 const SETTINGS_SUBPATH: &str = "guitar_virtual_amp/settings.json";
@@ -155,6 +159,7 @@ mod tests {
             spotify_tab_links: BTreeMap::from([("4uLU6hMCjMI75M1A2tKUQC".to_string(), PathBuf::from("/tabs/acdc.gp5"))]),
             tab_repository_dir: Some(PathBuf::from("/repo")),
             transcription_guitar_model: GuitarModel::Electric,
+            transcription_fingering: Fingering::Viterbi,
         };
         let json = serde_json::to_string(&settings).expect("serialize");
         let restored: AppSettings = serde_json::from_str(&json).expect("deserialize");
@@ -171,6 +176,7 @@ mod tests {
         assert!(restored.tab_sync.is_empty());
         assert_eq!(restored.practice, PracticePrefs::default());
         assert_eq!(restored.transcription_guitar_model, GuitarModel::Gaps);
+        assert_eq!(restored.transcription_fingering, Fingering::Learned);
     }
 
     #[test]

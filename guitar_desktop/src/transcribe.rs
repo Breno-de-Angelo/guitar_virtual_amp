@@ -12,6 +12,8 @@
 //!                     forces one)
 //!   --guitar-model M  gaps (default) or electric: the local electric fine-tune
 //!                     (guitar_electric_crnn.onnx in the models folder)
+//!   --fingering F     learned (default when fingering_tagger.onnx is in the
+//!                     models folder) or viterbi
 //!   --no-bass / --no-guitar
 //!   --force           redo files already in the repository (same audio hash)
 //!   --artist A --title T   only with a single file/video; otherwise taken from
@@ -27,6 +29,7 @@ use guitar_core::backend::audio_file::AUDIO_EXTENSIONS;
 use guitar_core::shared::tab::repository::{
     default_repository_dir, file_sha256, find_by_audio_hash, find_by_youtube_id,
 };
+use guitar_core::transcribe::fingering_net::{self, Fingering};
 use guitar_core::transcribe::guitar_crnn::{self, GuitarModel};
 use guitar_core::transcribe::{self, Request, separation, youtube};
 
@@ -60,6 +63,7 @@ fn main() {
     let (mut artist, mut title) = (None, None);
     let mut youtube_queries: Vec<String> = Vec::new();
     let mut guitar_model = GuitarModel::Gaps;
+    let mut fingering = Fingering::Learned;
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--repo" => repo = args.next().map(PathBuf::from),
@@ -75,6 +79,14 @@ fn main() {
                 Some("electric") => guitar_model = GuitarModel::Electric,
                 other => {
                     eprintln!("--guitar-model: use gaps ou electric (não {other:?})");
+                    std::process::exit(2);
+                }
+            },
+            "--fingering" => match args.next().as_deref() {
+                Some("learned") => fingering = Fingering::Learned,
+                Some("viterbi") => fingering = Fingering::Viterbi,
+                other => {
+                    eprintln!("--fingering: use learned ou viterbi (não {other:?})");
                     std::process::exit(2);
                 }
             },
@@ -127,8 +139,12 @@ fn main() {
         (false, _) => println!("Separação: desligada"),
     }
     let models = transcribe::installed_models();
+    let fingering_engine = match fingering {
+        Fingering::Learned if models.fingering_tagger => fingering_net::ENGINE_NAME,
+        _ => fingering_net::VITERBI_ENGINE_NAME,
+    };
     println!(
-        "Notas: {}; tempos: {}",
+        "Notas: {}; tempos: {}; dedilhado: {fingering_engine}",
         transcribe::guitar_engine_name(guitar_model),
         models.beat_tracker.unwrap_or("detector simples")
     );
@@ -156,6 +172,7 @@ fn main() {
             artist: artist.clone().unwrap_or(file_artist),
             separate,
             guitar_model,
+            fingering,
             guitar,
             bass,
             output_dir: repo.clone(),
@@ -254,6 +271,7 @@ fn main() {
                 artist: artist.clone().unwrap_or(video_artist),
                 separate,
                 guitar_model,
+                fingering,
                 guitar,
                 bass,
                 output_dir: repo.clone(),

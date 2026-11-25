@@ -32,6 +32,7 @@ pub mod beat_net;
 pub mod beats;
 #[cfg(test)]
 mod eval;
+pub mod fingering_net;
 pub mod guitar_crnn;
 pub mod resample;
 pub mod separation;
@@ -57,6 +58,8 @@ pub struct Request {
     pub separate: bool,
     /// Which guitar CRNN to run when both are installed.
     pub guitar_model: guitar_crnn::GuitarModel,
+    /// Learned fingering (when installed) or the Viterbi, for guitars.
+    pub fingering: fingering_net::Fingering,
     pub guitar: bool,
     pub bass: bool,
     /// Tab repository folder.
@@ -256,6 +259,8 @@ pub struct InstalledModels {
     pub electric_crnn: bool,
     /// Engine name of the Beat This! checkpoint that will run.
     pub beat_tracker: Option<&'static str>,
+    /// The local learned fingering model ([`fingering_net::MODEL_FILE`]).
+    pub fingering_tagger: bool,
 }
 
 impl InstalledModels {
@@ -270,6 +275,7 @@ pub fn installed_models() -> InstalledModels {
         guitar_crnn: guitar_crnn::find_model().is_some(),
         electric_crnn: guitar_crnn::find_electric_model().is_some(),
         beat_tracker: beat_net::find_models().map(|m| m.name),
+        fingering_tagger: fingering_net::find_model().is_some(),
     }
 }
 
@@ -858,6 +864,11 @@ pub fn run(
         }
     };
     let several = guitar_parts.len() > 1;
+    let fingering_model = match request.fingering {
+        fingering_net::Fingering::Learned => fingering_net::find_model(),
+        fingering_net::Fingering::Viterbi => None,
+    };
+    let mut fingering_engine = fingering_net::VITERBI_ENGINE_NAME;
     for (k, part) in guitar_parts.iter().enumerate() {
         if part.notes.is_empty() {
             continue;
@@ -877,7 +888,11 @@ pub fn run(
             spec.max_notes,
             &quantize_params,
         );
-        let frets = arrange::fret_events(&quantized.events, &spec);
+        let (frets, engine) =
+            fret_guitar(fingering_model.as_deref(), &quantized.events, &spec, &grid);
+        if engine == fingering_net::ENGINE_NAME {
+            fingering_engine = engine;
+        }
         let notes = frets.iter().map(Vec::len).sum();
         tracks.push(arrange::build_track(&spec, &quantized, &frets, &grid));
         let stem = match part.side {
@@ -943,8 +958,13 @@ pub fn run(
             } else {
                 ""
             };
+            let fingering = if request.guitar {
+                format!("; fingering: {fingering_engine}")
+            } else {
+                String::new()
+            };
             format!(
-                "{}; beats: {}{techniques}",
+                "{}; beats: {}{techniques}{fingering}",
                 engines.join(" + "),
                 rhythm.engine
             )
@@ -972,6 +992,28 @@ pub fn run(
             .map(|p| p.techniques)
             .unwrap_or_default(),
     })
+}
+
+/// Strings and frets of one guitar part: the learned tagger at `model`
+/// when given and the tuning has six strings, else (or when it fails) the
+/// Viterbi. Returns the fingering engine that ran.
+fn fret_guitar(
+    model: Option<&Path>,
+    events: &[arrange::GridEvent],
+    spec: &arrange::InstrumentSpec,
+    grid: &arrange::BeatGrid,
+) -> (Vec<Vec<arrange::FrettedNote>>, &'static str) {
+    if let Some(path) = model.filter(|_| fingering_net::supports(spec)) {
+        let ends: Vec<f64> = events.iter().map(|e| grid.tick_secs(e.end_tick)).collect();
+        match fingering_net::fret_events(path, events, &ends, spec) {
+            Ok(frets) => return (frets, fingering_net::ENGINE_NAME),
+            Err(e) => log::warn!("learned fingering failed, using the Viterbi: {e}"),
+        }
+    }
+    (
+        arrange::fret_events(events, spec),
+        fingering_net::VITERBI_ENGINE_NAME,
+    )
 }
 
 #[cfg(test)]
@@ -1098,6 +1140,7 @@ mod tests {
             artist,
             separate: false,
             guitar_model: Default::default(),
+            fingering: Default::default(),
             guitar: true,
             bass: false,
             output_dir: dir.join("repo"),
