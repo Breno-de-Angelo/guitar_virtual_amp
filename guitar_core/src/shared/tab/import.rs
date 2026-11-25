@@ -3,8 +3,9 @@
 
 use std::path::Path;
 
+use guitarpro::model::legacy::effects::BendEffect;
 use guitarpro::model::legacy::key_signature::Duration;
-use guitarpro::{BeatStatus, NoteType, Song};
+use guitarpro::{BeatStatus, BendType, NoteType, Song};
 
 use super::model::{
     FileSyncPoint, MasterBar, Score, ScoreTrack, TabBeat, TabNote, TrackBar, TICKS_PER_QUARTER,
@@ -161,6 +162,23 @@ fn guess_program(name: &str, tuning: &[u8]) -> u8 {
 }
 
 /// Ticks for a notated duration, applying dots and tuplets.
+/// Highest point of a bend, in quarter tones.
+fn bend_height(bend: Option<&BendEffect>) -> u8 {
+    bend.and_then(|b| b.points.iter().map(|p| p.value.max(0) as u8).max())
+        .unwrap_or(0)
+}
+
+/// The bend ends lower than its peak (a release).
+fn bend_releases(bend: Option<&BendEffect>) -> bool {
+    let Some(b) = bend else {
+        return false;
+    };
+    matches!(b.kind, BendType::BendRelease | BendType::PrebendRelease)
+        || b.points
+            .last()
+            .is_some_and(|p| (p.value.max(0) as u8) < bend_height(bend))
+}
+
 fn duration_ticks(d: &Duration) -> i64 {
     let value = d.value.max(1) as i64;
     let mut ticks = TICKS_PER_QUARTER * 4 / value;
@@ -291,6 +309,8 @@ fn score_from_song(mut song: Song, gpif_tunings: Option<Vec<Option<Vec<u8>>>>) -
                                 hammer: n.effect.hammer,
                                 slide: !n.effect.slides.is_empty(),
                                 bend: n.effect.bend.is_some(),
+                                bend_value: bend_height(n.effect.bend.as_ref()),
+                                bend_release: bend_releases(n.effect.bend.as_ref()),
                                 vibrato: n.effect.vibrato || beat.effect.vibrato,
                                 harmonic: n.effect.harmonic.is_some(),
                                 palm_mute: n.effect.palm_mute,

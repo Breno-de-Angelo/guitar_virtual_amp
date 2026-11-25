@@ -274,6 +274,37 @@ apps: Premium owner, 5 allow-listed users, `GET /search` capped at 10 results.
   Foscarin et al., "Beat This!" (ISMIR 2024); TART (2025, onset clustering, 30 ms minimum note,
   16th quantization); Fretting-Transformer (2025) and MIDI-to-Tab (ISMIR 2024) for fingering
   metrics; spotify/basic-pitch#190 for the Basic Pitch frame hop.
+- Techniques, meter changes, several guitars (built: `transcribe/techniques.rs`,
+  `beat_net::decode_downbeats`, `transcribe/stereo.rs`):
+  - Bends (with release), vibrato, slides and hammer-ons/pull-offs from Basic Pitch's contour
+    output on single-note lines (rules after Chen et al., ISMIR 2015, and TENT, TISMIR 2019;
+    split bends merged back), exported to GP5. Checked on synthetic tones only: GuitarSet has
+    19 annotated glides in the 60-excerpt set, too few to score. GuitarSet F1 unchanged (0.83);
+    on the crunch render, techniques on or off give the same 0.76.
+  - Bars of 2-7 beats from Beat This!'s downbeats by a bar-pointer Viterbi, so the meter can
+    change mid-song: GuitarSet bar lines aligned 56/60 -> 57/60.
+  - Pan split of the Demucs guitar stem (ADRess-style soft masks), parts that play the same
+    notes merged: on GuitarSet rhythm + lead stereo mixes (`eval_guitar_pairs`, 11 mixes per
+    layout), rhythm hard left + lead hard right gives 2 tracks in 10/11, rhythm F1 0.59 -> 0.71,
+    lead 0.40 -> 0.85; rhythm left + lead center 11/11, 0.55 -> 0.74 and 0.43 -> 0.88. A single
+    guitar half-panned or with a 300 ms stereo echo stays one track in 11/11, F1 unchanged.
+  - Distortion benchmark (`GVA_EVAL_TONE`): GuitarSet through the factory presets. Clean 0.83,
+    "Blues Crunch" 0.76, "Metal High Gain" 0.24 (Basic Pitch 0.32), with octave errors
+    3.8% -> 8.1% of notes, almost all an octave low. A rule raising notes struck with a twelfth
+    above them (distortion's difference tone) made clean and crunch worse and metal no better,
+    so it was dropped: this needs a model trained on distorted guitar.
+  - Real-recording benchmark (`eval_real`) is written but unmeasured: no GP8 files with
+    embedded audio on hand.
+- Real data and an electric-guitar model (built: `scripts/train/`, `eval_manifest`,
+  `backend/offline.rs`, `render_tones`): EGDB, Guitar-TECHS, IDMT-SMT-Guitar, GOAT, GuitarSet
+  and MUSDB18 backings turned into labelled benchmarks, label latency removed per recording
+  (`align_labels.py`: Guitar-TECHS 25-40 ms late, IDMT ~30 ms early, GOAT up to ±40 ms), and
+  the GAPS CRNN fine-tuned on electric guitar in many tones (4000 steps, RTX 4070 Laptop, ~1.5
+  h). On held-out data: metal render of GuitarSet 0.29 -> 0.63, EGDB Plexi 0.67 -> 0.81, GOAT
+  amp tones ~0.50 -> ~0.72, clean GuitarSet 0.87 -> 0.88; Guitar-TECHS excerpts 0.02 lower and
+  their band mixes 0.02-0.08 lower. Optional via `GVA_GUITAR_MODEL` until EGDB's license is
+  clear. Techniques measured on real labels: vibrato ~20-40% of labelled notes found, bends
+  35-56%, slides ~30% (often marked as legato), false alarms on plain notes 0-4%.
 - YouTube as audio source (built: `transcribe/youtube.rs`): search or link, ranked
   preselection (duration from Spotify), download with yt-dlp into a private cache, then the
   same pipeline. YouTube's ToS forbid downloading without permission, and Google Play bans
@@ -284,19 +315,23 @@ apps: Premium owner, 5 allow-listed users, `GET /search` capped at 10 results.
 - **YouTube**: batch from a Spotify playlist (search + transcribe every track missing a
   tab); show the match confidence and let the user confirm before downloading in batch
   mode; trim intros/outros of music videos against the Spotify duration.
-- **Real band-recording benchmark**: GP8 files with embedded audio and sync points give real
-  mixes with aligned tabs; collect a set and add it to `transcribe/eval.rs`.
-- **Rhythm**: meters other than 3/4 and 4/4 (6/8, 7/8, odd bars), tempo changes inside a song
-  (Beat This! already follows them, but the meter is global), 16th-note triplets and 32nds.
-- **Techniques**: bends, slides, hammer-ons/pull-offs, vibrato, palm mute from the pitch
-  contour output (model output 2) and onset strength.
-- **Several guitar tracks** (rhythm vs lead) by register/polyphony clustering; **drums**
-  (onset classification on the drum stem) and **vocal melody** tracks.
+- **Real band-recording benchmark**: collect GP8 files with embedded audio and sync points and
+  run `eval_real`; request GOAT (DI electric guitar with technique-annotated tabs, ISMIR 2025,
+  non-commercial); GOAT is now the technique benchmark.
+- **Rhythm**: compound meters are written as 2/4 or 6/4 with triplets, not 6/8; 16th-note
+  triplets and 32nds.
+- **Techniques**: palm mute and harmonics; tune the hammer-on attack threshold and the bend
+  rules on GOAT / Guitar-TECHS; a learned technique classifier (TART, 2026) if rules plateau.
+- **Several guitar tracks**: guitars in the same spot of the mix stay one track (needs a
+  separator for multiple guitars); try a RoFormer guitar model (MSST) against `htdemucs_6s`;
+  **drums** (onset classification on the drum stem) and **vocal melody** tracks.
 - **Fingering**: the string prior and weights come from GuitarSet + 10 tabs. A learned model
   (MIDI-to-Tab, Fretting-Transformer, or TART's audio-conditioned AudioFret, +4.8 points from
   timbre) needs weights we can ship; DadaGP-scale statistics would also help the prior.
-- **Guitar CRNN on distorted low riffs**: octave errors on 7/8-string metal; a fallback to Basic
-  Pitch for very low tunings, or a model fine-tuned on electric guitar (GOAT, EGDB).
+- **Electric-guitar model**: ship it (EGDB license, or retrain without EGDB on Guitar-TECHS +
+  GuitarSet renders), add NAM-capture renders, and train on band mixes (Demucs guitar stems of
+  labelled mixes) to fix the band-mix regression on Guitar-TECHS. A GOAT-trained research
+  model can't ship (non-commercial).
 - **Native Demucs** (ONNX via `ort` or demucs.cpp) so separation needs no Python and could
   run on Android; today Android can only transcribe from the mix.
 - **Tab editor** to fix transcriptions in the app, and **repository sync**: share tabs by

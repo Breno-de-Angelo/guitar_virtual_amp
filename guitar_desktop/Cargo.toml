@@ -2,6 +2,7 @@
 name = "guitar_desktop"
 version = "0.1.0"
 edition = "2024"
+license = "GPL-3.0-or-later"
 default-run = "guitar_desktop"
 
 [[bin]]
@@ -19,9 +20,13 @@ path = "src/bench_pedal_chain.rs"
 [[bin]]
 name = "transcribe"
 path = "src/transcribe.rs"
+[[bin]]
+name = "render_tones"
+path = "src/render_tones.rs"
 
 [dependencies]
 guitar_core = { path = "../guitar_core" }
 eframe = "0.32.1"
 crossbeam = "0.8.4"
 cpal = "0.18"
+hound = "3.5"

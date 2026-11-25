@@ -7,11 +7,57 @@
 //! sidecar keeps exact bar times for audio sync (see `shared::tab::repository`).
 
 use guitarpro::audio::midi::MidiChannel;
+use guitarpro::model::legacy::effects::{BendEffect, BendPoint};
 use guitarpro::model::legacy::key_signature::{Duration, TimeSignature};
 use guitarpro::model::legacy::mix_table::{MixTableChange, MixTableItem};
-use guitarpro::{Beat, BeatStatus, Measure, MeasureHeader, Note, NoteType, Song, Track, Voice};
+use guitarpro::{
+    Beat, BeatStatus, BendType, Measure, MeasureHeader, Note, NoteType, SlideType, Song, Track,
+    Voice,
+};
 
-use super::model::{Score, TICKS_PER_QUARTER, TabBeat};
+use super::model::{Score, TICKS_PER_QUARTER, TabBeat, TabNote};
+
+/// GP bend of a note: up to `bend_value` quarter tones (a whole step when
+/// unknown), held or released halfway through the note.
+fn bend_of(n: &TabNote) -> Option<BendEffect> {
+    if !n.bend {
+        return None;
+    }
+    let value = if n.bend_value > 0 {
+        n.bend_value as i8
+    } else {
+        4
+    };
+    let point = |position: u8, value: i8| BendPoint {
+        position,
+        value,
+        vibrato: false,
+    };
+    let (kind, points) = if n.bend_release {
+        (
+            BendType::BendRelease,
+            vec![
+                point(0, 0),
+                point(3, value),
+                point(6, value),
+                point(9, 0),
+                point(12, 0),
+            ],
+        )
+    } else {
+        (
+            BendType::Bend,
+            vec![point(0, 0), point(6, value), point(12, value)],
+        )
+    };
+    Some(BendEffect {
+        kind,
+        // GP's units: 100 per whole step, 25 per quarter tone.
+        value: value as i16 * 25,
+        points,
+        ..BendEffect::default()
+    })
+}
 
 fn duration_of(beat: &TabBeat) -> Duration {
     let mut duration = Duration {
@@ -155,6 +201,10 @@ pub fn score_to_gp5(score: &Score) -> Result<Vec<u8>, String> {
                             note.effect.ghost_note = n.ghost;
                             note.effect.staccato = n.staccato;
                             note.effect.vibrato = n.vibrato;
+                            note.effect.bend = bend_of(n);
+                            if n.slide {
+                                note.effect.slides = vec![SlideType::ShiftSlideTo];
+                            }
                             note
                         })
                         .collect();
@@ -270,6 +320,47 @@ mod tests {
                         ),
                     ]],
                 },
+                TrackBar {
+                    voices: vec![vec![
+                        beat(
+                            0,
+                            4,
+                            vec![TabNote {
+                                bend: true,
+                                bend_value: 4,
+                                ..note(2, 8)
+                            }],
+                        ),
+                        beat(
+                            960,
+                            4,
+                            vec![TabNote {
+                                bend: true,
+                                bend_value: 2,
+                                bend_release: true,
+                                vibrato: true,
+                                ..note(3, 7)
+                            }],
+                        ),
+                        beat(
+                            1920,
+                            4,
+                            vec![TabNote {
+                                slide: true,
+                                ..note(3, 5)
+                            }],
+                        ),
+                        beat(
+                            2880,
+                            8,
+                            vec![TabNote {
+                                hammer: true,
+                                ..note(3, 7)
+                            }],
+                        ),
+                        beat(3360, 8, vec![note(3, 9)]),
+                    ]],
+                },
                 TrackBar::default(),
             ],
             ..Default::default()
@@ -283,6 +374,7 @@ mod tests {
                 TrackBar {
                     voices: vec![vec![beat(0, 1, vec![note(4, 0)])]],
                 },
+                TrackBar::default(),
                 TrackBar::default(),
             ],
             ..Default::default()
@@ -304,6 +396,12 @@ mod tests {
                     tempo_changes: vec![(0, 98.0)],
                     ..Default::default()
                 },
+                MasterBar {
+                    numerator: 4,
+                    denominator: 4,
+                    tempo_changes: vec![(0, 98.0)],
+                    ..Default::default()
+                },
             ],
             tracks: vec![guitar, bass],
             ..Default::default()
@@ -317,7 +415,7 @@ mod tests {
         let back = load_score_bytes(&bytes, Some("gp5")).unwrap();
         assert_eq!(back.title, "Song");
         assert_eq!(back.artist, "Band");
-        assert_eq!(back.bars.len(), 2);
+        assert_eq!(back.bars.len(), 3);
         assert_eq!(back.tracks.len(), 2);
         let g = &back.tracks[0];
         assert_eq!(g.tuning, vec![64, 59, 55, 50, 45, 40]);
@@ -334,12 +432,27 @@ mod tests {
         // Tempos come back rounded, one per bar.
         assert_eq!(back.bars[0].tempo_changes.first().map(|t| t.1), Some(123.0));
         assert_eq!(back.bars[1].tempo_changes.first().map(|t| t.1), Some(98.0));
-        // The empty second bar is a full-bar rest.
+        // The empty bar of the bass is a full-bar rest.
         assert!(
-            back.tracks[0].bars[1].voices[0]
+            back.tracks[1].bars[1].voices[0]
                 .iter()
                 .all(|b| b.notes.is_empty())
         );
+    }
+
+    #[test]
+    fn techniques_round_trip() {
+        let back = load_score_bytes(&score_to_gp5(&sample()).unwrap(), Some("gp5")).unwrap();
+        let beats = &back.tracks[0].bars[1].voices[0];
+        let n = |i: usize| &beats[i].notes[0];
+        assert!(
+            n(0).bend && n(0).bend_value == 4 && !n(0).bend_release,
+            "{:?}",
+            n(0)
+        );
+        assert!(n(1).bend && n(1).bend_value == 2 && n(1).bend_release && n(1).vibrato);
+        assert!(n(2).slide && !n(2).bend);
+        assert!(n(3).hammer && !n(4).hammer);
     }
 
     #[test]

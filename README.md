@@ -39,9 +39,11 @@ desktop (Linux, Windows, macOS) and Android.
   artist, plus a factory preset picked from the track's instrument, name, tuning and palm
   muting. It's a starting point, not a copy of the recorded tone.
 - **Automatic tablature** from your own audio files, offline and open source: Demucs separates
-  guitar and bass, a guitar-trained model (or Basic Pitch) transcribes the notes, Beat This!
-  finds beats, bars and the meter, and the app picks rhythms, strings and frets, then saves a
-  Guitar Pro 5 file into a local tab repository. See below.
+  guitar and bass, guitars on different sides of the stereo mix become separate tracks, a
+  guitar-trained model (or Basic Pitch) transcribes the notes, the pitch contour marks bends,
+  vibrato, slides and hammer-ons, Beat This! finds beats and bars (the meter may change), and
+  the app picks rhythms, strings and frets, then saves a Guitar Pro 5 file into a local tab
+  repository. See below.
 - **Spotify** page: connect your account, browse your playlists, play a track on your Spotify
   app (Spotify Connect, Premium required) and open the matching tab from your own folder of
   Guitar Pro files (matched by file name, or linked by hand). See below.
@@ -143,21 +145,28 @@ download. Everything else runs on your computer:
 1. [Demucs](https://github.com/facebookresearch/demucs) `htdemucs_6s` (MIT) separates the
    guitar, bass and drum stems, using the GPU when PyTorch sees one. Optional: without it, the
    instruments are transcribed from the full mix.
-2. Beats, downbeats and the meter (4/4 or 3/4) come from
-   [Beat This!](https://github.com/CPJKU/beat_this) (MIT) on the mix. Without it, a simpler
-   tracker uses the drum stem (or the mix) and assumes 4/4.
-3. Guitar notes come from the guitar transcription model of
+2. Beats and downbeats come from [Beat This!](https://github.com/CPJKU/beat_this) (MIT) on
+   the mix; bars of 2 to 7 beats are decoded from its downbeats, so a song can switch meter or
+   insert a 2/4 bar. Without it, a simpler tracker uses the drum stem (or the mix) and assumes
+   4/4.
+3. With Demucs, the stereo guitar stem is split by pan position (left, center, right). Parts
+   that play different things (say, rhythm on the left and lead in the middle) become separate
+   guitar tracks; parts that play the same notes (one guitar panned halfway, a double-tracked
+   part, a stereo delay) stay one.
+4. Guitar notes come from the guitar transcription model of
    [Riley et al. (GAPS, ISMIR 2024)](https://arxiv.org/abs/2408.08653) (MIT), bass notes (and
    guitar notes when that model isn't installed) from
    [Basic Pitch](https://github.com/spotify/basic-pitch) (Apache-2.0, bundled in
    `guitar_core/assets/models/`). All models run in pure Rust with
-   [tract](https://github.com/sonos/tract).
-4. Notes struck together become chords; every beat is written as 16ths or 8th-note triplets,
+   [tract](https://github.com/sonos/tract). Basic Pitch's pitch contour (a third of a semitone
+   resolution) then marks bends and releases, vibrato, slides and hammer-ons/pull-offs on
+   single-note lines, and merges bends the note model split in two.
+5. Notes struck together become chords; every beat is written as 16ths or 8th-note triplets,
    whichever fits the timing; strings and frets come from a cost on stretch, hand moves and
    muted strings plus how often guitarists use each string for a pitch (learned from
-   GuitarSet); a tuning is picked from the lowest notes (standard, Eb, drop D, drop C, 7 and 8
-   strings).
-5. The result goes to the tab repository, `<data dir>/guitar_virtual_amp/tab_repository/`:
+   GuitarSet); slides and hammer-ons stay on one string and bent notes off open strings; a
+   tuning is picked from the lowest notes (standard, Eb, drop D, drop C, 7 and 8 strings).
+6. The result goes to the tab repository, `<data dir>/guitar_virtual_amp/tab_repository/`:
    `Artist - Title.gp5` (opens in Guitar Pro, TuxGuitar, MuseScore) plus `Artist - Title.gvtab.json`
    with the source audio's SHA-256, the engines used and the time of every bar, which the tab
    player uses to play the original recording in sync. Audio is never copied into the repository.
@@ -183,16 +192,41 @@ cargo run --release -p guitar_desktop --bin transcribe -- --help
 ```
 
 Measured quality (note onset within 80 ms and exact pitch, F1, on the final tab), with the
-optional models installed: 0.83 median on 60 real solo acoustic guitar recordings from
-[GuitarSet](https://zenodo.org/records/3371780) (0.70 with the previous pipeline; tempo right in 59 of 60, bar
-lines on the right beat in 56 of 60); 0.85 on isolated guitar tracks rendered from Guitar Pro
-files; 0.68 on SoundFont-rendered full mixes without separation. Given the right notes, 75% land
-on the same string as the GuitarSet player (held-out players). Not measured yet on real band
-recordings. Expect to fix the tab by hand: no techniques (bends, slides, hammer-ons), one guitar
-track even when the song has several, only 4/4 and 3/4, and the guitar model makes octave
-errors on very low distorted riffs (7/8-string metal). The benchmarks are ignored tests in
+optional models installed:
+
+| Benchmark | F1 |
+|---|---|
+| [GuitarSet](https://zenodo.org/records/3371780), 60 real solo acoustic recordings (tempo right in 59, bar lines on the beat in 57) | 0.83 |
+| Same recordings through the "Blues Crunch" preset | 0.76 |
+| Same recordings through the "Metal High Gain" preset (8% octave errors, mostly an octave low) | 0.24 |
+| Isolated guitar tracks rendered from Guitar Pro files | 0.85 |
+| SoundFont-rendered full mixes without separation | 0.68 |
+| Two GuitarSet guitars in one stereo mix (rhythm + lead), lead part | 0.85-0.88 (0.40-0.43 as one track) |
+
+Given the right notes, 75% land on the same string as the GuitarSet player (held-out
+players). Expect to fix the tab by hand: no palm mute or harmonics, guitars playing different
+parts from the same spot of the mix stay one track, and heavy distortion breaks the default
+guitar model (see the metal row). The benchmarks are ignored tests in
 `guitar_core/src/transcribe/eval.rs` (`eval_guitarset`, `eval_transcription`,
-`eval_fingering`).
+`eval_fingering`, `eval_real`, `eval_guitar_pairs`, `eval_manifest`).
+
+**Electric guitar model (optional, local).** `scripts/train/` fine-tunes the guitar model on
+electric guitar (EGDB, Guitar-TECHS, GuitarSet players 00-02, rendered through the app's amp
+presets); point `GVA_GUITAR_MODEL` at the exported `.onnx` to use it. Raw note F1, original
+model -> fine-tuned, on recordings it never saw:
+
+| Test set | Original | Fine-tuned |
+|---|---|---|
+| GuitarSet players 03-05, clean / "Blues Crunch" / "Metal High Gain" | 0.87 / 0.80 / 0.29 | 0.88 / 0.84 / 0.63 |
+| EGDB, Plexi amp (unseen tone) | 0.67 | 0.81 |
+| GOAT test split (ISMIR 2025), DI / 5 amp tones | 0.76 / 0.48-0.63 | 0.81 / 0.68-0.75 |
+| IDMT-SMT-Guitar licks (bends, slides, vibrato, harmonics) | 0.86 | 0.88 |
+| Guitar-TECHS musical excerpts, DI / miked amp | 0.83 / 0.80 | 0.81 / 0.78 |
+| Band mixes (labelled guitar over MUSDB18 drums, bass, vocals), EGDB Marshall | 0.75 | 0.81 |
+| Band mixes, Guitar-TECHS excerpts | 0.71 / 0.64 | 0.63 / 0.62 |
+
+It isn't the default yet: EGDB states no license, so ask its authors before distributing a
+model trained on it. See `scripts/train/README.md`.
 
 ## Spotify
 
@@ -223,3 +257,14 @@ deletes it, and [spotify.com/account/apps](https://www.spotify.com/account/apps)
 
 See [ROADMAP.md](ROADMAP.md): a mobile-friendly UI redesign, MIDI/footswitch control and online
 preset sharing are planned.
+
+## License
+
+Copyright (C) 2025-2026 Breno de Angelo.
+
+This program is free software: you can redistribute it and/or modify it under the terms of the
+GNU General Public License as published by the Free Software Foundation, either version 3 of the
+License, or (at your option) any later version. See [LICENSE](LICENSE).
+
+Bundled and optional third-party models keep their own licenses: Basic Pitch (Apache-2.0, see
+`guitar_core/assets/models/`), the GAPS guitar model and Beat This! (MIT), Demucs (MIT).

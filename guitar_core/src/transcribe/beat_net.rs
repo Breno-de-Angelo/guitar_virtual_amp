@@ -4,14 +4,16 @@
 //! guitar, where the spectral-flux tracker in [`super::beats`] has no drums
 //! to lock to. Runs the `small0` checkpoint (ONNX conversion from
 //! `nilsbc/beat-this-onnx`) with its log-mel front end in tract.
-//! `scripts/install_guitar_model.sh` downloads both into the models folder;
+//! `scripts/install_transcription_models.sh` downloads both into the models folder;
 //! without them the pipeline keeps the DSP tracker.
 //!
 //! The network gives beat and downbeat logits at 50 frames per second. Beats
 //! are its peaks (the paper's "minimal" post-processing, no DBN), repaired
 //! into a regular sequence: missing beats are filled in and doubled ones
-//! dropped, since the tab needs every beat. The meter (3 or 4 beats per
-//! bar) and the bar phase come from the downbeat logits.
+//! dropped, since the tab needs every beat. Bars come from the downbeat
+//! logits through a bar-pointer Viterbi over 2 to 7 beats per bar, so the
+//! meter can change within a song (Beat This! itself was trained on music
+//! with time-signature changes and assumes no meter).
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
@@ -19,7 +21,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use tract_onnx::prelude::*;
 
-use super::guitar_crnn::default_model_path;
+use super::guitar_crnn::models_dir;
 
 pub const SAMPLE_RATE: u32 = 22_050;
 pub const FRAME_RATE: f64 = 50.0;
@@ -35,7 +37,8 @@ pub const ENGINE_NAME: &str = "beat-this small0 (tract)";
 pub fn find_models() -> Option<(PathBuf, PathBuf)> {
     let dir = match std::env::var("GVA_BEAT_MODEL_DIR") {
         Ok(d) => PathBuf::from(d),
-        Err(_) => default_model_path()?.parent()?.to_path_buf(),
+        // Not next to `GVA_GUITAR_MODEL`: that may point at a custom model.
+        Err(_) => models_dir()?,
     };
     let (front, net) = (dir.join(FRONTEND_FILE), dir.join(MODEL_FILE));
     (front.is_file() && net.is_file()).then_some((front, net))
@@ -244,9 +247,8 @@ pub fn regularize(beats: &[f64], logits: &[f32]) -> Vec<f64> {
 pub struct BeatTrack {
     /// Beat times in seconds.
     pub beats: Vec<f64>,
-    pub beats_per_bar: usize,
-    /// Index into `beats` of the first downbeat (`< beats_per_bar`).
-    pub phase: usize,
+    /// Indices into `beats` of the downbeats, ascending.
+    pub downbeats: Vec<usize>,
 }
 
 impl BeatTrack {
@@ -256,44 +258,106 @@ impl BeatTrack {
     }
 }
 
-/// Meter and bar phase: the `(beats per bar, phase)` whose downbeat
-/// positions get the highest mean downbeat probability above the other
-/// beats. 3/4 has to be clearly better than 4/4 to be chosen.
-pub fn meter(beat_frames: &[f64], downbeat_logits: &[f32]) -> (usize, usize) {
-    let prob = |f: f64| {
-        let i = f.round() as isize;
-        // Best logit within ±2 frames: downbeat peaks can sit a frame off.
-        (i - 2..=i + 2)
-            .filter_map(|j| usize::try_from(j).ok())
-            .filter_map(|j| downbeat_logits.get(j))
-            .fold(-1000f32, |m, v| m.max(*v))
-            .clamp(-30.0, 30.0)
-    };
-    let probs: Vec<f64> = beat_frames
+/// Bar lengths the decoder considers, with their cost per bar (in nats):
+/// 4/4 is the default, 3/4 is common, 2/4 bars are the usual inserted half
+/// bars, 5, 6 and 7 are rarer.
+const METERS: [(usize, f64); 6] = [(4, 0.0), (3, 0.4), (2, 1.6), (6, 1.8), (5, 2.4), (7, 2.4)];
+/// Cost of a bar whose length differs from the previous bar's.
+const METER_CHANGE: f64 = 3.0;
+
+/// Downbeat probability at each beat: the best logit within ±2 frames
+/// (downbeat peaks can sit a frame off), through a sigmoid.
+fn downbeat_probs(beat_frames: &[f64], downbeat_logits: &[f32]) -> Vec<f64> {
+    beat_frames
         .iter()
-        .map(|&f| 1.0 / (1.0 + (-prob(f) as f64).exp()))
+        .map(|&f| {
+            let i = f.round() as isize;
+            let logit = (i - 2..=i + 2)
+                .filter_map(|j| usize::try_from(j).ok())
+                .filter_map(|j| downbeat_logits.get(j))
+                .fold(-1000f32, |m, v| m.max(*v))
+                .clamp(-30.0, 30.0);
+            1.0 / (1.0 + (-logit as f64).exp())
+        })
+        .collect()
+}
+
+/// Downbeats among the beats: a bar-pointer Viterbi over beats whose state
+/// is (bar length, position in the bar). The network's probability `p` is
+/// scored against the song's mean `q`: a downbeat pays `-ln(p / q)`, any
+/// other beat `-ln((1 - p) / (1 - q))`, so beats the network can't tell
+/// apart cost nothing either way and the meter prior decides. Each bar pays
+/// its length's cost from [`METERS`], plus [`METER_CHANGE`] when the length
+/// changes. The first bar may start mid-bar (a pickup). Returns beat
+/// indices.
+pub fn decode_downbeats(probs: &[f64]) -> Vec<usize> {
+    let n = probs.len();
+    if n == 0 {
+        return Vec::new();
+    }
+    let states: Vec<(usize, usize, f64)> = METERS
+        .iter()
+        .flat_map(|&(m, cost)| (0..m).map(move |k| (m, k, cost)))
         .collect();
-    let mut best = (4, 0, f64::MIN);
-    for m in [4usize, 3] {
-        for phase in 0..m {
-            let (mut on, mut n_on, mut off, mut n_off) = (0.0, 0, 0.0, 0);
-            for (i, p) in probs.iter().enumerate() {
-                if i % m == phase {
-                    on += p;
-                    n_on += 1;
-                } else {
-                    off += p;
-                    n_off += 1;
+    let clamp = |p: f64| p.clamp(0.02, 0.98);
+    let q = (probs.iter().map(|&p| clamp(p)).sum::<f64>() / n as f64).clamp(0.05, 0.5);
+    let emit = |i: usize, k: usize| {
+        let p = clamp(probs[i]);
+        if k == 0 {
+            -(p / q).ln()
+        } else {
+            -((1.0 - p) / (1.0 - q)).ln()
+        }
+    };
+    let mut cost: Vec<f64> = states.iter().map(|&(_, k, c)| c + emit(0, k)).collect();
+    let mut back: Vec<Vec<usize>> = Vec::with_capacity(n);
+    back.push(vec![usize::MAX; states.len()]);
+    for i in 1..n {
+        let mut next = vec![f64::INFINITY; states.len()];
+        let mut from = vec![usize::MAX; states.len()];
+        for (s, &(m, k, bar_cost)) in states.iter().enumerate() {
+            if k > 0 {
+                // Inside a bar: only from the previous position.
+                let prev = states
+                    .iter()
+                    .position(|&(pm, pk, _)| pm == m && pk == k - 1)
+                    .unwrap();
+                next[s] = cost[prev];
+                from[s] = prev;
+            } else {
+                // A new bar: from the last beat of any bar.
+                for (prev, &(pm, pk, _)) in states.iter().enumerate() {
+                    if pk + 1 != pm {
+                        continue;
+                    }
+                    let change = if pm == m { 0.0 } else { METER_CHANGE };
+                    let c = cost[prev] + bar_cost + change;
+                    if c < next[s] {
+                        next[s] = c;
+                        from[s] = prev;
+                    }
                 }
             }
-            let contrast = on / n_on.max(1) as f64 - off / n_off.max(1) as f64;
-            let score = if m == 4 { contrast } else { contrast - 0.1 };
-            if score > best.2 {
-                best = (m, phase, score);
-            }
+            next[s] += emit(i, k);
+        }
+        cost = next;
+        back.push(from);
+    }
+    let mut s = (0..states.len())
+        .min_by(|a, b| cost[*a].total_cmp(&cost[*b]))
+        .unwrap();
+    let mut downbeats = Vec::new();
+    for i in (0..n).rev() {
+        if states[s].1 == 0 {
+            downbeats.push(i);
+        }
+        s = back[i][s];
+        if s == usize::MAX {
+            break;
         }
     }
-    (best.0, best.1)
+    downbeats.reverse();
+    downbeats
 }
 
 /// Beats and bars of `audio` (mono, [`SAMPLE_RATE`]).
@@ -309,11 +373,10 @@ pub fn track(
 
 pub fn track_from_activations(act: &Activations) -> BeatTrack {
     let frames = regularize(&peaks(&act.beat), &act.beat);
-    let (beats_per_bar, phase) = meter(&frames, &act.downbeat);
+    let downbeats = decode_downbeats(&downbeat_probs(&frames, &act.downbeat));
     BeatTrack {
         beats: frames.iter().map(|f| f / FRAME_RATE).collect(),
-        beats_per_bar,
-        phase: phase.min(frames.len().saturating_sub(1)),
+        downbeats,
     }
 }
 
@@ -359,17 +422,54 @@ mod tests {
         }
     }
 
+    /// Bar lengths between consecutive downbeats.
+    fn lengths(downbeats: &[usize]) -> Vec<usize> {
+        downbeats.windows(2).map(|w| w[1] - w[0]).collect()
+    }
+
     #[test]
-    fn meter_and_phase_follow_the_downbeat_logits() {
+    fn bars_follow_the_downbeat_logits() {
         let beats: Vec<f64> = (0..24).map(|i| 5.0 + i as f64 * 25.0).collect();
         let n = 700;
-        // Downbeats on beats 1, 5, 9... (phase 1 in 4/4).
-        let four = pulses(n, 100, 30, 3.0);
-        assert_eq!(meter(&beats, &four), (4, 1));
+        // Downbeats on beats 1, 5, 9... (4/4 after a one-beat pickup).
+        let four = decode_downbeats(&downbeat_probs(&beats, &pulses(n, 100, 30, 3.0)));
+        assert_eq!(four[0], 1, "{four:?}");
+        assert!(lengths(&four).iter().all(|&l| l == 4), "{four:?}");
         // Every third beat from beat 2: 3/4.
-        let three = pulses(n, 75, 55, 3.0);
-        assert_eq!(meter(&beats, &three), (3, 2));
+        let three = decode_downbeats(&downbeat_probs(&beats, &pulses(n, 75, 55, 3.0)));
+        assert_eq!(three[0], 2, "{three:?}");
+        assert!(lengths(&three).iter().all(|&l| l == 3), "{three:?}");
         // No downbeat information at all: 4/4.
-        assert_eq!(meter(&beats, &vec![-10.0; n]).0, 4);
+        let none = decode_downbeats(&downbeat_probs(&beats, &vec![-10.0; n]));
+        assert!(lengths(&none).iter().all(|&l| l == 4), "{none:?}");
+    }
+
+    #[test]
+    fn the_meter_can_change_mid_song() {
+        // Four bars of 4/4, one 2/4 bar, then four bars of 3/4 (the kind of
+        // turnaround the old single-meter choice wrote as shifted 4/4 bars).
+        let mut lens = vec![4, 4, 4, 4, 2];
+        lens.extend([3, 3, 3, 3]);
+        let mut probs = Vec::new();
+        for &l in &lens {
+            probs.push(0.9);
+            probs.extend(std::iter::repeat_n(0.1, l - 1));
+        }
+        let downbeats = decode_downbeats(&probs);
+        assert_eq!(downbeats[0], 0);
+        assert_eq!(lengths(&downbeats), lens[..lens.len() - 1].to_vec());
+        assert_eq!(*downbeats.last().unwrap(), probs.len() - 3);
+    }
+
+    #[test]
+    fn one_unclear_downbeat_does_not_change_the_meter() {
+        // 4/4 with weak downbeats and one strong beat 3 in the middle.
+        let mut probs: Vec<f64> = (0..40)
+            .map(|i| if i % 4 == 0 { 0.7 } else { 0.2 })
+            .collect();
+        probs[18] = 0.8;
+        probs[16] = 0.3;
+        let downbeats = decode_downbeats(&probs);
+        assert!(lengths(&downbeats).iter().all(|&l| l == 4), "{downbeats:?}");
     }
 }

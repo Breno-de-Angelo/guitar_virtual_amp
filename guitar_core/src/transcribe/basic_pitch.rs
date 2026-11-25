@@ -25,6 +25,10 @@ const PITCHES: usize = 88;
 const LOWEST_MIDI: u8 = 21;
 const ONSET_OUTPUT: usize = 0;
 const NOTE_OUTPUT: usize = 1;
+const CONTOUR_OUTPUT: usize = 2;
+/// Pitch salience bins: 3 per semitone from A0 (bin 0 = MIDI 21).
+pub const CONTOUR_BINS: usize = PITCHES * BINS_PER_SEMITONE;
+pub const BINS_PER_SEMITONE: usize = 3;
 /// Hop of the model's CQT, in samples.
 const FFT_HOP: usize = 256;
 /// Frames per second of the posteriors.
@@ -54,6 +58,9 @@ pub struct Posteriors {
     pub times: Vec<f64>,
     pub onsets: Vec<[f32; PITCHES]>,
     pub frames: Vec<[f32; PITCHES]>,
+    /// Pitch salience at 1/3-semitone resolution ([`CONTOUR_BINS`]), which
+    /// follows bends, slides and vibrato that the note posteriors round off.
+    pub contours: Vec<[f32; CONTOUR_BINS]>,
 }
 
 /// Runs the model over `audio` (mono, [`SAMPLE_RATE`]). `progress` gets
@@ -91,6 +98,9 @@ pub fn posteriors(
         let frames = result[NOTE_OUTPUT]
             .to_plain_array_view::<f32>()
             .map_err(|e| e.to_string())?;
+        let contours = result[CONTOUR_OUTPUT]
+            .to_plain_array_view::<f32>()
+            .map_err(|e| e.to_string())?;
         let mut out = Posteriors::default();
         for k in OVERLAP_FRAMES / 2..FRAMES - OVERLAP_FRAMES / 2 {
             let t = (start as f64 + k as f64 * frame_samples - (OVERLAP / 2) as f64)
@@ -101,6 +111,8 @@ pub fn posteriors(
             out.times.push(t);
             out.onsets.push(std::array::from_fn(|p| onsets[[0, k, p]]));
             out.frames.push(std::array::from_fn(|p| frames[[0, k, p]]));
+            out.contours
+                .push(std::array::from_fn(|b| contours[[0, k, b]]));
         }
         Ok(out)
     };
@@ -110,6 +122,7 @@ pub fn posteriors(
         out.times.extend(part.times);
         out.onsets.extend(part.onsets);
         out.frames.extend(part.frames);
+        out.contours.extend(part.contours);
     }
     Ok(out)
 }
@@ -289,6 +302,7 @@ mod tests {
             times: (0..n).map(|i| i as f64 / FRAME_RATE).collect(),
             onsets: vec![[0.0; PITCHES]; n],
             frames: vec![[0.0; PITCHES]; n],
+            contours: Vec::new(),
         };
         post.onsets[10][24] = 0.9;
         for f in &mut post.frames[10..40] {

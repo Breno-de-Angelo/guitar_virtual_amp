@@ -7,7 +7,7 @@
 //! GuitarSet it reaches ~88% note F1 (50 ms), against ~66% for Basic Pitch
 //! on unseen guitar data.
 //!
-//! The model is too big to bundle (~99 MB): `scripts/install_guitar_model.sh`
+//! The model is too big to bundle (~99 MB): `scripts/install_transcription_models.sh`
 //! downloads the PyTorch checkpoint and exports it to ONNX (log-mel front
 //! end included) at [`default_model_path`]. When it isn't there, the
 //! pipeline falls back to Basic Pitch.
@@ -50,7 +50,13 @@ pub fn default_model_path() -> Option<PathBuf> {
     if let Ok(path) = std::env::var("GVA_GUITAR_MODEL") {
         return Some(PathBuf::from(path));
     }
-    app_data_dir().map(|d| d.join("tools").join("models").join(MODEL_FILE))
+    models_dir().map(|d| d.join(MODEL_FILE))
+}
+
+/// Where `scripts/install_transcription_models.sh` puts the optional
+/// models (the guitar CRNN, Beat This!).
+pub fn models_dir() -> Option<PathBuf> {
+    app_data_dir().map(|d| d.join("tools").join("models"))
 }
 
 /// The installed model, if any.

@@ -4,12 +4,13 @@
 //! 1. decode the file (Symphonia) and hash it;
 //! 2. separate guitar and bass with Demucs `htdemucs_6s`, when installed
 //!    ([`separation`]); otherwise transcribe from the mix;
-//! 3. track beats, downbeats and the meter (3/4 or 4/4) with Beat This!
-//!    ([`beat_net`]), or with the spectral-flux tracker in 4/4 ([`beats`])
-//!    when that model isn't installed;
+//! 3. track beats and downbeats with Beat This! ([`beat_net`]; bars of 2 to
+//!    7 beats, the meter may change mid-song), or with the spectral-flux
+//!    tracker in 4/4 ([`beats`]) when that model isn't installed;
 //! 4. transcribe the guitar with the guitar-trained CRNN ([`guitar_crnn`],
 //!    optional) or Basic Pitch, and the bass with Basic Pitch
-//!    ([`basic_pitch`]);
+//!    ([`basic_pitch`]); read bends, vibrato, slides and hammer-ons from
+//!    Basic Pitch's pitch contour ([`techniques`]);
 //! 5. group chords, quantize each beat to 16ths or 8th triplets, pick
 //!    strings/frets (Viterbi over hand positions with a prior learned from
 //!    guitarists) and lay out bars ([`arrange`]);
@@ -17,9 +18,13 @@
 //!    (`shared::tab::repository`).
 //!
 //! The optional models come from `scripts/install_transcription_models.sh`.
-//! Everything is blocking; run it on a worker thread. Limits: no techniques
-//! (bends, slides...), one guitar track even when the song has several
-//! guitars, no drums/vocals, one meter per song.
+//! With Demucs, the stereo guitar stem is also split by pan position
+//! ([`stereo`]): guitars on different sides of the mix that play different
+//! parts become separate tracks.
+//!
+//! Everything is blocking; run it on a worker thread. Limits: guitars
+//! playing different parts from the same spot of the mix stay one track
+//! guitars, no drums/vocals, no palm muting or harmonics.
 
 pub mod arrange;
 pub mod basic_pitch;
@@ -30,6 +35,8 @@ mod eval;
 pub mod guitar_crnn;
 pub mod resample;
 pub mod separation;
+pub mod stereo;
+pub mod techniques;
 pub mod youtube;
 
 use std::path::{Path, PathBuf};
@@ -64,6 +71,7 @@ pub enum Stage {
     Separating,
     Beats,
     Guitar,
+    Techniques,
     Bass,
     Saving,
 }
@@ -76,6 +84,7 @@ impl Stage {
             Stage::Separating => "Separando instrumentos (Demucs)",
             Stage::Beats => "Detectando andamento e compassos",
             Stage::Guitar => "Transcrevendo a guitarra",
+            Stage::Techniques => "Detectando bends, slides e vibratos",
             Stage::Bass => "Transcrevendo o baixo",
             Stage::Saving => "Gravando a tab",
         }
@@ -88,7 +97,8 @@ impl Stage {
             Stage::Downloading | Stage::Decoding => (0.0, 0.05),
             Stage::Separating => (0.05, sep),
             Stage::Beats => (0.05 + sep, 0.05),
-            Stage::Guitar => (0.10 + sep, (0.85 - sep) * 0.6),
+            Stage::Guitar => (0.10 + sep, (0.85 - sep) * 0.45),
+            Stage::Techniques => (0.10 + sep + (0.85 - sep) * 0.45, (0.85 - sep) * 0.15),
             Stage::Bass => (0.10 + sep + (0.85 - sep) * 0.6, (0.85 - sep) * 0.4),
             Stage::Saving => (0.95, 0.05),
         }
@@ -109,8 +119,11 @@ pub struct Output {
     pub score: Score,
     /// True when the same audio had been transcribed before and was redone.
     pub replaced: bool,
-    /// Guitar notes as transcribed, before quantization (audio time).
+    /// Notes of the first guitar track as transcribed, before quantization
+    /// (audio time).
     pub guitar_notes: Vec<NoteEstimate>,
+    /// Techniques of `guitar_notes`, index for index.
+    pub guitar_techniques: Vec<techniques::Technique>,
 }
 
 /// Splits "Artist - Title" file names; otherwise the whole stem is the title.
@@ -296,6 +309,8 @@ fn prune_weak(notes: Vec<NoteEstimate>, ratio: f32, overtone_ratio: f32) -> Vec<
     kept
 }
 
+/// Notes of a stem, plus Basic Pitch's posteriors when that was the engine
+/// (their contour serves technique detection).
 fn transcribe_stem(
     audio: &Mono,
     engine: &Engine,
@@ -303,23 +318,23 @@ fn transcribe_stem(
     separating: bool,
     progress: &mut dyn FnMut(Progress),
     cancel: &AtomicBool,
-) -> Result<Vec<NoteEstimate>, String> {
+) -> Result<(Vec<NoteEstimate>, Option<basic_pitch::Posteriors>), String> {
     #[cfg(test)]
     let cached = eval::cached_notes(audio, engine);
     #[cfg(not(test))]
     let cached = None;
-    let notes = match cached {
-        Some(notes) => notes,
+    let (notes, post) = match cached {
+        Some(notes) => (notes, None),
         None => {
-            let notes =
+            let (notes, post) =
                 transcribe_stem_uncached(audio, engine, stage, separating, progress, cancel)?;
             #[cfg(test)]
             eval::cache_notes(audio, engine, &notes);
-            notes
+            (notes, post)
         }
     };
     let (ratio, overtone_ratio) = engine.pruning();
-    Ok(prune_weak(notes, ratio, overtone_ratio))
+    Ok((prune_weak(notes, ratio, overtone_ratio), post))
 }
 
 fn transcribe_stem_uncached(
@@ -329,7 +344,7 @@ fn transcribe_stem_uncached(
     separating: bool,
     progress: &mut dyn FnMut(Progress),
     cancel: &AtomicBool,
-) -> Result<Vec<NoteEstimate>, String> {
+) -> Result<(Vec<NoteEstimate>, Option<basic_pitch::Posteriors>), String> {
     let (base, share) = stage.span(separating);
     let mut report = |p: f32| {
         progress(Progress {
@@ -341,7 +356,8 @@ fn transcribe_stem_uncached(
         Engine::BasicPitch(params) => {
             let post =
                 basic_pitch::posteriors(&audio.at(basic_pitch::SAMPLE_RATE), &mut report, cancel)?;
-            Ok(basic_pitch::extract_notes(&post, params))
+            let notes = basic_pitch::extract_notes(&post, params);
+            Ok((notes, Some(post)))
         }
         Engine::GuitarCrnn(path, params) => {
             let post = guitar_crnn::posteriors(
@@ -350,9 +366,237 @@ fn transcribe_stem_uncached(
                 &mut report,
                 cancel,
             )?;
-            Ok(guitar_crnn::extract_notes(&post, params))
+            Ok((guitar_crnn::extract_notes(&post, params), None))
         }
     }
+}
+
+/// A pan part needs this share of the guitar stem's energy to be
+/// transcribed on its own.
+const MIN_PART_SHARE: f32 = 0.12;
+/// Parts whose transcriptions agree this much (note F1) are one guitar
+/// (double-tracked, or one guitar panned between two parts).
+const SAME_PART_F1: f64 = 0.5;
+
+/// Longest echo between two pan parts that still counts as one guitar (a
+/// stereo or ping-pong delay puts late copies of its notes on one side).
+const MAX_ECHO_SECS: f64 = 0.8;
+
+/// Note F1 between two transcriptions (same pitch, onsets within 50 ms),
+/// with `b` shifted by `lag` seconds.
+fn agreement_at(a: &[NoteEstimate], b: &[NoteEstimate], lag: f64) -> f64 {
+    // `b` sorted by start: binary search the 50 ms window of each note.
+    let mut used = vec![false; b.len()];
+    let mut hits = 0usize;
+    for n in a {
+        let t = n.start + lag;
+        let from = b.partition_point(|m| m.start < t - 0.05);
+        if let Some(j) = (from..b.len())
+            .take_while(|&j| b[j].start <= t + 0.05)
+            .find(|&j| !used[j] && b[j].pitch == n.pitch)
+        {
+            used[j] = true;
+            hits += 1;
+        }
+    }
+    2.0 * hits as f64 / (a.len() + b.len()).max(1) as f64
+}
+
+/// How much two transcriptions are the same playing: the best note F1
+/// over echoes of `b` up to [`MAX_ECHO_SECS`] late.
+fn agreement(a: &[NoteEstimate], b: &[NoteEstimate]) -> f64 {
+    let mut b = b.to_vec();
+    b.sort_by(|x, y| x.start.total_cmp(&y.start));
+    (0..=(MAX_ECHO_SECS * 100.0) as usize)
+        .map(|k| agreement_at(a, &b, k as f64 * 0.01))
+        .fold(0.0, f64::max)
+}
+
+/// Share of a part's note onsets that are chords (2+ notes together).
+fn chord_share(notes: &[NoteEstimate]) -> f64 {
+    let chorded = notes
+        .iter()
+        .filter(|n| {
+            notes
+                .iter()
+                .any(|o| !std::ptr::eq(*n, o) && (o.start - n.start).abs() < 0.035)
+        })
+        .count();
+    chorded as f64 / notes.len().max(1) as f64
+}
+
+/// A transcribed guitar part.
+struct GuitarPart {
+    notes: Vec<NoteEstimate>,
+    techniques: Vec<techniques::Technique>,
+    side: Option<stereo::Side>,
+    share: f32,
+}
+
+/// Pan split on, unless `GVA_SPLIT_GUITARS=0`.
+fn split_enabled() -> bool {
+    std::env::var("GVA_SPLIT_GUITARS").map_or(true, |v| v != "0")
+}
+
+/// Progress of part `k` of `count` inside `stage`'s span.
+fn part_progress<'a>(
+    progress: &'a mut dyn FnMut(Progress),
+    separating: bool,
+    k: usize,
+    count: usize,
+) -> impl FnMut(Progress) + 'a {
+    move |p: Progress| {
+        let (base, share) = p.stage.span(separating);
+        let f = if share > 0.0 {
+            ((p.overall - base) / share).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        progress(Progress {
+            stage: p.stage,
+            overall: base + share * (k as f32 + f) / count.max(1) as f32,
+        })
+    }
+}
+
+/// Notes and techniques of the guitar: one part from `audio`, or, given
+/// the stereo stem, one per pan region with its own share of the stem
+/// (left, center, right). Regions whose notes agree are one guitar and
+/// keep only the loudest; regions with few notes are bleed. Returns the
+/// parts with the most chorded first (the rhythm guitar).
+fn transcribe_guitars(
+    audio: &Mono,
+    stereo_stem: Option<&crate::backend::audio_file::DecodedStereo>,
+    engine: &Engine,
+    separating: bool,
+    progress: &mut dyn FnMut(Progress),
+    cancel: &AtomicBool,
+) -> Result<Vec<GuitarPart>, String> {
+    let candidates: Vec<(Mono, Option<stereo::Side>, f32)> = match stereo_stem {
+        Some(st) if !st.mono_source && split_enabled() => {
+            let parts: Vec<_> = stereo::split_by_pan(&st.left, &st.right)
+                .into_iter()
+                .filter(|p| p.share >= MIN_PART_SHARE)
+                .collect();
+            if parts.len() >= 2 {
+                parts
+                    .into_iter()
+                    .map(|p| {
+                        let mono = Mono {
+                            samples: p.samples,
+                            rate: st.sample_rate,
+                        };
+                        (mono, Some(p.side), p.share)
+                    })
+                    .collect()
+            } else {
+                Vec::new()
+            }
+        }
+        _ => Vec::new(),
+    };
+    if candidates.is_empty() {
+        let (notes, post) =
+            transcribe_stem(audio, engine, Stage::Guitar, separating, progress, cancel)?;
+        let (notes, techniques) =
+            detect_techniques(audio, notes, post, separating, progress, cancel)?;
+        return Ok(vec![GuitarPart {
+            notes,
+            techniques,
+            side: None,
+            share: 1.0,
+        }]);
+    }
+    let count = candidates.len();
+    let mut parts: Vec<GuitarPart> = Vec::with_capacity(count);
+    for (k, (part_audio, side, share)) in candidates.into_iter().enumerate() {
+        let mut sub = part_progress(progress, separating, k, count);
+        let (notes, post) = transcribe_stem(
+            &part_audio,
+            engine,
+            Stage::Guitar,
+            separating,
+            &mut sub,
+            cancel,
+        )?;
+        let (notes, techniques) =
+            detect_techniques(&part_audio, notes, post, separating, &mut sub, cancel)?;
+        parts.push(GuitarPart {
+            notes,
+            techniques,
+            side,
+            share,
+        });
+    }
+    // Loudest first; a part that plays what a louder one plays is the same
+    // guitar.
+    parts.sort_by(|a, b| b.share.total_cmp(&a.share));
+    let most = parts.iter().map(|p| p.notes.len()).max().unwrap_or(0);
+    let mut kept: Vec<GuitarPart> = Vec::new();
+    for part in parts {
+        let same = kept.iter().any(|k| {
+            agreement(&k.notes, &part.notes) >= SAME_PART_F1
+                || agreement(&part.notes, &k.notes) >= SAME_PART_F1
+        });
+        let bleed = part.notes.len() * 10 < most;
+        if !same && !bleed {
+            kept.push(part);
+        }
+    }
+    kept.sort_by(|a, b| chord_share(&b.notes).total_cmp(&chord_share(&a.notes)));
+    Ok(kept)
+}
+
+/// Technique detection on, unless `GVA_TECHNIQUES=0`.
+fn techniques_enabled() -> bool {
+    std::env::var("GVA_TECHNIQUES").map_or(true, |v| v != "0")
+}
+
+/// Bends, vibrato, slides and hammer-ons of the guitar notes, from Basic
+/// Pitch's contour (`post`, computed here when the guitar engine wasn't
+/// Basic Pitch). Bent notes the model split in two come back merged.
+fn detect_techniques(
+    audio: &Mono,
+    notes: Vec<NoteEstimate>,
+    post: Option<basic_pitch::Posteriors>,
+    separating: bool,
+    progress: &mut dyn FnMut(Progress),
+    cancel: &AtomicBool,
+) -> Result<(Vec<NoteEstimate>, Vec<techniques::Technique>), String> {
+    let (base, share) = Stage::Techniques.span(separating);
+    progress(Progress {
+        stage: Stage::Techniques,
+        overall: base,
+    });
+    if notes.is_empty() || !techniques_enabled() {
+        let n = notes.len();
+        return Ok((notes, vec![techniques::Technique::default(); n]));
+    }
+    let samples = audio.at(basic_pitch::SAMPLE_RATE);
+    let post = match post {
+        Some(post) => post,
+        None => basic_pitch::posteriors(
+            &samples,
+            &mut |p| {
+                progress(Progress {
+                    stage: Stage::Techniques,
+                    overall: base + share * p,
+                })
+            },
+            cancel,
+        )?,
+    };
+    check(cancel)?;
+    let evidence = techniques::Evidence {
+        post: &post,
+        audio: &samples,
+        rate: basic_pitch::SAMPLE_RATE,
+    };
+    Ok(techniques::detect(
+        notes,
+        &evidence,
+        &techniques::TechniqueParams::default(),
+    ))
 }
 
 /// Beats, meter and tempo of the song.
@@ -360,9 +604,8 @@ fn transcribe_stem_uncached(
 struct Rhythm {
     /// Beat times in seconds.
     beats: Vec<f64>,
-    beats_per_bar: usize,
-    /// Index into `beats` of a downbeat.
-    phase: usize,
+    /// Indices into `beats` of the downbeats.
+    downbeats: Vec<usize>,
     bpm: f64,
     engine: &'static str,
 }
@@ -378,8 +621,7 @@ fn track_rhythm(mix: &Mono, drums: Option<&Mono>, cancel: &AtomicBool) -> Result
             return Ok(Rhythm {
                 bpm: track.bpm().unwrap_or(120.0),
                 beats: track.beats,
-                beats_per_bar: track.beats_per_bar,
-                phase: track.phase,
+                downbeats: track.downbeats,
                 engine: beat_net::ENGINE_NAME,
             });
         }
@@ -395,8 +637,7 @@ fn track_rhythm(mix: &Mono, drums: Option<&Mono>, cancel: &AtomicBool) -> Result
     let phase = beats::downbeat_phase(&env, &frames);
     Ok(Rhythm {
         beats: beats::frame_times(&env, &frames),
-        beats_per_bar: beats::BEATS_PER_BAR,
-        phase,
+        downbeats: beats::regular_downbeats(frames.len(), phase),
         bpm,
         engine: "spectral flux + DP",
     })
@@ -478,7 +719,7 @@ pub fn run(
         std::process::id(),
         &sha256[..12]
     ));
-    let (guitar_stem, bass_stem, drums_audio, separation_name) = match &demucs {
+    let (guitar_stem, guitar_stereo, bass_stem, drums_audio, separation_name) = match &demucs {
         Some(demucs) => {
             let (base, share) = Stage::Separating.span(true);
             let stems = separation::separate(
@@ -505,6 +746,11 @@ pub fn run(
             } else {
                 None
             };
+            let guitar_stereo = if request.guitar {
+                crate::backend::audio_file::decode_file_stereo(&stems.path("guitar")).ok()
+            } else {
+                None
+            };
             let bass = if request.bass {
                 Some(Mono::load(&stems.path("bass"))?)
             } else {
@@ -512,9 +758,10 @@ pub fn run(
             };
             let drums = Mono::load(&stems.path("drums")).ok();
             let _ = std::fs::remove_dir_all(&work_dir);
-            (guitar, bass, drums, format!("demucs {}", separation::MODEL))
+            let name = format!("demucs {}", separation::MODEL);
+            (guitar, guitar_stereo, bass, drums, name)
         }
-        None => (None, None, None, String::new()),
+        None => (None, None, None, None, String::new()),
     };
     let guitar_audio = request.guitar.then(|| guitar_stem.as_ref().unwrap_or(&mix));
     let bass_audio = request.bass.then(|| bass_stem.as_ref().unwrap_or(&mix));
@@ -526,26 +773,33 @@ pub fn run(
 
     let guitar_engine = guitar_engine();
     let bass_engine = Engine::BasicPitch(NoteParams::bass());
-    let guitar_notes = match guitar_audio {
-        Some(audio) => transcribe_stem(
+    let guitar_parts = match guitar_audio {
+        Some(audio) => transcribe_guitars(
             audio,
+            guitar_stereo.as_ref(),
             &guitar_engine,
-            Stage::Guitar,
             separating,
             progress,
             cancel,
         )?,
         None => Vec::new(),
     };
+    let guitar_notes: Vec<NoteEstimate> = guitar_parts
+        .iter()
+        .flat_map(|p| p.notes.iter().copied())
+        .collect();
     let mut bass_notes = match bass_audio {
-        Some(audio) => transcribe_stem(
-            audio,
-            &bass_engine,
-            Stage::Bass,
-            separating,
-            progress,
-            cancel,
-        )?,
+        Some(audio) => {
+            transcribe_stem(
+                audio,
+                &bass_engine,
+                Stage::Bass,
+                separating,
+                progress,
+                cancel,
+            )?
+            .0
+        }
         None => Vec::new(),
     };
     if !separating && request.guitar && request.bass {
@@ -561,17 +815,9 @@ pub fn run(
     let all: Vec<&NoteEstimate> = guitar_notes.iter().chain(&bass_notes).collect();
     let first = all.iter().map(|n| n.start).fold(f64::MAX, f64::min);
     let last = all.iter().map(|n| n.end).fold(0.0, f64::max);
-    let grid = arrange::BeatGrid {
-        times: beats::bar_grid(
-            &rhythm.beats,
-            rhythm.beats_per_bar,
-            rhythm.phase,
-            first,
-            last,
-            rhythm.bpm,
-        ),
-        beats_per_bar: rhythm.beats_per_bar,
-    };
+    let (times, bar_beats) =
+        beats::bar_grid(&rhythm.beats, &rhythm.downbeats, first, last, rhythm.bpm);
+    let grid = arrange::BeatGrid { times, bar_beats };
     let quantize_params = arrange::QuantizeParams::default();
 
     let mut tracks = Vec::new();
@@ -583,22 +829,44 @@ pub fn run(
             "mix".to_string()
         }
     };
-    if request.guitar && !guitar_notes.is_empty() {
-        let spec = arrange::guitar_spec(&guitar_notes);
-        let quantized = arrange::quantize(&guitar_notes, &grid, spec.max_notes, &quantize_params);
+    let several = guitar_parts.len() > 1;
+    for (k, part) in guitar_parts.iter().enumerate() {
+        if part.notes.is_empty() {
+            continue;
+        }
+        let mut spec = arrange::guitar_spec(&part.notes);
+        if several {
+            spec.name = match k {
+                0 => "Guitarra base (IA)".into(),
+                1 => "Guitarra solo (IA)".into(),
+                k => format!("Guitarra {} (IA)", k + 1),
+            };
+        }
+        let quantized = arrange::quantize(
+            &part.notes,
+            &part.techniques,
+            &grid,
+            spec.max_notes,
+            &quantize_params,
+        );
         let frets = arrange::fret_events(&quantized.events, &spec);
         let notes = frets.iter().map(Vec::len).sum();
         tracks.push(arrange::build_track(&spec, &quantized, &frets, &grid));
+        let stem = match part.side {
+            Some(side) => format!("{} ({})", stem_name("guitar"), side.label()),
+            None => stem_name("guitar"),
+        };
         infos.push(TrackInfo {
             name: spec.name,
-            stem: stem_name("guitar"),
+            stem,
             tuning_name: spec.tuning_name,
             notes,
         });
     }
     if request.bass && !bass_notes.is_empty() {
         let spec = arrange::bass_spec(&bass_notes);
-        let quantized = arrange::quantize(&bass_notes, &grid, spec.max_notes, &quantize_params);
+        let quantized =
+            arrange::quantize(&bass_notes, &[], &grid, spec.max_notes, &quantize_params);
         let frets = arrange::fret_events(&quantized.events, &spec);
         let notes = frets.iter().map(Vec::len).sum();
         tracks.push(arrange::build_track(&spec, &quantized, &frets, &grid));
@@ -642,7 +910,16 @@ pub fn run(
             if request.bass && !engines.contains(&bass_engine.name()) {
                 engines.push(bass_engine.name());
             }
-            format!("{}; beats: {}", engines.join(" + "), rhythm.engine)
+            let techniques = if request.guitar && techniques_enabled() {
+                "; techniques: basic-pitch contour rules"
+            } else {
+                ""
+            };
+            format!(
+                "{}; beats: {}{techniques}",
+                engines.join(" + "),
+                rhythm.engine
+            )
         },
         app_version: env!("CARGO_PKG_VERSION").into(),
         tracks: infos,
@@ -657,7 +934,15 @@ pub fn run(
         metadata,
         score,
         replaced,
-        guitar_notes,
+        guitar_notes: guitar_parts
+            .first()
+            .map(|p| p.notes.clone())
+            .unwrap_or_default(),
+        guitar_techniques: guitar_parts
+            .into_iter()
+            .next()
+            .map(|p| p.techniques)
+            .unwrap_or_default(),
     })
 }
 
@@ -678,6 +963,26 @@ mod tests {
         );
         assert_eq!(g("/m/song_name.wav"), (String::new(), "song name".into()));
         assert_eq!(g("/m/1979.mp3"), (String::new(), "1979".into()));
+    }
+
+    #[test]
+    fn echoes_of_one_part_agree_and_different_parts_do_not() {
+        let line = |offset: f64, base: u8| -> Vec<NoteEstimate> {
+            (0..40)
+                .map(|i| NoteEstimate {
+                    start: offset + i as f64 * 0.25,
+                    end: offset + i as f64 * 0.25 + 0.2,
+                    pitch: base + (i * 5 % 12) as u8,
+                    amplitude: 0.8,
+                })
+                .collect()
+        };
+        let dry = line(1.0, 52);
+        assert!(agreement(&dry, &line(1.0, 52)) > 0.99);
+        // A 330 ms echo (a stereo delay) is the same guitar.
+        assert!(agreement(&dry, &line(1.33, 52)) > 0.9);
+        // Another part: a different line on other pitches.
+        assert!(agreement(&dry, &line(1.1, 60)) < SAME_PART_F1);
     }
 
     #[test]
@@ -705,8 +1010,10 @@ mod tests {
         for separating in [false, true] {
             let (base, share) = Stage::Bass.span(separating);
             assert!((base + share - 0.95).abs() < 1e-6);
+            let (tb, ts) = Stage::Techniques.span(separating);
+            assert!((tb + ts - base).abs() < 1e-6);
             let (gb, gs) = Stage::Guitar.span(separating);
-            assert!((gb + gs - base).abs() < 1e-6);
+            assert!((gb + gs - tb).abs() < 1e-6);
         }
     }
 

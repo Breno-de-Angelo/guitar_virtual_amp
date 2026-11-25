@@ -240,52 +240,101 @@ pub fn downbeat_phase(env: &OnsetEnvelope, beats: &[usize]) -> usize {
         .unwrap_or(0)
 }
 
-/// Beat times (seconds) where index 0, `beats_per_bar`, ... are downbeats,
-/// extended with the local beat period so the grid covers
-/// `first_note..last_note` and starts at the downbeat of the bar holding
-/// the first note. `beat_times[phase]` is a downbeat.
+/// Downbeat indices every [`BEATS_PER_BAR`] beats from `phase` (the DSP
+/// tracker's fixed 4/4).
+pub fn regular_downbeats(beats: usize, phase: usize) -> Vec<usize> {
+    (phase.min(beats.saturating_sub(1))..beats)
+        .step_by(BEATS_PER_BAR)
+        .collect()
+}
+
+/// Whole bars covering `first_note..last_note`: `(beat times, beats per
+/// bar)`, where `times[0]` is a downbeat and the bar lengths add up to
+/// `times.len() - 1` (the last time closes the last bar). Bars come from
+/// `downbeats` (indices into `beat_times`); the grid is extended before the
+/// first downbeat with bars like the first one and after the last beat
+/// with bars like the last one, at the local beat period.
 pub fn bar_grid(
     beat_times: &[f64],
-    beats_per_bar: usize,
-    phase: usize,
+    downbeats: &[usize],
     first_note: f64,
     last_note: f64,
     fallback_bpm: f64,
-) -> Vec<f64> {
-    let bpb = beats_per_bar.max(1);
-    let mut beats: Vec<f64> = beat_times.iter().skip(phase).copied().collect();
-    if beats.len() < 2 {
-        let period = 60.0 / fallback_bpm.max(1.0);
-        beats = vec![first_note.max(0.0), first_note.max(0.0) + period];
-    }
+) -> (Vec<f64>, Vec<usize>) {
+    let first_down = downbeats
+        .first()
+        .copied()
+        .filter(|&d| d + 1 < beat_times.len());
+    let (mut beats, mut lengths): (Vec<f64>, Vec<usize>) = match first_down {
+        Some(d0) => {
+            let beats = beat_times[d0..].to_vec();
+            let mut lengths: Vec<usize> = downbeats
+                .windows(2)
+                .map(|w| w[1] - w[0])
+                .filter(|&l| l > 0)
+                .collect();
+            // Beats after the last downbeat: a bar like the one before.
+            let rest = beats.len() - 1 - lengths.iter().sum::<usize>();
+            if rest > 0 || lengths.is_empty() {
+                lengths.push(rest.max(1));
+            }
+            (beats, lengths)
+        }
+        None => {
+            let period = 60.0 / fallback_bpm.max(1.0);
+            let start = first_note.max(0.0);
+            (vec![start, start + period], vec![1])
+        }
+    };
+    let typical = |l: &[usize], i: usize| l.get(i).copied().unwrap_or(BEATS_PER_BAR).max(1);
     let first_period = beats[1] - beats[0];
     // Prepend whole bars until the grid starts before the first note (a
     // note a little ahead of the beat still belongs to it).
     let slack = 0.5 * first_period / STEPS_PER_BEAT_F;
+    let first_len = if lengths.len() > 1 {
+        typical(&lengths, 0)
+    } else {
+        BEATS_PER_BAR
+    };
     while beats[0] > first_note + slack {
         let start = beats[0];
-        let new: Vec<f64> = (1..=bpb)
+        let new: Vec<f64> = (1..=first_len)
             .rev()
             .map(|k| start - k as f64 * first_period)
             .collect();
         beats.splice(0..0, new);
+        lengths.insert(0, first_len);
     }
     // Drop whole bars that end before the first note.
-    while beats.len() > bpb * 2 && beats[bpb] <= first_note {
-        beats.drain(0..bpb);
+    while lengths.len() > 1 && beats[lengths[0]] <= first_note {
+        beats.drain(0..lengths[0]);
+        lengths.remove(0);
     }
+    // The last bar may be short (beats ran out): complete it like the bar
+    // before, then append bars past the last note.
     let n = beats.len();
     let last_period = (beats[n - 1] - beats[n - 2]).max(1e-3);
-    // Append beats past the last note, then complete the bar plus its end.
+    let full = if lengths.len() > 1 {
+        typical(&lengths, lengths.len() - 2)
+    } else {
+        BEATS_PER_BAR
+    };
+    let last = lengths.len() - 1;
+    if lengths[last] < full {
+        for _ in lengths[last]..full {
+            let next = beats.last().unwrap() + last_period;
+            beats.push(next);
+        }
+        lengths[last] = full;
+    }
     while *beats.last().unwrap() < last_note {
-        let next = beats.last().unwrap() + last_period;
-        beats.push(next);
+        for _ in 0..full {
+            let next = beats.last().unwrap() + last_period;
+            beats.push(next);
+        }
+        lengths.push(full);
     }
-    while !(beats.len() - 1).is_multiple_of(bpb) {
-        let next = beats.last().unwrap() + last_period;
-        beats.push(next);
-    }
-    beats
+    (beats, lengths)
 }
 
 /// Beat times in seconds of DSP-tracked beat frames.
@@ -347,7 +396,8 @@ mod tests {
         };
         // Beats every 0.5 s from 2.0 s; notes from 0.3 s to 9.1 s.
         let frames: Vec<usize> = (0..12).map(|i| 200 + i * 50).collect();
-        let grid = bar_grid(&frame_times(&env, &frames), 4, 0, 0.3, 9.1, 120.0);
+        let downbeats = regular_downbeats(frames.len(), 0);
+        let (grid, lengths) = bar_grid(&frame_times(&env, &frames), &downbeats, 0.3, 9.1, 120.0);
         assert!(
             grid[0] <= 0.3 && grid[0] > 0.3 - 2.0,
             "starts at {}",
@@ -355,17 +405,32 @@ mod tests {
         );
         assert!((grid[4] - grid[0] - 2.0).abs() < 1e-9);
         assert!(*grid.last().unwrap() >= 9.1);
-        assert_eq!((grid.len() - 1) % BEATS_PER_BAR, 0);
+        assert!(lengths.iter().all(|&l| l == 4), "{lengths:?}");
+        assert_eq!(lengths.iter().sum::<usize>(), grid.len() - 1);
         // The original beat at 2.0 s is still a downbeat.
         let idx = grid.iter().position(|t| (t - 2.0).abs() < 1e-9).unwrap();
         assert_eq!(idx % 4, 0);
     }
 
     #[test]
+    fn grid_keeps_meter_changes() {
+        // Beats every 0.5 s; bars of 4, 4, 2, 3, 3 beats, then 2 more beats.
+        let times: Vec<f64> = (0..19).map(|i| 1.0 + i as f64 * 0.5).collect();
+        let downbeats = [0, 4, 8, 10, 13, 16];
+        let (grid, lengths) = bar_grid(&times, &downbeats, 1.0, 9.0, 120.0);
+        // The trailing 2 beats are completed into a 3/4 bar like the last one.
+        assert_eq!(lengths, vec![4, 4, 2, 3, 3, 3]);
+        assert_eq!(grid.len(), 20);
+        assert!((grid[0] - 1.0).abs() < 1e-9);
+    }
+
+    #[test]
     fn silence_falls_back_to_a_steady_grid() {
         let env = onset_envelope(&vec![0.0; SR as usize * 3], SR);
-        let grid = bar_grid(&frame_times(&env, &[]), 4, 0, 1.0, 2.0, 120.0);
+        let (grid, lengths) = bar_grid(&frame_times(&env, &[]), &[], 1.0, 2.0, 120.0);
         assert!((grid[1] - grid[0] - 0.5).abs() < 1e-9);
         assert!(grid[0] <= 1.0);
+        assert_eq!(lengths.iter().sum::<usize>(), grid.len() - 1);
+        assert!(lengths.iter().all(|&l| l == 4), "{lengths:?}");
     }
 }

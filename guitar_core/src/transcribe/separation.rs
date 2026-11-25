@@ -74,7 +74,9 @@ pub(crate) fn parse_progress(text: &str) -> Option<f32> {
 }
 
 /// Separates `input` into stems under `work_dir`. Blocks until Demucs
-/// exits; `cancel` kills it.
+/// exits; `cancel` kills it. When the GPU runs out of memory (another
+/// program holds it), runs again on the CPU: several times slower, but it
+/// finishes.
 pub fn separate(
     demucs: &Path,
     input: &Path,
@@ -84,13 +86,75 @@ pub fn separate(
 ) -> Result<Stems, String> {
     std::fs::create_dir_all(work_dir)
         .map_err(|e| format!("não foi possível criar {}: {e}", work_dir.display()))?;
-    let mut child = Command::new(demucs)
+    // Progress never goes back, even when the CPU run starts over.
+    let mut shown = 0.0f32;
+    let mut report = |p: f32| {
+        if p > shown {
+            shown = p;
+            progress(p);
+        }
+    };
+    match run_demucs(demucs, input, work_dir, None, &mut report, cancel) {
+        Err(log) if is_gpu_out_of_memory(&log) => run_demucs(
+            demucs,
+            input,
+            work_dir,
+            Some("cpu"),
+            &mut |p| report(p),
+            cancel,
+        )
+        .map_err(|log| failure(&log))?,
+        Err(log) if log == CANCELLED => return Err(CANCELLED.into()),
+        Err(log) => return Err(failure(&log)),
+        Ok(()) => {}
+    }
+    let stems = Stems {
+        dir: work_dir.join(MODEL),
+    };
+    for stem in ["guitar", "bass", "drums"] {
+        if !stems.path(stem).is_file() {
+            return Err(format!("o Demucs não gerou {}", stems.path(stem).display()));
+        }
+    }
+    progress(1.0);
+    Ok(stems)
+}
+
+const CANCELLED: &str = "cancelado";
+
+fn is_gpu_out_of_memory(log: &str) -> bool {
+    log.contains("CUDA out of memory") || log.contains("OutOfMemoryError")
+}
+
+/// The last lines of Demucs' output, as an error.
+fn failure(log: &str) -> String {
+    let tail: Vec<&str> = log.lines().rev().take(6).collect();
+    let tail: Vec<&str> = tail.into_iter().rev().collect();
+    format!("o Demucs falhou:\n{}", tail.join("\n"))
+}
+
+/// One Demucs run (`device` overrides its choice of GPU or CPU). On
+/// failure returns Demucs' output, or [`CANCELLED`].
+fn run_demucs(
+    demucs: &Path,
+    input: &Path,
+    work_dir: &Path,
+    device: Option<&str>,
+    progress: &mut dyn FnMut(f32),
+    cancel: &AtomicBool,
+) -> Result<(), String> {
+    let mut command = Command::new(demucs);
+    command
         .arg("-n")
         .arg(MODEL)
         .arg("-o")
         .arg(work_dir)
         .arg("--filename")
-        .arg("{stem}.{ext}")
+        .arg("{stem}.{ext}");
+    if let Some(device) = device {
+        command.arg("-d").arg(device);
+    }
+    let mut child = command
         .arg(input)
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
@@ -101,7 +165,6 @@ pub fn separate(
                 demucs.display()
             )
         })?;
-
     // Read stderr on a thread (progress + error text) so the pipe never fills.
     let mut stderr = child.stderr.take().ok_or("sem stderr do Demucs")?;
     let (tx, rx) = crossbeam::channel::unbounded::<String>();
@@ -125,7 +188,7 @@ pub fn separate(
         if cancel.load(Ordering::Relaxed) {
             let _ = child.kill();
             let _ = child.wait();
-            return Err("cancelado".into());
+            return Err(CANCELLED.into());
         }
         match child.try_wait() {
             Ok(Some(status)) => break status,
@@ -135,28 +198,11 @@ pub fn separate(
     };
     let _ = reader.join();
     log.extend(rx.try_iter());
-    if !status.success() {
-        let tail: String = log
-            .lines()
-            .rev()
-            .take(6)
-            .collect::<Vec<_>>()
-            .into_iter()
-            .rev()
-            .collect::<Vec<_>>()
-            .join("\n");
-        return Err(format!("o Demucs falhou ({status}):\n{tail}"));
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("{log}\n({status})"))
     }
-    let stems = Stems {
-        dir: work_dir.join(MODEL),
-    };
-    for stem in ["guitar", "bass", "drums"] {
-        if !stems.path(stem).is_file() {
-            return Err(format!("o Demucs não gerou {}", stems.path(stem).display()));
-        }
-    }
-    progress(1.0);
-    Ok(stems)
 }
 
 #[cfg(test)]
@@ -170,6 +216,14 @@ mod tests {
         assert_eq!(parse_progress(out), Some(0.33));
         assert_eq!(parse_progress("Separating track x.wav\n"), None);
         assert_eq!(parse_progress("100%|##########| 35.1/35.1"), Some(1.0));
+    }
+
+    #[test]
+    fn recognizes_gpu_out_of_memory() {
+        let log = "torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 20.00 MiB.";
+        assert!(is_gpu_out_of_memory(log));
+        assert!(!is_gpu_out_of_memory("RuntimeError: file not found"));
+        assert!(failure("a\nb\nc").ends_with("a\nb\nc"));
     }
 
     #[test]

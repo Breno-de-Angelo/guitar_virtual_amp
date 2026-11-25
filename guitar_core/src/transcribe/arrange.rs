@@ -6,6 +6,7 @@
 //! GuitarSet players), and lays everything out as notated bars.
 
 use super::basic_pitch::NoteEstimate;
+use super::techniques::Technique;
 use crate::shared::tab::model::{
     MasterBar, Score, ScoreTrack, TICKS_PER_QUARTER, TabBeat, TabNote, TrackBar,
 };
@@ -78,37 +79,56 @@ pub fn bass_spec(notes: &[NoteEstimate]) -> InstrumentSpec {
     }
 }
 
-/// Beat times of the tab, index 0 being the first downbeat: `bars *
-/// beats_per_bar + 1` entries (the last one closes the last bar).
+/// Beat times of the tab, index 0 being the first downbeat, and the
+/// number of beats of every bar (the meter may change from bar to bar).
+/// `times` has `sum(bar_beats) + 1` entries: the last one closes the last
+/// bar.
 #[derive(Clone, Debug, PartialEq)]
 pub struct BeatGrid {
     pub times: Vec<f64>,
-    pub beats_per_bar: usize,
+    pub bar_beats: Vec<usize>,
 }
 
 impl BeatGrid {
+    /// Bars of `beats_per_bar` beats over `times` (whole bars only).
+    pub fn uniform(times: Vec<f64>, beats_per_bar: usize) -> Self {
+        let bpb = beats_per_bar.max(1);
+        let bars = times.len().saturating_sub(1) / bpb;
+        Self {
+            times,
+            bar_beats: vec![bpb; bars],
+        }
+    }
+
     pub fn beats(&self) -> usize {
         self.times.len().saturating_sub(1)
     }
 
     pub fn bars(&self) -> usize {
-        self.beats() / self.beats_per_bar.max(1)
+        self.bar_beats.len()
     }
 
-    pub fn bar_ticks(&self) -> i64 {
-        self.beats_per_bar as i64 * TICKS_PER_BEAT
+    /// Beat index where each bar starts, plus the end of the last bar.
+    pub fn bar_beat_starts(&self) -> Vec<usize> {
+        let mut out = Vec::with_capacity(self.bar_beats.len() + 1);
+        let mut at = 0;
+        out.push(0);
+        for &n in &self.bar_beats {
+            at += n;
+            out.push(at);
+        }
+        out
     }
 
     pub fn total_ticks(&self) -> i64 {
-        self.bars() as i64 * self.bar_ticks()
+        self.bar_beats.iter().sum::<usize>() as i64 * TICKS_PER_BEAT
     }
 
     /// Audio time of every bar start (plus the end of the last bar).
     pub fn bar_starts(&self) -> Vec<f64> {
-        self.times
-            .iter()
-            .step_by(self.beats_per_bar.max(1))
-            .copied()
+        self.bar_beat_starts()
+            .into_iter()
+            .filter_map(|b| self.times.get(b).copied())
             .collect()
     }
 
@@ -167,6 +187,23 @@ pub struct GridEvent {
     pub secs: f64,
     /// `(pitch, amplitude)`, loudest first.
     pub pitches: Vec<(u8, f32)>,
+    /// Playing techniques of single-note events, by pitch.
+    pub techniques: Vec<(u8, Technique)>,
+}
+
+impl GridEvent {
+    pub fn technique(&self, pitch: u8) -> Technique {
+        self.techniques
+            .iter()
+            .find(|(p, _)| *p == pitch)
+            .map(|(_, t)| *t)
+            .unwrap_or_default()
+    }
+
+    /// A single note that slides or hammers into the next event.
+    fn links_next(&self) -> bool {
+        self.pitches.len() == 1 && self.technique(self.pitches[0].0).links_next()
+    }
 }
 
 /// Quantized events plus the subdivision chosen for every beat.
@@ -242,9 +279,11 @@ pub fn choose_subdivisions(positions: &[f64], beats: usize, params: &QuantizePar
 }
 
 /// Groups notes into chords (onsets within `chord_secs`), picks a
-/// subdivision for every beat and snaps the chords onto it.
+/// subdivision for every beat and snaps the chords onto it. `techniques`
+/// is index for index with `notes` (or empty).
 pub fn quantize(
     notes: &[NoteEstimate],
+    techniques: &[Technique],
     grid: &BeatGrid,
     max_notes: usize,
     params: &QuantizeParams,
@@ -257,14 +296,15 @@ pub fn quantize(
             subdivisions: vec![STRAIGHT; beats],
         };
     }
-    let mut sorted: Vec<&NoteEstimate> = notes.iter().collect();
-    sorted.sort_by(|a, b| a.start.total_cmp(&b.start));
-    // Chords: (onset time, notes).
-    let mut chords: Vec<(f64, Vec<&NoteEstimate>)> = Vec::new();
-    for note in sorted {
+    let mut order: Vec<usize> = (0..notes.len()).collect();
+    order.sort_by(|&a, &b| notes[a].start.total_cmp(&notes[b].start));
+    // Chords: (onset time, note indices).
+    let mut chords: Vec<(f64, Vec<usize>)> = Vec::new();
+    for i in order {
+        let start = notes[i].start;
         match chords.last_mut() {
-            Some((t, members)) if note.start - *t <= params.chord_secs => members.push(note),
-            _ => chords.push((note.start, vec![note])),
+            Some((t, members)) if start - *t <= params.chord_secs => members.push(i),
+            _ => chords.push((start, vec![i])),
         }
     }
     let positions: Vec<f64> = chords.iter().map(|(t, _)| grid.beat_position(*t)).collect();
@@ -277,6 +317,7 @@ pub fn quantize(
         let min_len = TICKS_PER_BEAT / d as i64;
         let end_tick = members
             .iter()
+            .map(|&i| &notes[i])
             .map(|n| {
                 let end_pos = grid.beat_position(n.end);
                 let eb = owning_beat(end_pos, beats);
@@ -297,22 +338,32 @@ pub fn quantize(
                     end_tick,
                     secs: *t,
                     pitches: Vec::new(),
+                    techniques: Vec::new(),
                 });
                 events.len() - 1
             }
         };
         let event = &mut events[index];
         event.end_tick = event.end_tick.max(end_tick);
-        for n in members {
+        for &i in members {
+            let n = &notes[i];
             match event.pitches.iter_mut().find(|(p, _)| *p == n.pitch) {
                 Some(existing) => existing.1 = existing.1.max(n.amplitude),
                 None => event.pitches.push((n.pitch, n.amplitude)),
+            }
+            let t = techniques.get(i).copied().unwrap_or_default();
+            if !t.is_none() {
+                event.techniques.push((n.pitch, t));
             }
         }
     }
     for event in &mut events {
         event.pitches.sort_by(|a, b| b.1.total_cmp(&a.1));
         event.pitches.truncate(max_notes.max(1));
+        // Techniques belong to single notes.
+        if event.pitches.len() != 1 {
+            event.techniques.clear();
+        }
     }
     events.sort_by_key(|e| e.tick);
     Quantized {
@@ -348,6 +399,11 @@ pub struct FingeringCosts {
     /// Weight of the learned prior `-ln P(string | pitch)` ([`StringPrior`]).
     pub prior: f64,
 }
+
+/// A slide or hammer-on/pull-off changing strings (it can't).
+const LINK_STRING_CHANGE: f64 = 4.0;
+/// A bend on an open string (it can't be bent).
+const BENT_OPEN_STRING: f64 = 6.0;
 
 impl Default for FingeringCosts {
     fn default() -> Self {
@@ -548,6 +604,14 @@ pub fn fret_events_with(
     costs: &FingeringCosts,
     prior: Option<&StringPrior>,
 ) -> Vec<Vec<FrettedNote>> {
+    let technique_cost = |e: &GridEvent, f: &Fingering, pitches: &[(u8, f32)]| {
+        pitches
+            .iter()
+            .zip(f)
+            .filter(|((p, _), (_, fret))| *fret == 0 && e.technique(*p).bend > 0)
+            .count() as f64
+            * BENT_OPEN_STRING
+    };
     let event_cost = |f: &Fingering, pitches: &[(u8, f32)]| {
         let learned = match prior {
             Some(prior) if costs.prior != 0.0 => {
@@ -591,8 +655,11 @@ pub fn fret_events_with(
         let mut row_cost = Vec::with_capacity(current.len());
         let mut row_back = Vec::with_capacity(current.len());
         let mut row_hand = Vec::with_capacity(current.len());
+        // The previous note slides or hammers into this one: same string.
+        let linked = i > 0 && events[i - 1].links_next() && options[i].0.len() == 1;
         for cand in current {
-            let base = event_cost(cand, &options[i].0);
+            let base =
+                event_cost(cand, &options[i].0) + technique_cost(&events[i], cand, &options[i].0);
             if i == 0 || options[i - 1].1.is_empty() {
                 row_cost.push(base);
                 row_back.push(usize::MAX);
@@ -601,9 +668,15 @@ pub fn fret_events_with(
             }
             let (best_j, best) = (0..options[i - 1].1.len())
                 .map(|j| {
+                    let prev = &options[i - 1].1[j];
+                    let link = if linked && prev.len() == 1 && prev[0].0 != cand[0].0 {
+                        LINK_STRING_CHANGE
+                    } else {
+                        0.0
+                    };
                     (
                         j,
-                        cost[i - 1][j] + transition_cost(carried[i - 1][j], cand, costs),
+                        cost[i - 1][j] + transition_cost(carried[i - 1][j], cand, costs) + link,
                     )
                 })
                 .min_by(|a, b| a.1.total_cmp(&b.1))
@@ -759,7 +832,7 @@ fn push_rest(
     }
 }
 
-/// Lays fretted events out as bars of `grid.beats_per_bar` quarter notes.
+/// Lays fretted events out as bars of `grid.bar_beats` quarter notes.
 pub fn build_track(
     spec: &InstrumentSpec,
     quantized: &Quantized,
@@ -767,7 +840,7 @@ pub fn build_track(
     grid: &BeatGrid,
 ) -> ScoreTrack {
     let bars = grid.bars();
-    let bar_ticks = grid.bar_ticks();
+    let starts = grid.bar_beat_starts();
     let subs = &quantized.subdivisions;
     let mut track_bars = vec![
         TrackBar {
@@ -775,23 +848,23 @@ pub fn build_track(
         };
         bars
     ];
-    let playable: Vec<(i64, i64, &Vec<FrettedNote>)> = quantized
+    let playable: Vec<(i64, i64, &Vec<FrettedNote>, &GridEvent)> = quantized
         .events
         .iter()
         .zip(frets)
         .filter(|(_, f)| !f.is_empty())
-        .map(|(e, f)| (e.tick, e.end_tick, f))
+        .map(|(e, f)| (e.tick, e.end_tick, f, e))
         .collect();
     for (bar_index, bar) in track_bars.iter_mut().enumerate() {
-        let bar_start = bar_index as i64 * bar_ticks;
-        let bar_end = bar_start + bar_ticks;
+        let bar_start = starts[bar_index] as i64 * TICKS_PER_BEAT;
+        let bar_end = starts[bar_index + 1] as i64 * TICKS_PER_BEAT;
         let beats = &mut bar.voices[0];
         let in_bar: Vec<_> = playable
             .iter()
-            .filter(|(s, _, _)| (bar_start..bar_end).contains(s))
+            .filter(|(s, _, _, _)| (bar_start..bar_end).contains(s))
             .collect();
         let mut cursor = bar_start;
-        for (k, (tick, end_tick, notes)) in in_bar.iter().enumerate() {
+        for (k, (tick, end_tick, notes, event)) in in_bar.iter().enumerate() {
             if *tick > cursor {
                 push_rest(beats, bar_start, cursor, tick - cursor, subs);
             }
@@ -804,22 +877,34 @@ pub fn build_track(
             } else {
                 gap
             };
-            let tab_notes: Vec<TabNote> = notes
+            let tab_notes: Vec<(TabNote, Technique)> = notes
                 .iter()
-                .map(|(_, string, fret, amp)| TabNote {
-                    string: *string,
-                    fret: *fret,
-                    velocity: (60.0 + 67.0 * amp.clamp(0.0, 1.0)) as u8,
-                    ..Default::default()
+                .map(|(pitch, string, fret, amp)| {
+                    let note = TabNote {
+                        string: *string,
+                        fret: *fret,
+                        velocity: (60.0 + 67.0 * amp.clamp(0.0, 1.0)) as u8,
+                        ..Default::default()
+                    };
+                    (note, event.technique(*pitch))
                 })
                 .collect();
             let pieces = notate(*tick, note_len, subs);
             let notated_end = pieces.last().map(|p| p.0 + p.1).unwrap_or(*tick);
+            let last_piece = pieces.len().saturating_sub(1);
             for (i, (at, ticks, value, dotted, tuplet)) in pieces.into_iter().enumerate() {
+                // Bends start on the struck piece, links to the next note
+                // leave from the last tied piece, vibrato lasts throughout.
                 let notes = tab_notes
                     .iter()
-                    .map(|n| TabNote {
+                    .map(|(n, t)| TabNote {
                         tie: i > 0,
+                        bend: i == 0 && t.bend > 0,
+                        bend_value: if i == 0 { t.bend } else { 0 },
+                        bend_release: i == 0 && t.release,
+                        vibrato: t.vibrato,
+                        slide: i == last_piece && t.slide_out,
+                        hammer: i == last_piece && t.legato_out,
                         ..n.clone()
                     })
                     .collect();
@@ -854,13 +939,14 @@ pub fn build_track(
 
 /// Bars following the beat grid's tempo (one tempo per bar).
 pub fn build_bars(grid: &BeatGrid) -> Vec<MasterBar> {
-    let bpb = grid.beats_per_bar.max(1);
+    let starts = grid.bar_beat_starts();
     (0..grid.bars())
         .map(|b| {
-            let secs = grid.times[(b + 1) * bpb] - grid.times[b * bpb];
-            let bpm = (60.0 * bpb as f64 / secs.max(1e-3)).clamp(20.0, 400.0);
+            let beats = grid.bar_beats[b].max(1);
+            let secs = grid.times[starts[b + 1]] - grid.times[starts[b]];
+            let bpm = (60.0 * beats as f64 / secs.max(1e-3)).clamp(20.0, 400.0);
             MasterBar {
-                numerator: bpb as u32,
+                numerator: beats as u32,
                 denominator: 4,
                 tempo_changes: vec![(0, bpm)],
                 ..Default::default()
@@ -900,10 +986,7 @@ mod tests {
 
     /// 120 BPM grid in 4/4: a beat every 0.5 s, `bars` bars.
     fn grid(bars: usize) -> BeatGrid {
-        BeatGrid {
-            times: (0..=bars * 4).map(|i| i as f64 * 0.5).collect(),
-            beats_per_bar: 4,
-        }
+        BeatGrid::uniform((0..=bars * 4).map(|i| i as f64 * 0.5).collect(), 4)
     }
 
     fn event(tick: i64, end_tick: i64, pitches: &[(u8, f32)]) -> GridEvent {
@@ -912,6 +995,7 @@ mod tests {
             end_tick,
             secs: tick as f64 / 1920.0,
             pitches: pitches.to_vec(),
+            techniques: Vec::new(),
         }
     }
 
@@ -924,7 +1008,7 @@ mod tests {
             note(45, 0.135, 0.25), // ~ the 2nd 16th (0.125 s)
             note(45, 0.98, 1.4),   // beat 3, slightly early
         ];
-        let q = quantize(&notes, &grid(1), 6, &QuantizeParams::default());
+        let q = quantize(&notes, &[], &grid(1), 6, &QuantizeParams::default());
         assert_eq!(q.subdivisions, vec![STRAIGHT; 4]);
         let ticks: Vec<i64> = q.events.iter().map(|e| e.tick).collect();
         assert_eq!(ticks, vec![0, 240, 1920]);
@@ -949,7 +1033,7 @@ mod tests {
         for n in &mut notes {
             n.end = n.start + 0.1;
         }
-        let q = quantize(&notes, &grid(1), 6, &QuantizeParams::default());
+        let q = quantize(&notes, &[], &grid(1), 6, &QuantizeParams::default());
         assert_eq!(q.subdivisions, vec![TRIPLET, STRAIGHT, STRAIGHT, STRAIGHT]);
         let ticks: Vec<i64> = q.events.iter().map(|e| e.tick).collect();
         assert_eq!(
@@ -962,7 +1046,7 @@ mod tests {
     fn one_off_beat_note_stays_straight() {
         // A single note late in the beat isn't enough evidence for triplets.
         let notes = vec![note(50, 0.0, 0.1), note(52, 0.18, 0.3)];
-        let q = quantize(&notes, &grid(1), 6, &QuantizeParams::default());
+        let q = quantize(&notes, &[], &grid(1), 6, &QuantizeParams::default());
         assert_eq!(q.subdivisions[0], STRAIGHT);
         assert_eq!(q.events[1].tick, 240);
     }
@@ -1056,7 +1140,7 @@ mod tests {
         let spec = guitar_spec(&[]);
         let notes = vec![note(45, 0.0, 0.6), note(52, 0.625, 2.0), note(57, 2.5, 2.6)];
         let g = grid(2);
-        let q = quantize(&notes, &g, 6, &QuantizeParams::default());
+        let q = quantize(&notes, &[], &g, 6, &QuantizeParams::default());
         let frets = fret_events(&q.events, &spec);
         let track = build_track(&spec, &q, &frets, &g);
         assert_tiled(&track, 3840);
@@ -1081,10 +1165,7 @@ mod tests {
     #[test]
     fn waltz_bars_have_three_beats_and_triplets_tile() {
         let spec = guitar_spec(&[]);
-        let g = BeatGrid {
-            times: (0..=6).map(|i| i as f64 * 0.5).collect(),
-            beats_per_bar: 3,
-        };
+        let g = BeatGrid::uniform((0..=6).map(|i| i as f64 * 0.5).collect(), 3);
         // Bar 1: triplet 8ths on beat 1, then a half note. Bar 2: quarters.
         let mut notes: Vec<NoteEstimate> = (0..3)
             .map(|k| note(52 + k, k as f64 / 6.0, k as f64 / 6.0 + 0.15))
@@ -1093,7 +1174,7 @@ mod tests {
         for k in 0..3 {
             notes.push(note(60, 1.5 + k as f64 * 0.5, 1.9 + k as f64 * 0.5));
         }
-        let q = quantize(&notes, &g, 6, &QuantizeParams::default());
+        let q = quantize(&notes, &[], &g, 6, &QuantizeParams::default());
         assert_eq!(q.subdivisions[0], TRIPLET);
         let frets = fret_events(&q.events, &spec);
         let track = build_track(&spec, &q, &frets, &g);
@@ -1121,5 +1202,65 @@ mod tests {
                 .collect()
         };
         assert_eq!(shape(&back), shape(&score));
+    }
+
+    #[test]
+    fn bars_take_their_own_meter() {
+        // A 4/4 bar, a 2/4 bar and a 3/4 bar at 120 BPM.
+        let g = BeatGrid {
+            times: (0..=9).map(|i| i as f64 * 0.5).collect(),
+            bar_beats: vec![4, 2, 3],
+        };
+        let notes = vec![note(45, 0.0, 0.4), note(47, 2.0, 2.4), note(48, 3.0, 3.4)];
+        let q = quantize(&notes, &[], &g, 6, &QuantizeParams::default());
+        let spec = guitar_spec(&notes);
+        let frets = fret_events(&q.events, &spec);
+        let track = build_track(&spec, &q, &frets, &g);
+        let score = build_score("t", "a", &g, vec![track]);
+        let meters: Vec<u32> = score.bars.iter().map(|b| b.numerator).collect();
+        assert_eq!(meters, vec![4, 2, 3]);
+        assert!(
+            score
+                .bars
+                .iter()
+                .all(|b| (b.tempo_changes[0].1 - 120.0).abs() < 1e-6)
+        );
+        // Each bar's first beat holds its note, and the bars fill exactly.
+        for (bar, len) in score.tracks[0].bars.iter().zip([4i64, 2, 3]) {
+            let beats = &bar.voices[0];
+            assert!(!beats[0].notes.is_empty(), "{beats:?}");
+            let total: i64 = beats.iter().map(|b| b.duration).sum();
+            assert_eq!(total, len * TICKS_PER_BEAT);
+        }
+    }
+
+    #[test]
+    fn linked_notes_stay_on_one_string() {
+        // A slide from fret 5 to fret 9 of the B string (64 -> 68) would be
+        // cheaper split across strings (68 on the high e, fret 4); the link
+        // keeps both on one string.
+        let mut a = event(0, 480, &[(64, 0.8)]);
+        a.techniques.push((
+            64,
+            Technique {
+                slide_out: true,
+                ..Default::default()
+            },
+        ));
+        let b = event(480, 960, &[(68, 0.8)]);
+        let spec = guitar_spec(&[note(40, 0.0, 1.0)]);
+        let frets = fret_events(&[a.clone(), b.clone()], &spec);
+        assert_eq!(frets[0][0].1, frets[1][0].1, "{frets:?}");
+        // And a bent note is never an open string.
+        let mut bent = event(0, 960, &[(64, 0.8)]);
+        bent.techniques.push((
+            64,
+            Technique {
+                bend: 4,
+                ..Default::default()
+            },
+        ));
+        let frets = fret_events(&[bent], &spec);
+        assert_ne!(frets[0][0].2, 0, "{frets:?}");
     }
 }

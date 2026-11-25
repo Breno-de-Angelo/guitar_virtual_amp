@@ -116,6 +116,10 @@ pub struct TabNote {
     pub hammer: bool,
     pub slide: bool,
     pub bend: bool,
+    /// Highest bend point in quarter tones (4 = whole step), when known.
+    pub bend_value: u8,
+    /// The bend comes back down to the fretted pitch.
+    pub bend_release: bool,
     pub vibrato: bool,
     pub harmonic: bool,
     pub palm_mute: bool,

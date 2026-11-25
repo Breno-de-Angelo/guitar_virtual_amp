@@ -49,15 +49,63 @@ pub fn decode_file(path: &Path) -> Result<DecodedAudio, String> {
     if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
         hint.with_extension(ext);
     }
-    decode_source(Box::new(file), hint)
+    decode_source(Box::new(file), hint, Layout::Mono).map(|(audio, _)| audio)
+}
+
+/// Left and right channels of a decoded file (both the same for mono
+/// files; channels past the second are ignored).
+#[derive(Clone, Debug, Default)]
+pub struct DecodedStereo {
+    pub left: Vec<f32>,
+    pub right: Vec<f32>,
+    pub sample_rate: u32,
+    /// The file had a single channel.
+    pub mono_source: bool,
+}
+
+/// Like [`decode_file`], keeping the first two channels apart.
+pub fn decode_file_stereo(path: &Path) -> Result<DecodedStereo, String> {
+    let file =
+        std::fs::File::open(path).map_err(|e| format!("Não foi possível abrir o áudio: {e}"))?;
+    let mut hint = Hint::new();
+    if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+        hint.with_extension(ext);
+    }
+    let (left, right) = decode_source(Box::new(file), hint, Layout::Stereo)?;
+    let right = right.unwrap_or_default();
+    let mono_source = right.is_empty();
+    Ok(DecodedStereo {
+        right: if mono_source {
+            left.samples.clone()
+        } else {
+            right
+        },
+        left: left.samples,
+        sample_rate: left.sample_rate,
+        mono_source,
+    })
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum Layout {
+    /// All channels averaged.
+    Mono,
+    /// Channel 0, and channel 1 apart (when there is one).
+    Stereo,
 }
 
 /// Decodes in-memory audio (e.g. a Guitar Pro 8 embedded backing track).
 pub fn decode_bytes(data: Vec<u8>) -> Result<DecodedAudio, String> {
-    decode_source(Box::new(Cursor::new(data)), Hint::new())
+    decode_source(Box::new(Cursor::new(data)), Hint::new(), Layout::Mono).map(|(audio, _)| audio)
 }
 
-fn decode_source(source: Box<dyn MediaSource>, hint: Hint) -> Result<DecodedAudio, String> {
+/// Decodes `source`: the mono mix (or, for [`Layout::Stereo`], channel 0)
+/// plus channel 1 for [`Layout::Stereo`] when the source has it.
+fn decode_source(
+    source: Box<dyn MediaSource>,
+    hint: Hint,
+    layout: Layout,
+) -> Result<(DecodedAudio, Option<Vec<f32>>), String> {
     let stream = MediaSourceStream::new(source, Default::default());
     let probed = symphonia::default::get_probe()
         .format(&hint, stream, &FormatOptions::default(), &MetadataOptions::default())
@@ -75,6 +123,7 @@ fn decode_source(source: Box<dyn MediaSource>, hint: Hint) -> Result<DecodedAudi
         .map_err(|e| format!("Codec não suportado: {e}"))?;
 
     let mut samples = Vec::new();
+    let mut second: Vec<f32> = Vec::new();
     // Reused across packets; rebuilt when a packet needs more frames or
     // a different channel layout than the current buffer was made for.
     let mut buffer: Option<(SampleBuffer<f32>, usize, usize)> = None;
@@ -103,16 +152,32 @@ fn decode_source(source: Box<dyn MediaSource>, hint: Hint) -> Result<DecodedAudi
             _ => buffer.insert((SampleBuffer::new(frames as u64, spec), frames, channels)),
         };
         buf.copy_interleaved_ref(decoded);
-        samples.extend(
-            buf.samples()
-                .chunks(channels)
-                .map(|frame| frame.iter().sum::<f32>() / channels as f32),
-        );
+        let frames = buf.samples().chunks(channels);
+        match layout {
+            Layout::Mono => {
+                samples.extend(frames.map(|frame| frame.iter().sum::<f32>() / channels as f32))
+            }
+            Layout::Stereo => {
+                for frame in frames {
+                    samples.push(frame[0]);
+                    if channels > 1 {
+                        second.push(frame[1]);
+                    }
+                }
+            }
+        }
     }
     if samples.is_empty() || sample_rate == 0 {
         return Err("Nenhum áudio decodificado".to_string());
     }
-    Ok(DecodedAudio { samples, sample_rate })
+    let second = (second.len() == samples.len()).then_some(second);
+    Ok((
+        DecodedAudio {
+            samples,
+            sample_rate,
+        },
+        second,
+    ))
 }
 
 #[cfg(test)]
@@ -137,6 +202,25 @@ mod tests {
             writer.finalize().unwrap();
         }
         cursor.into_inner()
+    }
+
+    #[test]
+    fn keeps_stereo_channels_apart() {
+        let dir = std::env::temp_dir().join(format!("gva_stereo_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("lr.wav");
+        let frames: Vec<[i16; 2]> = (0..1000).map(|i| [i as i16, -(i as i16)]).collect();
+        std::fs::write(&path, wav_bytes(44_100, 2, &frames)).unwrap();
+        let stereo = decode_file_stereo(&path).unwrap();
+        assert!(!stereo.mono_source);
+        assert_eq!(stereo.left.len(), 1000);
+        assert!(stereo.left[500] > 0.0 && stereo.right[500] < 0.0);
+        assert!((stereo.left[500] + stereo.right[500]).abs() < 1e-6);
+        let mono = dir.join("m.wav");
+        std::fs::write(&mono, wav_bytes(44_100, 1, &frames)).unwrap();
+        let both = decode_file_stereo(&mono).unwrap();
+        assert!(both.mono_source && both.left == both.right);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
