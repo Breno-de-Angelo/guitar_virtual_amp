@@ -388,6 +388,108 @@ bf16 autocast (Spark copy of `finetune_crnn.py` only) crashed at step ~1100: pre
 validation at step 1000). Not worth pursuing: the full TF32 run takes ~1 h alone on a Spark
 (this one took ~1 h 50 min sharing the GPU with the bf16 run). Use TF32.
 
+### Phase 1 runs: one model per stage and approach (2026-11-24, `spark-ef6b`)
+
+Scripts: `bench_notes.py` (notes), `bench_separation.py` (separators, scored by the transcription
+of their stem), `bench_beats.py` (beats), `bench_tab.py` (fingering, modular vs end-to-end tab;
+runs the app's Viterbi through `cargo run --release --example fingering`). Up to 12 items per
+group, mean per item, mir_eval F50 (onset 50 ms + pitch). Mixes: labelled guitar over MUSDB18
+drums/bass/vocals (`make_mixes.py`), 41 mixes.
+
+**Separation** (F50 of the transcription of the guitar stem, mean of the four mix groups):
+
+| Note model | No separation | htdemucs_6s (app today) | BS-RoFormer SW (MSST) |
+|---|---|---|---|
+| GAPS CRNN | 0.51 | 0.72 | **0.81** |
+| v2 CRNN (Spark s5000) | 0.50 | 0.74 | **0.81** |
+| Basic Pitch | 0.36 | 0.58 | 0.64 |
+| YourMT3+ (guitar classes) | 0.51 | 0.45 | 0.52 |
+
+- BS-RoFormer SW gives +0.07-0.09 F50 over htdemucs_6s for both CRNNs, and the gain is largest on
+  the Guitar-TECHS mixes (0.64-0.68 to 0.75-0.81). Speed: 4.8x real time vs 39x for htdemucs_6s on the
+  Spark GPU.
+- With BS-RoFormer, transcription of separated mixes (0.81) is close to isolated EGDB amp tones
+  (0.83 for v2). Separation is no longer the main loss once the better separator is used.
+- BS-RoFormer SW's checkpoint has no stated license (community mirror); fine for local,
+  non-commercial use, but check before redistributing.
+
+**Note transcription** (F50; offset F1 in brackets where it differs in ranking):
+
+| Set | GAPS | v2 | Basic Pitch | YourMT3+ |
+|---|---|---|---|---|
+| EGDB test, 4 tones | 0.74 | **0.84** | 0.67 | 0.71 |
+| GOAT amp renders (5) | 0.56 | **0.71** | 0.56 | 0.39 |
+| Guitar-TECHS P3 | **0.81** | 0.78 | 0.61 | 0.70 (offset **0.54** vs v2 0.39) |
+| GuitarSet comp / solo | 0.87 / 0.91 | 0.89 / 0.92 | 0.75 / 0.81 | **0.92 / 0.93** (offset **0.83 / 0.85**) |
+| Mixes, no separation | **0.51** | 0.50 | 0.36 | **0.51** |
+| Mixes, BS-RoFormer stem | **0.81** | **0.81** | 0.64 | 0.52 |
+| Speed on the Spark GPU | 34x | 90x | 167x (CPU ONNX) | 14x |
+
+- YourMT3+ is the best model on clean acoustic guitar and has by far the best note ends, but it
+  fails on amplified electric guitar (GOAT amps 0.39) and gains nothing from separation (mix
+  0.51, htdemucs_6s stem 0.45, BS-RoFormer stem 0.52), so it cannot use the separator's gain.
+- YourMT3+ "any instrument" notes on the Guitar-TECHS sets score higher than its guitar-class
+  notes (0.75 vs 0.70): it labels part of the electric guitar as another instrument.
+- MuScriptor: not run, Hugging Face access still pending.
+
+**Beats and downbeats** (GuitarSet 03-05, all 180 excerpts, mir_eval):
+
+| Tracker | comp: beat F / CMLt / downbeat F | solo: beat F / CMLt / downbeat F |
+|---|---|---|
+| Beat This! small0 (app today) | 0.92 / 0.80 / 0.92 | 0.51 / 0.36 / 0.33 |
+| Beat This! final0 | **0.97 / 0.92 / 0.94** | **0.55** / 0.35 / **0.36** |
+| librosa DP (Ellis 2007) | 0.54 / 0.42 / - | 0.39 / 0.26 / - |
+
+- final0 is a clear gain on accompaniment (beat CMLt 0.80 to 0.92) for 8 MB more weights.
+- Every tracker fails on solo lines (beat F about 0.5): single-note solos without accompaniment
+  carry little beat information. In a full song the tracker runs on the mix, so this matters
+  mainly for solo-guitar recordings.
+
+**Fingering and tablature** (true notes: share on the reference string; audio: Tab F1 = F50
+match on the same string):
+
+| Method | EGDB test (DI / amps) | GuitarSet comp | GuitarSet solo | EGDB in mix: raw / BS-RoFormer stem |
+|---|---|---|---|---|
+| Viterbi (app), true notes: string accuracy | 0.74 | 0.80 | 0.56 | - |
+| Lowest fret, true notes: string accuracy | 0.65 | 0.33 | 0.25 | - |
+| Modular: v2 + Viterbi, Tab F1 | **0.60 / 0.55** | 0.73 | 0.53 | 0.33 / **0.59** |
+| Modular: YourMT3+ + Viterbi, Tab F1 | 0.59 / 0.48 | **0.76** | 0.54 | **0.43** / 0.46 |
+| End-to-end: TabCNN, Tab F1 | 0.40 / 0.32 | 0.71 | 0.76 | 0.18 / 0.34 |
+| End-to-end: TabCNN-GPFX, Tab F1 | 0.43 / 0.37 | 0.74 | **0.81** | 0.20 / 0.37 |
+
+- On electric guitar and on mixes the modular pipeline wins by a wide margin (EGDB amps 0.55 vs
+  0.37; separated mix 0.59 vs 0.37). TabCNN's note detection is the weak part (F50 0.36-0.50 on
+  EGDB), not its string choice.
+- On GuitarSet solo lines TabCNN beats the modular pipeline (0.81 vs 0.53). The Viterbi puts only
+  56% of true solo notes on the human's string, against 80% for comp: it prefers low positions,
+  while solos move up the neck. This is the clearest case for a learned or audio-conditioned
+  fingering model (T2). Caveat: both TabCNN models were trained on GuitarSet, probably including
+  players 03-05, so their GuitarSet numbers may be optimistic.
+- Learned symbolic fingering (MIDI-to-Tab, Fretting-Transformer) could not be run: no released
+  weights (open-fret has code only). TART: no code found.
+
+**Noise2Fret** (diffusion, ISMIR 2026; CC BY 4.0 weights on Zenodo 23361924), run with its own
+code and protocol (GuitarSet player 00 held out, 100 ms windows): pitch F 0.924 / 0.926, Tab F
+0.921 / 0.922, without / with the auxiliary losses. Not comparable with the table above: its
+test windows are only those that contain a note onset (`drop_empty=True`), so silent passages
+cannot produce false notes, and timing is scored per 100 ms window instead of with a 50 ms onset
+window. Running it on our sets needs its windowing applied to whole recordings plus an onset
+detector to place the events; its event-based follow-up (`Noise2Fret_and_Onsets`, under review)
+targets that.
+
+**Not run, and why**: MuScriptor (gated), TART (no public code), MIDI-to-Tab and
+Fretting-Transformer (no weights), FretNet (code, no weights), Banquet (weights on Zenodo; next
+separator to try), All-In-One beats (needs NATTEN on ARM).
+
+**What changes in the plan**:
+1. Switch the app's separator to BS-RoFormer (or another band-split model) and Beat This! to
+   final0. Both are drop-in changes with measured gains.
+2. Separation-aware CRNN training (T1) is now lower priority: with BS-RoFormer, stems cost only
+   ~0.02 F50 against isolated guitar.
+3. Fingering (T2) becomes the priority: the Viterbi is the weakest stage on solo lines.
+4. YourMT3+'s note ends suggest using it (or MuScriptor) for durations on clean guitar, but not
+   for amplified electric guitar.
+
 ### MuScriptor
 
 Blocked: the Hugging Face repos `MuScriptor/muscriptor-{small,medium,large}` are gated, and the

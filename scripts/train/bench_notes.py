@@ -6,6 +6,10 @@ Engines:
   checkpoint), run like guitar_core::transcribe::guitar_crnn: 10 s windows
   keeping all but 1 s at inner edges, notes read with the same rules and
   `CrnnParams::guitar()`, then the pipeline's `prune_weak(0.1, 0.0)`.
+- `basic-pitch`: Basic Pitch (Bittner et al. 2022, Apache-2.0), ONNX model,
+  with the app's guitar note settings.
+- `yourmt3[:SPACE_DIR]`: YourMT3+ YPTF.MoE+Multi (noPS), multi-instrument,
+  from a local copy of the `mimbres/YourMT3` Space (default ~/gva/yourmt3).
 - `muscriptor:SIZE:MODE`: MuScriptor (Rouard et al. 2026; CC-BY-NC weights,
   gated on Hugging Face). SIZE is small/medium/large or a local
   .safetensors path. MODE: `free` (no instrument conditioning), `known` (the
@@ -19,7 +23,7 @@ Metrics (`score`), mean over items of each group:
 - F50+off: same plus offset within max(50 ms, 20% of the note);
 - oct: share of reference notes missed at their pitch but found an octave or
   two away (onset within 50 ms), split into estimate too low / too high.
-MuScriptor scores use its guitar-class notes; `any` also reports all pitched
+MuScriptor and YourMT3+ scores use their guitar-class notes; `any` also reports all pitched
 notes, to show guitar notes it attributed to other instruments.
 
 Usage:
@@ -78,9 +82,9 @@ def spread(items, limit):
     return [items[int(i * len(items) / limit)] for i in range(limit)]
 
 
-def items(data, guitarset, limit):
+def items(data, guitarset, limit, manifests=None):
     groups = defaultdict(list)
-    for m in MANIFESTS:
+    for m in manifests or MANIFESTS:
         p = data / m
         if not p.exists():
             continue
@@ -263,20 +267,107 @@ class MuScriptor:
         return out, delay
 
 
+# ---------------------------------------------------------------- Basic Pitch
+
+class BasicPitch:
+    """Spotify's Basic Pitch (ICASSP 2022) through its ONNX model, with the
+    app's guitar settings (`NoteParams::guitar()`: onset 0.5, frame 0.3,
+    notes of 5+ frames, MIDI 30-90)."""
+
+    def __init__(self):
+        from basic_pitch import ICASSP_2022_MODEL_PATH
+        from basic_pitch.inference import Model
+
+        self.model = Model(ICASSP_2022_MODEL_PATH)
+
+    def notes(self, audio):
+        import tempfile
+
+        import soundfile as sf
+        from basic_pitch.inference import predict
+
+        with tempfile.NamedTemporaryFile(suffix=".wav") as f:
+            sf.write(f.name, audio, SR)
+            _, _, events = predict(f.name, self.model, onset_threshold=0.5, frame_threshold=0.3,
+                                   minimum_note_length=58, minimum_frequency=46.2, maximum_frequency=1480.0,
+                                   melodia_trick=True)
+        return sorted([float(s), float(e), int(p), "guitar"] for s, e, p, *_ in events)
+
+
+# ---------------------------------------------------------------- YourMT3+
+
+YMT3_CKPT = "mc13_256_g4_all_v7_mt3f_sqr_rms_moe_wf4_n8k2_silu_rope_rp_b36_nops@last.ckpt"
+YMT3_ARGS = ["-p", "2024", "-tk", "mc13_full_plus_256", "-dec", "multi-t5", "-nl", "26", "-enc", "perceiver-tf",
+             "-sqr", "1", "-ff", "moe", "-wf", "4", "-nmoe", "8", "-kmoe", "2", "-act", "silu", "-epe", "rope",
+             "-rp", "1", "-ac", "spec", "-hop", "300", "-atc", "1", "-pr", "16"]
+
+
+class YourMT3:
+    """YourMT3+ YPTF.MoE+Multi (noPS) (Chang et al. 2024; weights Apache-2.0,
+    code from the `mimbres/YourMT3` Hugging Face Space at `root`, run as in
+    its `model_helper.transcribe`). Notes of MIDI programs 24-31 are guitar."""
+
+    def __init__(self, root, device):
+        import os
+
+        root = Path(root).expanduser()
+        sys.path[:0] = [str(root / "amt" / "src"), str(root)]
+        cwd = os.getcwd()
+        os.chdir(root)  # checkpoint paths are relative to the Space root
+        try:
+            from model_helper import load_model_checkpoint
+
+            self.model = load_model_checkpoint(args=[YMT3_CKPT] + YMT3_ARGS, device="cpu").to(device)
+        finally:
+            os.chdir(cwd)
+        self.device = device
+
+    def notes(self, audio):
+        import torch
+        from utils.audio import slice_padded_array
+        from utils.event2note import merge_zipped_note_events_and_ties_to_notes
+        from utils.note2event import mix_notes
+
+        m = self.model
+        frames, rate = m.audio_cfg["input_frames"], m.audio_cfg["sample_rate"]
+        assert rate == SR
+        segs = slice_padded_array(audio[None].astype(np.float32), frames, frames)
+        segs = torch.from_numpy(segs.astype("float32")).to(self.device).unsqueeze(1)
+        with torch.no_grad():
+            tokens, _ = m.inference_file(bsz=8, audio_segments=segs)
+        starts = [frames * i / rate for i in range(segs.shape[0])]
+        per_channel = []
+        for ch in range(m.task_manager.num_decoding_channels):
+            zipped, _, _ = m.task_manager.detokenize_list_batches([a[:, ch, :] for a in tokens], starts, return_events=True)
+            per_channel.append(merge_zipped_note_events_and_ties_to_notes(zipped)[0])
+        out = []
+        for n in mix_notes(per_channel):
+            if not n.is_drum:
+                inst = "guitar" if 24 <= n.program <= 31 else f"program{n.program}"
+                out.append([float(n.onset), float(n.offset), int(n.pitch), inst])
+        return sorted(out)
+
+
 # ---------------------------------------------------------------- run
 
 def engine_name(spec):
-    kind, rest = spec.split(":", 1)
+    kind, rest = (spec.split(":", 1) + [""])[:2]
     if kind == "crnn":
         return "crnn-" + rest.split("=", 1)[0]
+    if kind in ("basic-pitch", "yourmt3"):
+        return kind
     size, mode = rest.split(":")[:2]
     return f"muscriptor-{Path(size).stem}-{mode}"
 
 
 def run(args):
     name = engine_name(args.engine)
-    kind, rest = args.engine.split(":", 1)
-    if kind == "crnn":
+    kind, rest = (args.engine.split(":", 1) + [""])[:2]
+    if kind == "basic-pitch":
+        engine = BasicPitch()
+    elif kind == "yourmt3":
+        engine = YourMT3(rest or "~/gva/yourmt3", args.device)
+    elif kind == "crnn":
         engine = Crnn(Path(rest.split("=", 1)[1]).expanduser(), args.device)
     elif kind == "muscriptor":
         size, mode = rest.split(":")[:2]
@@ -288,13 +379,13 @@ def run(args):
     notes_dir.mkdir(parents=True, exist_ok=True)
     (args.out / "timing").mkdir(exist_ok=True)
     timing = open(args.out / "timing" / f"{name}.jsonl", "a")
-    todo = [it for it in items(args.data, args.guitarset, args.limit) if not (notes_dir / f"{it['id']}.json").exists()]
+    todo = [it for it in items(args.data, args.guitarset, args.limit, args.manifests) if not (notes_dir / f"{it['id']}.json").exists()]
     print(f"{name}: {len(todo)} items to transcribe", flush=True)
     cache = args.data / "cache16k"
     for k, it in enumerate(todo):
         audio = load_audio(it["audio"], cache)
         t0 = time.time()
-        if kind == "crnn":
+        if kind in ("crnn", "basic-pitch", "yourmt3"):
             notes, extra = engine.notes(audio), {}
         else:
             notes, delay = engine.notes(audio, it["group"])
@@ -345,7 +436,7 @@ def metrics(ref, est):
 
 
 def score(args):
-    all_items = items(args.data, args.guitarset, args.limit)
+    all_items = items(args.data, args.guitarset, args.limit, args.manifests)
     engines = sorted(p.name for p in (args.out / "notes").iterdir() if p.is_dir())
     rows = defaultdict(lambda: defaultdict(list))  # (engine, variant) -> group -> metrics
     for it in all_items:
@@ -356,7 +447,7 @@ def score(args):
                 continue
             est = json.load(open(f))
             variants = {"guitar": [n for n in est if "guitar" in n[3]]}
-            if eng.startswith("muscriptor"):
+            if eng.startswith(("muscriptor", "yourmt3")):
                 variants["any"] = est
             for v, notes in variants.items():
                 m = metrics(ref, notes)
@@ -396,11 +487,13 @@ def main():
     ap.add_argument("--guitarset", type=Path, default=None, help="GuitarSet folder (annotation/, audio/)")
     ap.add_argument("--out", type=Path, required=True)
     ap.add_argument("--engine", default=None)
+    ap.add_argument("--manifests", default=None, help="comma-separated manifest files in --data (default: " + ",".join(MANIFESTS) + ")")
     ap.add_argument("--limit", type=int, default=12, help="items per group, spread evenly (0 = all)")
     ap.add_argument("--device", default="cuda")
     ap.add_argument("--dtype", default=None, help="MuScriptor transformer dtype (float32, bfloat16)")
     args = ap.parse_args()
     args.data, args.out = args.data.expanduser(), args.out.expanduser()
+    args.manifests = args.manifests.split(",") if args.manifests else None
     args.guitarset = args.guitarset.expanduser() if args.guitarset else None
     args.out.mkdir(parents=True, exist_ok=True)
     if args.cmd == "run":
