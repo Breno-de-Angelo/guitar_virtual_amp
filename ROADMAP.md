@@ -256,13 +256,18 @@ apps: Premium owner, 5 allow-listed users, `GET /search` capped at 10 results.
   would have to live outside the Spotify-integrated surface (policy: no combining services).
 
 ### Automatic tablature (built: `transcribe/`, `shared/tab/repository.rs`)
-- Offline pipeline: Demucs `htdemucs_6s` (external, `scripts/install_demucs.sh`) -> Beat This!
-  beats/downbeats/meter -> guitar CRNN (GAPS weights) for the guitar, Basic Pitch for the bass,
-  all in pure Rust (tract 0.23) -> chord grouping, per-beat 16th/triplet quantization,
-  string/fret Viterbi with a learned string prior, tuning -> GP5 + `.gvtab.json` sidecar in the
-  local tab repository. GUI on the Tabs and Spotify pages, batch CLI `transcribe`. The guitar
-  CRNN and Beat This! are optional downloads (`scripts/install_transcription_models.sh`);
-  without them the pipeline uses Basic Pitch and the DSP beat tracker in 4/4. Tab catalogs
+- Offline pipeline: separation (BS-RoFormer SW through MSST, `scripts/install_bs_roformer.sh`,
+  preferred when installed; else Demucs `htdemucs_6s`, `scripts/install_demucs.sh`; both
+  external Python) -> Beat This! beats/downbeats/meter (final0, else small0) -> guitar CRNN
+  (GAPS weights, or the local electric fine-tune when chosen) for the guitar, Basic Pitch for
+  the bass, all in pure Rust (tract 0.23) -> chord grouping, per-beat 16th/triplet
+  quantization, string/fret by the learned fingering tagger (local model, 6 strings) or the
+  Viterbi with a learned string prior, tuning -> GP5 + `.gvtab.json` sidecar in the local tab
+  repository. GUI on the Tabs and Spotify pages, batch CLI `transcribe`. The guitar CRNN and
+  Beat This! are optional downloads (`scripts/install_transcription_models.sh`); without them
+  the pipeline uses Basic Pitch and the DSP beat tracker in 4/4. The table below predates
+  BS-RoFormer, final0 and the learned fingering (their numbers are under "Future work on
+  transcription" and in `docs/transcription_roadmap.md`). Tab catalogs
   (Songsterr, Ultimate Guitar) stay link-only: their terms forbid pulling their content into
   the app.
 - Measured (`transcribe/eval.rs`; note F1 = onset within 80 ms + pitch, on the final tab):
@@ -329,8 +334,9 @@ apps: Premium owner, 5 allow-listed users, `GET /search` capped at 10 results.
   mode; trim intros/outros of music videos against the Spotify duration.
 - **Real band-recording benchmark**: the tab-to-audio aligner is built
   (`scripts/train/align_tabs.py`); collect 30-50 song + human tab pairs and hand-check them, or
-  GP8 files with embedded audio for `eval_real`; request GOAT (DI electric guitar with technique-annotated tabs, ISMIR 2025,
-  non-commercial); GOAT is now the technique benchmark.
+  GP8 files with embedded audio for `eval_real`. GOAT (DI electric guitar with
+  technique-annotated tabs, ISMIR 2025, non-commercial) is on hand and is now the technique
+  benchmark.
 - **Rhythm**: compound meters are written as 2/4 or 6/4 with triplets, not 6/8; 16th-note
   triplets and 32nds.
 - **Techniques**: palm mute and harmonics; tune the hammer-on attack threshold and the bend
@@ -343,9 +349,11 @@ apps: Premium owner, 5 allow-listed users, `GET /search` capped at 10 results.
 - **Fingering**: a learned tagger (`transcribe/fingering_net.rs`, a local model file) is now the
   default for 6-string guitars when installed: true-note string accuracy GuitarSet solo 0.55 ->
   0.62, EGDB 0.68 -> 0.81; final-tab string/fret on GuitarSet 03-05 68% -> 78% (GAPS notes).
-  It is trained on EGDB, so it can't ship until EGDB's authors allow it or it is retrained. The string prior and weights come from GuitarSet + 10 tabs. A learned model
-  (MIDI-to-Tab, Fretting-Transformer, or TART's audio-conditioned AudioFret, +4.8 points from
-  timbre) needs weights we can ship; DadaGP-scale statistics would also help the prior.
+  It is trained on EGDB, so it can't ship until EGDB's authors allow it or it is retrained
+  without EGDB. Shipped builds still use the Viterbi, whose string prior and weights come from
+  GuitarSet + 10 tabs. Next: more players (DadaGP pre-training, research access on request),
+  then audio conditioning (TART's AudioFret reports +4.8 points from timbre); MIDI-to-Tab and
+  Fretting-Transformer have no released weights.
 - **Electric-guitar model**: it is already a local user option (`guitar_electric_crnn.onnx`;
   Metal High Gain final-tab F1 0.69 vs 0.43 for GAPS). Ship it (EGDB license, or retrain without EGDB on Guitar-TECHS +
   GuitarSet renders), add NAM-capture renders, and train on band mixes (Demucs guitar stems of

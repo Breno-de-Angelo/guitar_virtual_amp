@@ -3,7 +3,8 @@
 Fine-tunes the guitar CRNN (Kong et al. 2021 architecture, GAPS weights of Riley et al. 2024)
 on electric guitar in many tones, and prepares the labelled recordings the Rust benchmarks in
 `guitar_core/src/transcribe/eval.rs` read. Needs a CUDA GPU with 8 GB, Python 3.12 with
-`torch numpy soundfile mido onnx scipy pyguitarpro`, and ffmpeg.
+`torch numpy soundfile mido onnx scipy pyguitarpro` (plus `mir_eval` for the benchmark
+scripts), and ffmpeg.
 
 ## Datasets
 
@@ -16,6 +17,7 @@ Put them under one root (here `~/.cache/gva_test`). None of them is in the repos
 | `idmt/` | IDMT-SMT-Guitar (Kehling et al., DAFx 2014), Zenodo 7544110 | CC BY-NC-ND 4.0 | test only (per-note techniques) |
 | `goat/GOAT/` | GOAT (Loth et al., ISMIR 2025), on request | non-commercial | official test split; never in a shipped model |
 | `guitarset/` | GuitarSet (Xi et al., ISMIR 2018), Zenodo 3371780 | CC BY 4.0 | players 00-02 train (`--guitarset`), 03-05 test |
+| `egset12/` | EGSet12 (Pedroza et al., DAFx 2024), Zenodo 11406378 | CC BY 4.0 | test only (real electric guitar with strings; `--egset12`) |
 | `musdb/musdb18/` | MUSDB18 (Rafii et al. 2017), Zenodo 1117372 | non-commercial research | drums/bass/vocals for test band mixes |
 
 ## Steps
@@ -57,6 +59,30 @@ GVA_GUITAR_MODEL=runs/electric/model.onnx GVA_EVAL_MANIFEST=prepared/eval_idmt_t
 - Licenses decide what can ship: a model trained on GOAT, IDMT or MUSDB can't. The model
   trained by these steps without `--goat` uses EGDB (no license stated), Guitar-TECHS and
   GuitarSet (CC BY 4.0) and the GAPS weights (MIT); ask EGDB's authors before distributing it.
+
+## Stage benchmarks (Python, mir_eval)
+
+These compare models stage by stage, outside the app (results in
+`docs/transcription_roadmap.md`, "Results so far"). Each script's docstring lists its options.
+
+```bash
+# Notes: any engine on the manifests, GuitarSet 03-05 and EGSet12; notes cached in BENCH/notes.
+$PY bench_notes.py run --data prepared --guitarset ~/.cache/gva_test/guitarset --out bench \
+    --engine crnn:gaps=guitar-gaps.pth [--engine basic-pitch | yourmt3 | muscriptor:large:known]
+$PY bench_notes.py score --data prepared --guitarset ~/.cache/gva_test/guitarset --out bench
+# Separation: writes guitar stems + eval_mix_<separator>.tsv, then score it with bench_notes.py.
+$PY bench_separation.py --data prepared --out stems --separator htdemucs_6s
+$PY bench_separation.py --data prepared --out stems --separator bsrofo_sw \
+    --msst ~/gva/MSST --config cfg.yaml --ckpt model.ckpt
+# Beats and downbeats on GuitarSet 03-05.
+$PY bench_beats.py --guitarset ~/.cache/gva_test/guitarset --tracker beat_this:final0 --limit 0
+# Fingering and tablature: the app's Viterbi, lowest fret, modular notes + Viterbi, TabCNN.
+cargo build --release --example fingering
+$PY bench_tab.py --data prepared --guitarset ~/.cache/gva_test/guitarset --egdb ~/.cache/gva_test/egdb \
+    --bench bench --fingering-bin target/release/examples/fingering --tabcnn DIR
+# Training speed of the CRNN recipe on a machine (synthetic or real batches).
+$PY probe_throughput.py --init guitar-gaps.pth --batch 4 --accum 2 [--real DATA] [--bf16]
+```
 
 ## Real-song benchmark: aligning your own tabs to your own recordings
 

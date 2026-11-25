@@ -38,7 +38,7 @@ desktop (Linux, Windows, macOS) and Android.
 - **Tone suggestion** for the selected tab track: your own presets tagged with the song or
   artist, plus a factory preset picked from the track's instrument, name, tuning and palm
   muting. It's a starting point, not a copy of the recorded tone.
-- **Automatic tablature** from your own audio files, offline and open source: Demucs separates
+- **Automatic tablature** from your own audio files, offline: BS-RoFormer or Demucs separates
   guitar and bass, guitars on different sides of the stereo mix become separate tracks, a
   guitar-trained model (or Basic Pitch) transcribes the notes, the pitch contour marks bends,
   vibrato, slides and hammer-ons, Beat This! finds beats and bars (the meter may change), and
@@ -72,7 +72,7 @@ pub trait Pedal: Send {
 | Crate | Purpose |
 | --- | --- |
 | `guitar_core` | Audio pipeline, DSP and pedals, egui UI, presets and settings |
-| `guitar_desktop` | Desktop app, plus helper binaries (device-switch test, preset generator, DSP benchmark) |
+| `guitar_desktop` | Desktop app, plus helper binaries (device-switch test, preset generator, DSP benchmark, batch `transcribe`, `render_tones` for training data) |
 | `guitar_android` | Android `NativeActivity` entry point |
 
 ## Build and run
@@ -142,14 +142,18 @@ repository. YouTube's Terms of Service only allow downloading where YouTube offe
 permission from YouTube and the rights holders: use it for content you have the right to
 download. Everything else runs on your computer:
 
-1. [Demucs](https://github.com/facebookresearch/demucs) `htdemucs_6s` (MIT) separates the
-   guitar, bass and drum stems, using the GPU when PyTorch sees one. Optional: without it, the
+1. A separator splits the guitar, bass and drum stems, using the GPU when PyTorch sees one:
+   [BS-RoFormer SW](https://huggingface.co/FractalSurfer/BS-RoFormer-SW-6stem), run through
+   [MSST](https://github.com/ZFTurbo/Music-Source-Separation-Training), when installed (its
+   guitar stem transcribes better: note F1 0.81 against 0.74 on band mixes), else
+   [Demucs](https://github.com/facebookresearch/demucs) `htdemucs_6s` (MIT).
+   `GVA_SEPARATOR=demucs|bs-roformer` forces one. Optional: without a separator, the
    instruments are transcribed from the full mix.
 2. Beats and downbeats come from [Beat This!](https://github.com/CPJKU/beat_this) (MIT) on
-   the mix; bars of 2 to 7 beats are decoded from its downbeats, so a song can switch meter or
-   insert a 2/4 bar. Without it, a simpler tracker uses the drum stem (or the mix) and assumes
+   the mix (the `final0` checkpoint, or `small0` when it's missing); bars of 2 to 7 beats are
+   decoded from its downbeats, so a song can switch meter or insert a 2/4 bar. Without it, a simpler tracker uses the drum stem (or the mix) and assumes
    4/4.
-3. With Demucs, the stereo guitar stem is split by pan position (left, center, right). Parts
+3. With separation, the stereo guitar stem is split by pan position (left, center, right). Parts
    that play different things (say, rhythm on the left and lead in the middle) become separate
    guitar tracks; parts that play the same notes (one guitar panned halfway, a double-tracked
    part, a stereo delay) stay one.
@@ -164,24 +168,29 @@ download. Everything else runs on your computer:
 5. Notes struck together become chords; every beat is written as 16ths or 8th-note triplets,
    whichever fits the timing; strings and frets come from a cost on stretch, hand moves and
    muted strings plus how often guitarists use each string for a pitch (learned from
-   GuitarSet); slides and hammer-ons stay on one string and bent notes off open strings; a
+   GuitarSet), or from the learned fingering model when it's installed (6-string guitars,
+   see below); slides and hammer-ons stay on one string and bent notes off open strings; a
    tuning is picked from the lowest notes (standard, Eb, drop D, drop C, 7 and 8 strings).
 6. The result goes to the tab repository, `<data dir>/guitar_virtual_amp/tab_repository/`:
    `Artist - Title.gp5` (opens in Guitar Pro, TuxGuitar, MuseScore) plus `Artist - Title.gvtab.json`
    with the source audio's SHA-256, the engines used and the time of every bar, which the tab
    player uses to play the original recording in sync. Audio is never copied into the repository.
 
-Install Demucs and yt-dlp once (need [uv](https://docs.astral.sh/uv/); yt-dlp also needs
-ffmpeg; Demucs is about 5 GB with the CUDA build of PyTorch, `--cpu` for a smaller CPU-only one).
-Rerun `install_ytdlp.sh` when YouTube downloads start failing (YouTube changes often):
+Install a separator and yt-dlp once (need [uv](https://docs.astral.sh/uv/); BS-RoFormer also
+needs git, yt-dlp needs ffmpeg). Demucs is about 5 GB with the CUDA build of PyTorch;
+BS-RoFormer adds a ~700 MB checkpoint and needs about 4 GB of free GPU memory. Both take
+`--cpu` for a smaller CPU-only build. Rerun `install_ytdlp.sh` when YouTube downloads start
+failing (YouTube changes often):
 
 ```bash
-scripts/install_demucs.sh
+scripts/install_bs_roformer.sh            # preferred separator (local use only, see License)
+scripts/install_demucs.sh                 # and/or Demucs (the fallback)
 scripts/install_ytdlp.sh
-scripts/install_transcription_models.sh   # guitar model + Beat This! (~115 MB)
+scripts/install_transcription_models.sh   # guitar model + Beat This! (~200 MB)
 ```
-The last one downloads the Beat This! ONNX files and the guitar model checkpoint, which it
-exports to ONNX with PyTorch (reusing the Demucs environment when there is one).
+The last one downloads the Beat This! ONNX files (final0 and small0) and the guitar model
+checkpoint, which it exports to ONNX with PyTorch (reusing the Demucs environment when there
+is one).
 
 Batch mode, to fill the repository offline (skips files already transcribed):
 
@@ -204,7 +213,8 @@ optional models installed:
 | Two GuitarSet guitars in one stereo mix (rhythm + lead), lead part | 0.85-0.88 (0.40-0.43 as one track) |
 
 Given the right notes, 75% land on the same string as the GuitarSet player (held-out
-players). Expect to fix the tab by hand: no palm mute or harmonics, guitars playing different
+players) with the default fingering; the learned fingering model below raises the final tab's
+string/fret agreement on those players from 68% to 78%. Expect to fix the tab by hand: no palm mute or harmonics, guitars playing different
 parts from the same spot of the mix stay one track, and heavy distortion breaks the default
 guitar model (see the metal row). The benchmarks are ignored tests in
 `guitar_core/src/transcribe/eval.rs` (`eval_guitarset`, `eval_transcription`,
@@ -212,8 +222,11 @@ guitar model (see the metal row). The benchmarks are ignored tests in
 
 **Electric guitar model (optional, local).** `scripts/train/` fine-tunes the guitar model on
 electric guitar (EGDB, Guitar-TECHS, GuitarSet players 00-02, rendered through the app's amp
-presets); point `GVA_GUITAR_MODEL` at the exported `.onnx` to use it. Raw note F1, original
-model -> fine-tuned, on recordings it never saw:
+presets). Copy the exported `.onnx` to `<data dir>/guitar_virtual_amp/tools/models/guitar_electric_crnn.onnx`
+and the Transcribe form offers GAPS or electric (batch CLI: `--guitar-model electric`);
+`GVA_GUITAR_MODEL` overrides both. On GuitarSet players 03-05 through the "Metal High Gain"
+preset, the final tab's F1 goes from 0.43 to 0.69. Raw note F1 of an earlier run (4000 steps),
+original model -> fine-tuned, on recordings it never saw:
 
 | Test set | Original | Fine-tuned |
 |---|---|---|
@@ -227,6 +240,14 @@ model -> fine-tuned, on recordings it never saw:
 
 It isn't the default yet: EGDB states no license, so ask its authors before distributing a
 model trained on it. See `scripts/train/README.md`.
+
+**Learned fingering (optional, local).** `scripts/train/fingering/` trains a small Transformer
+(0.57M parameters) that picks each note's string from the notes around it. Copy its
+`model.onnx` to `<data dir>/guitar_virtual_amp/tools/models/fingering_tagger.onnx` (or set
+`GVA_FINGERING_MODEL`) and it becomes the default for 6-string guitars, with the Viterbi as a
+choice in the Transcribe form (batch CLI: `--fingering learned|viterbi`). On true notes it puts
+0.62 of GuitarSet solo notes on the player's string (Viterbi 0.55) and 0.81 on EGDB (0.68). It
+is trained on EGDB too, so the same license caveat applies.
 
 ## Spotify
 
@@ -267,4 +288,6 @@ GNU General Public License as published by the Free Software Foundation, either 
 License, or (at your option) any later version. See [LICENSE](LICENSE).
 
 Bundled and optional third-party models keep their own licenses: Basic Pitch (Apache-2.0, see
-`guitar_core/assets/models/`), the GAPS guitar model and Beat This! (MIT), Demucs (MIT).
+`guitar_core/assets/models/`), the GAPS guitar model and Beat This! (MIT), Demucs and MSST (MIT).
+The BS-RoFormer SW checkpoint states no license (it comes from a community mirror): it is
+downloaded for local, personal use only and must not be bundled or redistributed.

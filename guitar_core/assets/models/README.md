@@ -20,7 +20,20 @@ DSP beat tracker without them.
   Kong et al. (2021) trained for guitar on GAPS by Riley et al. (ISMIR 2024), exported with
   `scripts/export_guitar_crnn.py`. Input `[1, 160000]` 16 kHz audio; outputs onset, offset,
   frame and velocity `[1, 1001, 88]` at 100 fps.
-- `beat_this_small0.onnx`, `beat_this_logmel.onnx`: Beat This! (Foscarin, Schlüter, Widmer,
-  ISMIR 2024; MIT, CPJKU/beat_this), ONNX conversion from
+- `beat_this_final0.onnx`, `beat_this_small0.onnx`, `beat_this_logmel.onnx`: Beat This!
+  (Foscarin, Schlüter, Widmer, ISMIR 2024; MIT, CPJKU/beat_this), ONNX conversion from
   https://huggingface.co/nilsbc/beat-this-onnx. 22.05 kHz audio -> 128 log-mel bands at 50 fps
-  -> beat and downbeat logits.
+  -> beat and downbeat logits. final0 is used when present, small0 otherwise.
+
+Local-only models (never downloaded or bundled: trained on EGDB, which states no license).
+Produced by `scripts/train/` and copied into the same folder by hand:
+
+- `guitar_electric_crnn.onnx`: the guitar CRNN fine-tuned on electric guitar
+  (`finetune_crnn.py`). Same inputs and outputs as `guitar_gaps_crnn.onnx`; enables the
+  GAPS/electric choice in the Transcribe form.
+- `fingering_tagger.onnx`: the learned fingering tagger (`scripts/train/fingering/`). Inputs
+  `frets` `[1, T, 6]` int64 and `cont` `[1, T, 16]` float32, output string logits; used for
+  6-string guitars instead of the Viterbi (`GVA_FINGERING_MODEL` overrides the path).
+
+The BS-RoFormer SW separator (`scripts/install_bs_roformer.sh`) goes into
+`tools/models/bs_roformer_sw/`; its checkpoint states no license, so it is for local use only.

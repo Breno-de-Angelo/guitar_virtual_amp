@@ -48,7 +48,8 @@ Splits must stay fixed: any set used for training (Phase 2) keeps its test part 
 |---|---|---|---|---|
 | GuitarSet players 03-05 | Solo acoustic, mic | Notes + strings | Yes | Clean baseline, fingering |
 | GuitarSet x presets (`GVA_EVAL_TONE`) | Same, through the app's chains | Same | Yes | Tone robustness |
-| EGDB test (`eval_egdb`) | Electric DI, Marshall, Mesa, Plexi, 5 real recordings | Notes + strings | Yes (48 per tone) | Amp tones, fingering on electric |
+| EGDB test (`eval_manifest`, `eval_egdb.tsv`) | Electric DI, Marshall, Mesa, Plexi, 5 real recordings | Notes + strings | Yes (48 per tone) | Amp tones, fingering on electric |
+| EGSet12 | Real solo electric, Telecaster into a miked amp (12 items) | Notes + strings (JAMS) | Yes | Real electric, fingering, aligner validation |
 | Guitar-TECHS P3 + techniques | Electric DI and miked amp | Notes (hexaphonic MIDI), techniques | Yes (12 + 12) | Real electric, techniques |
 | IDMT-SMT-Guitar | DI, isolated notes and licks | Notes + expression style | Yes (657, 86 tech) | Techniques |
 | GOAT test | DI + 5 amp renders | Guitar Pro tabs with techniques | Yes (7 x 6 tones) | Tab F1, techniques. Small: report per item |
@@ -102,8 +103,8 @@ Each stage swaps one component and keeps the rest. Candidates are listed by expe
 
 | Candidate | Notes | Known / expected failures |
 |---|---|---|
-| Demucs `htdemucs_6s` (current) | MIT | Known: weak guitar stem (MSST lists no guitar SDR for it). Expected: guitar leaking into `other`/`piano`, synth pads and organ into `guitar`, transient smearing that creates false onsets |
-| [BS-RoFormer SW 6-stem](https://huggingface.co/FractalSurfer/BS-RoFormer-SW-6stem) | Community checkpoint run in MSST; original author account deleted, license unclear | Expected: better isolation, slower (transformer on full STFT), same one-stem-for-all-guitars limit |
+| Demucs `htdemucs_6s` (app fallback) | MIT | Known: weak guitar stem (MSST lists no guitar SDR for it). Expected: guitar leaking into `other`/`piano`, synth pads and organ into `guitar`, transient smearing that creates false onsets |
+| [BS-RoFormer SW 6-stem](https://huggingface.co/FractalSurfer/BS-RoFormer-SW-6stem) (app default when installed, since 2026-11-25) | Community checkpoint run in MSST; original author account deleted, license unclear | Expected: better isolation, slower (transformer on full STFT), same one-stem-for-all-guitars limit |
 | [Banquet](https://arxiv.org/abs/2406.18747) (query-based) | Beat `htdemucs_6s` on guitar on MoisesDB with 24.9M parameters; can query narrow classes (clean acoustic guitar) | Expected: query by class, not by part: two electric guitars still come out together |
 | [MVSep guitar](https://mvsep.com/algorithms/17) (MDX23C/RoFormer ensemble) | Web service; check whether weights are downloadable | Online only, ToS for uploads |
 | No separation, MuScriptor on the mix (1.2) | Tests whether separation is needed at all | See 1.2 |
@@ -116,8 +117,8 @@ works on each separator's stereo output (`eval_guitar_pairs`).
 
 | Candidate | Notes | Known / expected failures |
 |---|---|---|
-| GAPS CRNN (current) | Kong et al. architecture, classical guitar weights | Known: 0.24 on "Metal High Gain", octave errors mostly an octave low, 0.02 on a low 8-string riff; trained on solo guitar, so a stem with bleed confuses it |
-| Fine-tuned electric CRNN (`runs/electric_v1`, `electric_gs_v2`) | In progress; 0.807 validation onset F1 on EGDB test tabs (from 0.717) | Expected: improves amp tones; still sees only clean, isolated guitar during training, so separation artifacts remain unseen (see T1) |
+| GAPS CRNN (app default) | Kong et al. architecture, classical guitar weights | Known: 0.24 on "Metal High Gain", octave errors mostly an octave low, 0.02 on a low 8-string riff; trained on solo guitar, so a stem with bleed confuses it |
+| Fine-tuned electric CRNN (`runs/electric_v1`, `electric_gs_v2`) | Done (results below); `electric_gs_v2` is a local option in the app (`guitar_electric_crnn.onnx`), not the default because of EGDB's license | Expected: improves amp tones; still sees only clean, isolated guitar during training, so separation artifacts remain unseen (see T1) |
 | Basic Pitch (current fallback) | Small, generic | Known: reports string harmonics as notes; 0.32 on high gain |
 | [MuScriptor](https://github.com/muscriptor/muscriptor) small / medium / large | Decoder-only transformer, 100M / 300M / 1.3B, trained on 11k hours of real aligned music. "Distorted E-Guitar" is its 2nd most frequent class (in ~47% of tracks), "Clean E-Guitar" and "Acoustic Guitar" are separate classes; instrument conditioning. CC-BY-NC weights | Known: cannot represent two notes of the same pitch on the same instrument (onset F1 drops from 60.4 to 51.8 on its test set when such notes are kept); no velocity; offsets weaker than onsets; 5 s segments. Expected: all guitars in one class merged into one part; clean vs distorted class confusion splitting one guitar into two; slow autoregressive decoding on CPU |
 | [YourMT3+](https://github.com/mimbres/YourMT3) (YPTF.MoE) | Multi-instrument, open | Known (MuScriptor paper): poor on real-world mixes; MuScriptor beats it by a wide margin |
@@ -130,12 +131,13 @@ conditioning `{distorted_electric_guitar}`, once with the song's full instrument
 
 ### 1.3 Beats, bars, meter
 
-Current: Beat This! `small0` + bar-pointer Viterbi. Tempo right 59/60, bar lines 57/60 on
-GuitarSet. Low priority, but cheap to check.
+Current: Beat This! `final0` (since 2026-11-25; `small0` when final0 isn't installed) +
+bar-pointer Viterbi. With small0: tempo right 59/60, bar lines 57/60 on the GuitarSet set in
+`ROADMAP.md`; final0 results are under "Results so far". Low priority, but cheap to check.
 
 | Candidate | Known / expected failures |
 |---|---|
-| Beat This! `final0` (bigger checkpoint of the same model) | Expected: small gain over `small0` |
+| Beat This! `final0` (bigger checkpoint of the same model) | Measured and adopted: beat CMLt 0.80 -> 0.92 on GuitarSet comp (see results) |
 | [AlignBeat](https://arxiv.org/abs/2510.14391) | Reports +3.6 points downbeat CMLt over Beat This! |
 | [Explore This!](https://arxiv.org/abs/2610.14817) (learned tatum grid, 2026) | New; checks whether a tatum grid helps our 16th/triplet quantizer |
 | All neural trackers | Known ([SMC blind spot](https://arxiv.org/abs/2605.12287)): confident-but-wrong on slow, rubato and expressive music, double-tempo on slow songs. Ours: compound meters written as 2/4 or 6/4 with triplets instead of 6/8 |
@@ -160,12 +162,13 @@ clean and through presets.
 
 ### 1.5 Fingering (string and fret)
 
-Current: Viterbi over hand positions with a GuitarSet string prior. 75.4% string accuracy on
-GuitarSet 03-05, 65.4% on 10 human GP tabs.
+Current: the learned tagger (T2 step 1, `transcribe/fingering_net.rs`) when its local model is
+installed, else the Viterbi over hand positions with a GuitarSet string prior (75.4% string
+accuracy on GuitarSet 03-05, 65.4% on 10 human GP tabs).
 
 | Candidate | Known / expected failures |
 |---|---|
-| Current Viterbi | Known: weights fitted on few tabs; no long-range context (riff repeated in another position, idiomatic shapes, open-string pedal tones) |
+| Viterbi (fallback) | Known: weights fitted on few tabs; no long-range context (riff repeated in another position, idiomatic shapes, open-string pedal tones) |
 | [MIDI-to-Tab](https://arxiv.org/abs/2408.05024) (BART, DadaGP pre-training) | Check weights. Expected: copies tab-site conventions (DadaGP is user tabs); blind to audio |
 | [Fretting-Transformer](https://arxiv.org/abs/2506.14223) (T5) / [open-fret](https://github.com/Sidmaz666/open-fret) reimplementation | Check weights; same expectations |
 | [Note-event tokenization + pitch-valid decoding](https://arxiv.org/html/2607.26440) (2026) | Beats Fretting-Transformer, much better on small data; constrained decoding removes impossible string/pitch pairs |
