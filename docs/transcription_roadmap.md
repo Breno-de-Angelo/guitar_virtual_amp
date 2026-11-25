@@ -430,7 +430,7 @@ drums/bass/vocals (`make_mixes.py`), 41 mixes.
   0.51, htdemucs_6s stem 0.45, BS-RoFormer stem 0.52), so it cannot use the separator's gain.
 - YourMT3+ "any instrument" notes on the Guitar-TECHS sets score higher than its guitar-class
   notes (0.75 vs 0.70): it labels part of the electric guitar as another instrument.
-- MuScriptor: not run, Hugging Face access still pending.
+- MuScriptor: see EGSet12 below; full runs in progress.
 
 **Beats and downbeats** (GuitarSet 03-05, all 180 excerpts, mir_eval):
 
@@ -516,10 +516,10 @@ separator to try), All-In-One beats (needs NATTEN on ARM).
 
 ### MuScriptor
 
-Blocked: the Hugging Face repos `MuScriptor/muscriptor-{small,medium,large}` are gated, and the
-account `Breno-de-Angelo` (logged in on the Spark) is not yet approved. The package is installed
-in `~/gva/venv` on the Spark; once access is granted, run
-`bench_notes.py run --engine muscriptor:{small,medium,large}:{free,known}` and `score`.
+Access granted 2026-11-24. The package and all three checkpoints are on the Spark (`~/gva/venv`);
+EGSet12 results are above. Runs of small, medium and large (instrument conditioning on the
+guitar classes, plus backing instruments on the mixes) and large without conditioning over all
+the sets are in progress (`~/gva/run_muscriptor.sh`); score with `bench_notes.py score`.
 
 ## Order of work
 
