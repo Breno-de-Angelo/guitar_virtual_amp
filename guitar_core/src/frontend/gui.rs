@@ -119,7 +119,7 @@ fn is_valid_input_device(name: &str) -> bool {
 
 fn is_valid_output_device(name: &str) -> bool {
     let name_lower = name.to_lowercase();
-    if name_lower.contains("discard")
+    !(name_lower.contains("discard")
         || name_lower.contains("rate converter")
         || name_lower.contains("speex")
         || name_lower.contains("upmix")
@@ -127,11 +127,7 @@ fn is_valid_output_device(name: &str) -> bool {
         || name_lower.contains("plugin")
         || name_lower.contains("jack")
         || name_lower.contains("open sound system")
-        || name_lower.contains("oss")
-    {
-        return false;
-    }
-    true
+        || name_lower.contains("oss"))
 }
 
 pub struct AudioApp {
@@ -317,69 +313,69 @@ impl eframe::App for AudioApp {
         self.tab_panel.feed_input(&fresh, self.configured_latency_secs);
 
         // Verifica canais assíncronos
-        if let Some(ref rx) = self.switching_rx {
-            if let Ok(res) = rx.try_recv() {
-                match res {
-                    Ok(stream) => {
-                        self.input_stream = Some(stream);
-                        println!("Dispositivo de entrada alterado com sucesso de forma assíncrona.");
-                    }
-                    Err(e) => {
-                        eprintln!("Erro ao alterar dispositivo: {}", e);
-                    }
+        if let Some(ref rx) = self.switching_rx
+            && let Ok(res) = rx.try_recv()
+        {
+            match res {
+                Ok(stream) => {
+                    self.input_stream = Some(stream);
+                    println!("Dispositivo de entrada alterado com sucesso de forma assíncrona.");
                 }
-                self.switching_rx = None;
+                Err(e) => {
+                    eprintln!("Erro ao alterar dispositivo: {}", e);
+                }
             }
+            self.switching_rx = None;
         }
 
-        if let Some(ref rx) = self.refreshing_devices_rx {
-            if let Ok(list) = rx.try_recv() {
-                self.available_inputs = list;
-                // Garante que a seleção atual continua na lista
-                if !self.selected_input.is_empty() && !self.available_inputs.contains(&self.selected_input) {
-                    self.available_inputs.push(self.selected_input.clone());
-                }
-                self.refreshing_devices_rx = None;
+        if let Some(ref rx) = self.refreshing_devices_rx
+            && let Ok(list) = rx.try_recv()
+        {
+            self.available_inputs = list;
+            // Garante que a seleção atual continua na lista
+            if !self.selected_input.is_empty() && !self.available_inputs.contains(&self.selected_input) {
+                self.available_inputs.push(self.selected_input.clone());
             }
+            self.refreshing_devices_rx = None;
         }
 
-        if let Some(ref rx) = self.switching_output_rx {
-            if let Ok(res) = rx.try_recv() {
-                match res {
-                    Ok(stream) => {
-                        self.output_stream = Some(stream);
-                        println!("Dispositivo de saída alterado com sucesso de forma assíncrona.");
-                    }
-                    Err(e) => {
-                        eprintln!("Erro ao alterar dispositivo de saída: {}", e);
-                    }
+        if let Some(ref rx) = self.switching_output_rx
+            && let Ok(res) = rx.try_recv()
+        {
+            match res {
+                Ok(stream) => {
+                    self.output_stream = Some(stream);
+                    println!("Dispositivo de saída alterado com sucesso de forma assíncrona.");
                 }
-                self.switching_output_rx = None;
+                Err(e) => {
+                    eprintln!("Erro ao alterar dispositivo de saída: {}", e);
+                }
             }
+            self.switching_output_rx = None;
         }
 
-        if let Some(ref rx) = self.switching_buffer_rx {
-            if let Ok((input_res, output_res)) = rx.try_recv() {
-                match input_res {
-                    Ok(stream) => self.input_stream = Some(stream),
-                    Err(e) => eprintln!("Erro ao aplicar novo buffer size (entrada): {}", e),
-                }
-                match output_res {
-                    Ok(stream) => self.output_stream = Some(stream),
-                    Err(e) => eprintln!("Erro ao aplicar novo buffer size (saída): {}", e),
-                }
-                self.switching_buffer_rx = None;
+        if let Some(ref rx) = self.switching_buffer_rx
+            && let Ok((input_res, output_res)) = rx.try_recv()
+        {
+            match input_res {
+                Ok(stream) => self.input_stream = Some(stream),
+                Err(e) => eprintln!("Erro ao aplicar novo buffer size (entrada): {}", e),
             }
+            match output_res {
+                Ok(stream) => self.output_stream = Some(stream),
+                Err(e) => eprintln!("Erro ao aplicar novo buffer size (saída): {}", e),
+            }
+            self.switching_buffer_rx = None;
         }
 
-        if let Some(ref rx) = self.refreshing_output_devices_rx {
-            if let Ok(list) = rx.try_recv() {
-                self.available_outputs = list;
-                if !self.selected_output.is_empty() && !self.available_outputs.contains(&self.selected_output) {
-                    self.available_outputs.push(self.selected_output.clone());
-                }
-                self.refreshing_output_devices_rx = None;
+        if let Some(ref rx) = self.refreshing_output_devices_rx
+            && let Ok(list) = rx.try_recv()
+        {
+            self.available_outputs = list;
+            if !self.selected_output.is_empty() && !self.available_outputs.contains(&self.selected_output) {
+                self.available_outputs.push(self.selected_output.clone());
             }
+            self.refreshing_output_devices_rx = None;
         }
 
         let mut pedal_chain_updated = false;
@@ -681,19 +677,12 @@ impl eframe::App for AudioApp {
                                     if handle.drag_started() {
                                         self.dragged_pedal = Some(i);
                                     }
-                                    if self.dragged_pedal.is_some() {
-                                        if let Some(pointer) =
-                                            ui.ctx().pointer_interact_pos()
-                                        {
-                                            if handle.rect.y_range().contains(pointer.y)
-                                                || ui
-                                                    .min_rect()
-                                                    .y_range()
-                                                    .contains(pointer.y)
-                                            {
-                                                drop_target = Some(i);
-                                            }
-                                        }
+                                    if self.dragged_pedal.is_some()
+                                        && let Some(pointer) = ui.ctx().pointer_interact_pos()
+                                        && (handle.rect.y_range().contains(pointer.y)
+                                            || ui.min_rect().y_range().contains(pointer.y))
+                                    {
+                                        drop_target = Some(i);
                                     }
 
                                     ui.vertical(|ui| {
@@ -714,17 +703,16 @@ impl eframe::App for AudioApp {
                                 });
                             }
 
-                            if ui.input(|i| i.pointer.any_released()) {
-                                if let (Some(from), Some(to)) =
+                            if ui.input(|i| i.pointer.any_released())
+                                && let (Some(from), Some(to)) =
                                     (self.dragged_pedal.take(), drop_target)
-                                {
-                                    if from != to && from < self.pedal_chain.len() {
-                                        let pedal = self.pedal_chain.remove(from);
-                                        let to = to.min(self.pedal_chain.len());
-                                        self.pedal_chain.insert(to, pedal);
-                                        pedal_chain_updated = true;
-                                    }
-                                }
+                                && from != to
+                                && from < self.pedal_chain.len()
+                            {
+                                let pedal = self.pedal_chain.remove(from);
+                                let to = to.min(self.pedal_chain.len());
+                                self.pedal_chain.insert(to, pedal);
+                                pedal_chain_updated = true;
                             }
 
                             // Remove pedais do fim pro início pra não invalidar índices

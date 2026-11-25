@@ -526,15 +526,14 @@ fn cabinet_ui(ui: &mut Ui, params: &mut CabinetParams) -> (bool, Option<Tone3000
             // `rfd` (native file picker) has no Android backend, so Android
             // falls back to a plain text field below.
             #[cfg(not(target_os = "android"))]
-            if ui.button("Load IR...").clicked() {
-                if let Some(path) = rfd::FileDialog::new()
+            if ui.button("Load IR...").clicked()
+                && let Some(path) = rfd::FileDialog::new()
                     .add_filter("WAV", &["wav"])
                     .pick_file()
-                {
-                    params.ir_path = Some(path.display().to_string());
-                    params.source = None;
-                    changed = true;
-                }
+            {
+                params.ir_path = Some(path.display().to_string());
+                params.source = None;
+                changed = true;
             }
             if browse_button(ui) {
                 request = Some(Tone3000Request::Browse(ToneTarget::Ir));
@@ -581,15 +580,14 @@ fn nam_ui(ui: &mut Ui, params: &mut NamParams) -> (bool, Option<Tone3000Request>
 
         ui.horizontal(|ui| {
             #[cfg(not(target_os = "android"))]
-            if ui.button("Load .nam...").clicked() {
-                if let Some(path) = rfd::FileDialog::new()
+            if ui.button("Load .nam...").clicked()
+                && let Some(path) = rfd::FileDialog::new()
                     .add_filter("NAM model", &["nam"])
                     .pick_file()
-                {
-                    params.model_path = Some(path.display().to_string());
-                    params.source = None;
-                    changed = true;
-                }
+            {
+                params.model_path = Some(path.display().to_string());
+                params.source = None;
+                changed = true;
             }
             if browse_button(ui) {
                 request = Some(Tone3000Request::Browse(ToneTarget::Nam));

@@ -93,7 +93,7 @@ impl PedalChain {
             return;
         }
 
-        for (entry, instance) in self.pedals.iter_mut().zip(description.into_iter()) {
+        for (entry, instance) in self.pedals.iter_mut().zip(description) {
             entry.enabled = instance.enabled;
             let new_kind = std::mem::discriminant(&instance.description);
             let updated_in_place =

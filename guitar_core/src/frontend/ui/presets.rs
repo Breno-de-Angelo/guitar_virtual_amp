@@ -142,11 +142,11 @@ impl PresetPanel {
                     }
                 } else {
                     ui.label(&listing.name);
-                    if ui.button("Load").clicked() {
-                        if let Ok(preset) = preset::load_from_file(&listing.path) {
-                            loaded_chain =
-                                Some((preset.pedals, PresetRef::User(listing.path.clone())));
-                        }
+                    if ui.button("Load").clicked()
+                        && let Ok(preset) = preset::load_from_file(&listing.path)
+                    {
+                        loaded_chain =
+                            Some((preset.pedals, PresetRef::User(listing.path.clone())));
                     }
                     if ui.button("Rename").clicked() {
                         self.renaming = Some((listing.path.clone(), listing.name.clone()));
@@ -207,20 +207,19 @@ impl PresetPanel {
     /// where `rfd` has no backend).
     #[cfg(not(target_os = "android"))]
     fn export_button(&mut self, ui: &mut Ui, current_pedals: &[PedalInstance]) {
-        if ui.button("Export current...").clicked() {
-            if let Some(path) = rfd::FileDialog::new()
+        if ui.button("Export current...").clicked()
+            && let Some(path) = rfd::FileDialog::new()
                 .add_filter("JSON", &["json"])
                 .set_file_name(format!(
                     "{}.json",
                     preset::sanitize_file_stem(&self.save_name)
                 ))
                 .save_file()
-            {
-                let preset = self.current_preset(current_pedals);
-                match preset::save_to_file(&preset, &path) {
-                    Ok(()) => self.status = Some(format!("Exported to {}", path.display())),
-                    Err(e) => self.status = Some(format!("Export failed: {e}")),
-                }
+        {
+            let preset = self.current_preset(current_pedals);
+            match preset::save_to_file(&preset, &path) {
+                Ok(()) => self.status = Some(format!("Exported to {}", path.display())),
+                Err(e) => self.status = Some(format!("Export failed: {e}")),
             }
         }
     }
@@ -244,22 +243,21 @@ impl PresetPanel {
     /// Returns the imported pedal chain if the user picked/entered a valid file.
     #[cfg(not(target_os = "android"))]
     fn import_button(&mut self, ui: &mut Ui) -> Option<(Vec<PedalInstance>, PresetRef)> {
-        if ui.button("Import from file...").clicked() {
-            if let Some(path) = rfd::FileDialog::new()
+        if ui.button("Import from file...").clicked()
+            && let Some(path) = rfd::FileDialog::new()
                 .add_filter("JSON", &["json"])
                 .pick_file()
-            {
-                return match preset::load_from_file(&path) {
-                    Ok(preset) => {
-                        self.status = Some(format!("Imported \"{}\"", preset.name));
-                        Some((preset.pedals, PresetRef::User(path)))
-                    }
-                    Err(e) => {
-                        self.status = Some(format!("Import failed: {e}"));
-                        None
-                    }
-                };
-            }
+        {
+            return match preset::load_from_file(&path) {
+                Ok(preset) => {
+                    self.status = Some(format!("Imported \"{}\"", preset.name));
+                    Some((preset.pedals, PresetRef::User(path)))
+                }
+                Err(e) => {
+                    self.status = Some(format!("Import failed: {e}"));
+                    None
+                }
+            };
         }
         None
     }

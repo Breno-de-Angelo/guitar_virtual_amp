@@ -88,7 +88,7 @@ mod tests {
         let period = 50usize;
         let mut outputs = Vec::with_capacity(num_samples);
         for i in 0..num_samples {
-            let input = if (i / period) % 2 == 0 { 8000 } else { -8000 };
+            let input = if (i / period).is_multiple_of(2) { 8000 } else { -8000 };
             outputs.push(phaser.apply_effect(input));
         }
 

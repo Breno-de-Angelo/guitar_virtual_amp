@@ -597,23 +597,23 @@ impl Tone3000Panel {
                     }
                 }
                 Job::Models(tone_id, result) => {
-                    if let View::Details(details) = &mut self.view {
-                        if details.tone_id == tone_id {
-                            details.models = Some(result.clone().map_err(|e| e.to_string()));
-                            details.selected = result
-                                .as_ref()
-                                .ok()
-                                .and_then(|models| {
-                                    let wanted = self.preferred_model?;
-                                    models.iter().position(|m| m.id == wanted)
-                                })
-                                .unwrap_or(0);
-                        }
+                    if let View::Details(details) = &mut self.view
+                        && details.tone_id == tone_id
+                    {
+                        details.models = Some(result.clone().map_err(|e| e.to_string()));
+                        details.selected = result
+                            .as_ref()
+                            .ok()
+                            .and_then(|models| {
+                                let wanted = self.preferred_model?;
+                                models.iter().position(|m| m.id == wanted)
+                            })
+                            .unwrap_or(0);
                     }
-                    if let Err(e) = result {
-                        if e == Tone3000Error::NotSignedIn {
-                            self.handle_error(e);
-                        }
+                    if let Err(e) = result
+                        && e == Tone3000Error::NotSignedIn
+                    {
+                        self.handle_error(e);
                     }
                 }
                 Job::Downloaded(result) => {
@@ -783,10 +783,10 @@ impl Tone3000Panel {
                             .size(28.0)
                             .strong(),
                     );
-                    if let Some(complete) = &code.verification_uri_complete {
-                        if ui.button("Open on this device").clicked() {
-                            open_external(complete);
-                        }
+                    if let Some(complete) = &code.verification_uri_complete
+                        && ui.button("Open on this device").clicked()
+                    {
+                        open_external(complete);
                     }
                     ui.horizontal(|ui| {
                         ui.spinner();

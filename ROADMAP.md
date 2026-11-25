@@ -5,7 +5,19 @@ guitar effects processor with a large pedal/preset library and, eventually, a so
 for sharing presets tied to songs/artists. This document breaks that goal into phases and
 tasks sized for delegating to parallel coding agents.
 
-Status snapshot as of 2026-07-04 (see CLAUDE.md for full architecture):
+Status snapshot as of 2026-11-25 (see CLAUDE.md for full architecture):
+- Since the July snapshot below: an 18th pedal (NAM captures, with TONE3000 browsing and
+  downloads), the Guitar Pro tab player with synth and backing track, practice mode, tone
+  suggestions, the Spotify page, and automatic tablature from audio files or YouTube (Phase 7).
+  The app now talks to the network: TONE3000, Spotify and yt-dlp, each from worker threads only.
+  There is still no backend service and no account system of our own.
+- Transcription research (models, datasets, benchmarks, DGX Spark training) is tracked in
+  `docs/transcription_roadmap.md` and `docs/literature-review/`.
+- CI installs `libasound2-dev` (it had never built on the runner without it) and is clippy-clean;
+  `cargo fmt --check` is still off.
+- Phases 4 (UI redesign), 5 (social) and 6 (launch) have not started.
+
+July 2026 snapshot:
 - Mono, sample-at-a-time `i16` pipeline (plus an opt-in `MultiChannelPedalChain` path for
   stereo/multi-channel devices). Input/output are two cpal streams bridged by
   `crossbeam::bounded` channels; `rtrb` was investigated as a lock-free replacement and

@@ -419,10 +419,10 @@ impl Tone3000Client {
     }
 
     fn store_session(&self, session: Session) {
-        if let Some(path) = &self.inner.session_path {
-            if let Err(e) = storage::save_session(path, &session) {
-                log::warn!("could not save TONE3000 session: {e}");
-            }
+        if let Some(path) = &self.inner.session_path
+            && let Err(e) = storage::save_session(path, &session)
+        {
+            log::warn!("could not save TONE3000 session: {e}");
         }
         *self.inner.session.lock().unwrap() = Some(session);
     }
