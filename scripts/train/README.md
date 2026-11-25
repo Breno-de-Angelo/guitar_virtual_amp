@@ -84,6 +84,27 @@ $PY bench_tab.py --data prepared --guitarset ~/.cache/gva_test/guitarset --egdb 
 $PY probe_throughput.py --init guitar-gaps.pth --batch 4 --accum 2 [--real DATA] [--bf16]
 ```
 
+## Real mixes without labels: MoisesDB
+
+MoisesDB (Pereira et al., ISMIR 2023; check its terms) has 240 multitrack songs. These steps
+measure what the mix and each separator cost the note models on real productions:
+
+```bash
+# 60 s per song with guitar: mix, sum of guitars, each guitar (stems read from the zip)
+$PY prepare_moisesdb.py --zip ~/Downloads/moisesdb.zip --out ~/.cache/gva_test/prepared_moises
+D=~/.cache/gva_test/prepared_moises
+$PY bench_separation.py --data $D --out $D/stems --separator bsrofo_sw --limit 0 --manifest moises_mix.tsv \
+    --msst ~/gva/MSST --config BS-Rofo-SW-Fixed.yaml --ckpt BS-Rofo-SW-Fixed.ckpt   # and htdemucs_6s
+M=moises_iso.tsv,moises_mix.tsv,moises_mix_bsrofo_sw.tsv,moises_mix_htdemucs_6s.tsv
+$PY bench_notes.py run --data $D --out bench_moises --limit 0 --manifests $M --engine crnn:v2=runs/spark_tf32/model.pt
+$PY bench_moisesdb.py --data $D --bench bench_moises --ref crnn-v2,crnn-gaps [--common ENGINE]
+```
+
+`bench_moisesdb.py` compares each model's notes on the mix or stem with notes from the isolated
+guitars (the same model's, and a consensus of `--ref` engines). `--common` restricts the table to
+the songs an engine ran on (MuScriptor is too slow for all 222). `moises_parts.tsv` lists the
+single guitar tracks of songs with several guitars, for multi-guitar work.
+
 ## Real-song benchmark: aligning your own tabs to your own recordings
 
 `align_tabs.py` turns (recording, Guitar Pro tab of that song) pairs into labelled test data

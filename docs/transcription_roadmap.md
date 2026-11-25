@@ -54,6 +54,7 @@ Splits must stay fixed: any set used for training (Phase 2) keeps its test part 
 | IDMT-SMT-Guitar | DI, isolated notes and licks | Notes + expression style | Yes (657, 86 tech) | Techniques |
 | GOAT test | DI + 5 amp renders | Guitar Pro tabs with techniques | Yes (7 x 6 tones) | Tab F1, techniques. Small: report per item |
 | Mixes (`make_mixes.py`) | Labelled guitar over MUSDB drums/bass/vocals | Notes | Yes (77) | Separation, full mix |
+| MoisesDB (`prepare_moisesdb.py`) | 222 real multitrack songs, 60 s each, mix + isolated guitars | None (references from the isolated guitars) | Yes | Separation and mix robustness on real productions |
 | GP SoundFont renders (`eval_transcription`) | User's Guitar Pro files, synthesized | Tabs | Yes | Whole pipeline, multi-track |
 | **Real songs (new, 0.3)** | Commercial recordings | User's GP tabs aligned to the audio | No | The actual use case |
 
@@ -626,6 +627,53 @@ notes, all test items, mean of 3 seeds:
   78%; electric clean 72% -> 75%, Blues Crunch 72% -> 75%, Metal High Gain 67% -> 76% (note F1
   unchanged). A 4.4-minute song takes the same 70 s and ~2.4 GB.
 
+### Real mixes: MoisesDB (2026-11-25, `spark-ef6b`)
+
+`prepare_moisesdb.py` cuts, from each of the 222 MoisesDB songs with guitar, the 60 s with the most
+guitar, as the full mix and as the sum of its guitar tracks (113 songs with distorted guitar, 66
+clean electric, 43 acoustic only). There are no note labels, so `bench_moisesdb.py` scores a model's
+notes on the mix or on a separator's guitar stem against notes from the isolated guitars: either
+the same model's (`self`: what the mix costs that model) or notes on which several models agree
+(`consensus`). F50, mean per song:
+
+All 222 songs, CRNNs (consensus = v2 & GAPS on the isolated guitars; `self` in brackets):
+
+| Input | GAPS | v2 |
+|---|---|---|
+| Raw mix | 0.42 (0.45) | 0.41 (0.45) |
+| htdemucs_6s guitar stem | 0.58 (0.63) | 0.58 (0.65) |
+| BS-RoFormer SW guitar stem | **0.71 (0.76)** | **0.70 (0.78)** |
+
+The 24 songs MuScriptor-large ran on (8 per guitar kind; consensus = v2 & MuScriptor-large):
+
+| Model | Isolated guitars | Raw mix | BS-RoFormer stem | Mix, `self` | Stem, `self` |
+|---|---|---|---|---|---|
+| GAPS CRNN | 0.68 | 0.40 | 0.64 | 0.45 | 0.72 |
+| v2 CRNN | 0.85 | 0.41 | **0.71** | 0.43 | 0.76 |
+| MuScriptor large | 0.71 | 0.42 | 0.64 | **0.54** | 0.74 |
+
+- Separation decides on real songs: BS-RoFormer's stem beats the raw mix by ~0.3 F50 for every
+  model and htdemucs_6s by ~0.12 (0.07 on our synthetic mixes). This confirms the switch to
+  BS-RoFormer.
+- MuScriptor's mix training doesn't make up for separation: on the raw mix it loses less than
+  the CRNNs (`self` 0.54 vs 0.43-0.45) but still scores 0.42, against 0.71 for v2 on the
+  BS-RoFormer stem. On the stem it is no better than the CRNNs. This settles the question the
+  synthetic mixes left open: keep separator + CRNN, and MuScriptor is not worth its 1.3x
+  real-time cost on mixes.
+- Distorted guitar is where real songs lose most: v2 on the BS-RoFormer stem 0.56 (distorted),
+  0.75 (clean), 0.83 (acoustic) on the 24 songs. Separation-aware training (T1) should target
+  it, with MoisesDB itself as the data: pseudo-labels from the isolated guitars, training input
+  from the separated stem.
+- Model rankings on the isolated guitars follow the reference (each model scores best against a
+  consensus that includes it: v2 0.71 vs GAPS 0.75 when GAPS is in the reference too), so this
+  benchmark ranks separators and mix robustness, not note accuracy. The labelled sets
+  (EGSet12, GOAT, EGDB) still rank the note models.
+- Cost: BS-RoFormer ~5.5x real time on the GB10. MuScriptor large ran at 0.2-0.7x real time on
+  these dense mixes (decoding time grows with note count: 1,000-2,000 notes per minute when
+  bass and voice are transcribed too); medium was stopped after 80 of 180 items.
+- Reports: `~/.cache/gva_test/bench_moises/report*.{md,json}`; notes cache on the Spark in
+  `~/gva/bench_moises`.
+
 ## Order of work
 
 Two tracks can run at once now: evaluation and data generation on the Sparks, benchmark code and
@@ -633,7 +681,8 @@ the real-song set on the laptop.
 
 1. Phase 0.1 metrics and the matrix runner (unblocks everything). In parallel: Spark setup and
    throughput probe.
-2. Phase 1.2 MuScriptor (all sizes) and 1.4 techniques on the matrix, on the Sparks.
+2. Phase 1.2 MuScriptor (all sizes) and 1.4 techniques on the matrix, on the Sparks. MuScriptor
+   on real mixes: done (MoisesDB), it doesn't replace separator + CRNN.
 3. Phase 0.3 real-song set: aligner done; collect and hand-check song + tab pairs.
 4. Data generation on the Sparks: tone renders, separated mixes, DadaGP renders, pseudo-labels.
 5. T1 sweep with separation-aware data; Phase 1.1 separators and 1.5 fingering candidates.

@@ -256,7 +256,7 @@ class MuScriptor:
         wav = (torch.from_numpy(audio), SR)
         instruments = None
         if self.mode == "known":
-            instruments = GUITARS + (BACKING if group.startswith("mix/") else [])
+            instruments = GUITARS + (BACKING if group.startswith(("mix/", "moises-mix/")) else [])
         events = list(self.model.transcribe(wav, instruments=instruments))
         delay = 0.0
         starts = [e.start_event.start_time for e in events if isinstance(e, NoteEndEvent)]

@@ -13,6 +13,7 @@ Separators:
 
 Usage:
   python bench_separation.py --data PREPARED --out STEMS --separator htdemucs_6s [--limit 12]
+      [--manifest moises_mix.tsv]   (writes <manifest stem>_<separator>.tsv)
   python bench_separation.py --data PREPARED --out STEMS --separator bsrofo_sw \\
       --msst ~/gva/MSST --config cfg.yaml --ckpt model.ckpt
 """
@@ -30,9 +31,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from bench_notes import spread  # noqa: E402
 
 
-def load_items(data, limit):
+def load_items(data, limit, manifest="eval_mix.tsv"):
     groups = {}
-    for line in open(data / "eval_mix.tsv"):
+    for line in open(data / manifest):
         audio, notes, group, *_ = line.rstrip("\n").split("\t")
         groups.setdefault(group, []).append((audio, notes, group))
     out = []
@@ -103,6 +104,7 @@ def main():
     ap.add_argument("--out", type=Path, required=True)
     ap.add_argument("--separator", required=True, choices=["htdemucs_6s", "bsrofo_sw"])
     ap.add_argument("--limit", type=int, default=12)
+    ap.add_argument("--manifest", default="eval_mix.tsv", help="mix manifest in --data (e.g. moises_mix.tsv)")
     ap.add_argument("--msst", type=Path)
     ap.add_argument("--config", type=Path)
     ap.add_argument("--ckpt", type=Path)
@@ -115,7 +117,7 @@ def main():
     else:
         sep = MsstRoformer(args.msst.expanduser(), args.config.expanduser(), args.ckpt.expanduser(), args.device)
     rows, timing = [], open(out / "timing.jsonl", "a")
-    items = load_items(data, args.limit)
+    items = load_items(data, args.limit, args.manifest)
     for k, (audio, notes, group) in enumerate(items):
         dst = out / (group.replace("/", "_") + "__" + Path(audio).stem + ".wav")
         if not dst.exists():
@@ -128,8 +130,9 @@ def main():
             timing.flush()
             print(f"[{k + 1}/{len(items)}] {dst.name}: {x.shape[1] / 44100:.0f}s in {dt:.1f}s", flush=True)
         rows.append(f"{dst}\t{notes}\tsep-{args.separator}/{group.removeprefix('mix/')}")
-    (data / f"eval_mix_{args.separator}.tsv").write_text("\n".join(rows) + "\n")
-    print(f"wrote {data / f'eval_mix_{args.separator}.tsv'} ({len(rows)} items)")
+    name = f"{Path(args.manifest).stem}_{args.separator}.tsv"
+    (data / name).write_text("\n".join(rows) + "\n")
+    print(f"wrote {data / name} ({len(rows)} items)")
 
 
 if __name__ == "__main__":
