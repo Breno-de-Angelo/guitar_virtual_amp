@@ -1,0 +1,49 @@
+% !TeX root = ../main.tex
+\section{End-to-End Audio-to-Tablature Models}
+\label{sec:e2e}
+
+End-to-end models predict string and fret directly from audio, so the
+fingering can use timbre and the tablature constraints can shape the
+transcription. Before deep learning, Barbancho et~al.~\cite{barbancho2012chords}
+transcribed chords and their fingering from audio with an HMM over
+fingering configurations.
+
+\emph{Frame-wise classification.} TabCNN~\cite{wiggins2019tabcnn} applies a
+small CNN to a constant-Q spectrogram and outputs, per frame, a distribution
+over fret classes (open, frets, silent) for each of the six strings, trained
+and evaluated on GuitarSet. It has no note-level decoding and no temporal
+model. Cwitkowitz et~al.~\cite{cwitkowitz2022inhibition} add an inhibition loss
+that discourages co-activation of note pairs that are unlikely on the
+fretboard, estimated from symbolic tablature. FretNet~\cite{cwitkowitz2023fretnet}
+estimates continuous-valued pitch contours grouped by string and fret, which
+represents bends and vibrato that a semitone grid cannot.
+
+\emph{Pre-training on synthetic data.} SynthTab~\cite{zang2024synthtab} shows
+that pre-training a GTT model on DadaGP rendered through guitar plugins
+improves results after fine-tuning and, more importantly, reduces overfitting
+in cross-dataset tests; this is the main evidence that data scale, not
+architecture, limits end-to-end GTT.
+
+\emph{Electric guitar and techniques.} GOAT~\cite{loth2025goat} reports
+preliminary results for a tablature transcription approach trained on its
+DI-plus-amplifier data, and is the first large source of electric-guitar audio
+paired with technique-annotated tablature.
+
+\emph{Generative models.} Noise2Fret~\cite{simionato2026noise2fret} generates
+tablature with a diffusion model over a continuous latent representation of
+string and fret targets, conditioned on spectral features. Five auxiliary
+losses (pitch-class distance, positional distance, circle-of-fifths distance,
+string similarity, hand-span feasibility) encode playability; on GuitarSet and
+GOAT the model outperforms its baselines and the losses give consistent gains.
+
+\emph{Hybrid systems.} TART~\cite{gupta2025tart,gupta2026tart} is presented
+as end-to-end but is a four-stage pipeline (audio-to-MIDI, technique
+classifier, audio-conditioned fingering, tablature generator). Evaluated
+zero-shot on GuitarSet, EGDB and noisy versions of both, it reports 81.35\%
+audio-to-MIDI F50, 71.8\% string-fret Tab F1 and 54.08\% end-to-end Tab F1
+on average. The gap between the last two numbers shows how errors compound
+across stages.
+
+All of these models take an isolated guitar as input. None is trained or
+evaluated on guitar inside a band mix, and most are trained on GuitarSet,
+which is acoustic.

@@ -1,0 +1,55 @@
+% !TeX root = ../main.tex
+\section{Task Definition and Evaluation}
+\label{sec:task}
+
+\subsection{Outputs}
+A complete tablature for one guitar part contains (i) note events with onset,
+offset and pitch, (ii) a string and fret for each note, given a tuning and
+possibly a capo, (iii) a rhythmic notation: beats, bars, time signatures and a
+quantised duration for each note, and (iv) technique annotations per note
+(bend height and release, vibrato, slide, hammer-on and pull-off, palm mute,
+harmonics, dead notes). When the recording contains several guitars, each
+part must also be separated into its own track. Published systems address
+subsets of these outputs; very few address (iii), and none address all of
+them from a band recording.
+
+\subsection{Metrics}
+\emph{Note-level metrics} follow the \texttt{mir\_eval} conventions used for
+piano~\cite{hawthorne2018onsets}: a predicted note matches a reference note if
+the pitches agree (within 50 cents) and the onsets lie within 50\,ms; the
+stricter variant also requires the offset within
+$\max(50\,\text{ms}, 0.2\,d)$ of the reference, $d$ being its duration.
+Precision, recall and F1 follow from a one-to-one matching. We write F50 for
+the onset-only F1. MT3~\cite{gardner2022mt3} noted that multi-instrument
+transcription lacked consistent metrics; MuScriptor~\cite{rouard2026muscriptor}
+reports instrument-agnostic onset, offset and frame F1 on its own test set.
+
+\emph{Tablature metrics} add the string. The frame-level metrics of
+TabCNN~\cite{wiggins2019tabcnn} (tablature precision, recall and F-measure,
+and multi-pitch metrics) count a frame as correct when the right fret is
+active on the right string. Note-level Tab F1, used by
+TART~\cite{gupta2026tart}, requires a note match plus the same string and
+fret. Symbolic fingering methods, which start from the reference notes, report
+string or tablature accuracy against a human tablature, and some add
+playability measures or user
+studies~\cite{edwards2024miditotab,hamberger2025fretting}. Because several
+fingerings of the same passage are idiomatic, agreement with one human
+tablature is a lower bound on quality.
+
+\emph{Rhythm metrics} are those of beat tracking: beat and downbeat F-measure
+with a 70\,ms window, and continuity metrics such as CMLt, which require
+consecutive correct beats~\cite{foscarin2024beatthis}. Systems that output
+notated rhythm rarely report a metric for it.
+
+\emph{Technique metrics} are per-class precision, recall and F1, either on
+isolated notes or on notes of a transcription~\cite{su2019tent,gupta2026tart}.
+
+\subsection{Comparability}
+Reported numbers are hard to compare for three reasons. Test sets differ in
+instrument (acoustic, classical, electric), in recording condition (direct
+input, amplified, miked) and in whether the input is solo or mixed. Many
+results are obtained on the same dataset the model was trained on, while the
+use case is zero-shot. And labels carry systematic timing offsets: hexaphonic
+pickups and manual annotations can be shifted by tens of milliseconds, which
+is comparable to the 50\,ms tolerance, so the same model can score
+differently depending on label alignment.

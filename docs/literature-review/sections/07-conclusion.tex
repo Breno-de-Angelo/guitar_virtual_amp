@@ -1,0 +1,17 @@
+% !TeX root = ../main.tex
+\section{Conclusion}
+\label{sec:conclusion}
+
+Guitar tablature transcription has moved from frame-wise CNNs on acoustic
+guitar to modular systems with learned fingering and technique stages, and to
+generative end-to-end models. In parallel, large sequence-to-sequence
+transcribers trained on real multi-instrument data now handle full mixes and
+distorted electric guitar, but stop at notes. For the use case of
+transcribing a guitar part from a commercial song, the practical state of the
+art is a modular pipeline: a band-split or hybrid separator, a guitar note
+model trained on many tones (or a multi-instrument transcriber), a neural beat
+tracker, and a learned or search-based fingering stage. The most promising
+direction is to close the split between the two lines of work, by giving
+mix-level transcribers string and fret outputs, and to build a benchmark of
+real recordings with reference tablatures so that progress on the actual task
+can be measured.

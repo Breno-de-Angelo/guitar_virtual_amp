@@ -1,0 +1,86 @@
+% !TeX root = ../main.tex
+\section{Introduction}
+\label{sec:intro}
+
+Guitarists learn songs from tablature: a notation that gives, for every note,
+the string to play and the fret to press, together with rhythm and marks for
+techniques such as bends, slides, hammer-ons and vibrato. Tablatures for
+popular music are mostly written by hand, by ear, and shared on community
+sites with uneven quality. Writing them automatically from the recording
+itself is therefore a long-standing goal of music information retrieval (MIR),
+known as guitar tablature transcription (GTT).
+
+GTT inherits every difficulty of automatic music transcription (AMT) and adds
+its own. The guitar is polyphonic, and strummed chords place up to six notes
+within a few tens of milliseconds. The same pitch can be played on up to five
+string-fret positions, so pitch alone does not determine the tablature.
+Electric guitar is almost always processed by amplifiers and effects whose
+distortion creates intermodulation and dense harmonic spectra that confuse
+pitch detectors. In commercial recordings the guitar shares the mix with
+drums, bass, keyboards and voice, and is often double-tracked or layered with
+other guitars. Finally, annotated data is scarce: labelling string, fret and
+technique for every note requires either special hardware (hexaphonic pickups)
+or expert transcription.
+
+Two families of methods address the problem. \emph{Modular pipelines}
+decompose it into sub-tasks (source separation, note transcription, beat and
+bar tracking, string-fret assignment, technique detection) and solve each with
+a dedicated model or algorithm. \emph{End-to-end} models predict string and
+fret activity directly from the audio. Fig.~\ref{fig:families} contrasts the
+two. A third line of work, large multi-instrument sequence-to-sequence
+transcribers, does not produce tablature but has recently become the strongest
+option for the note-transcription stage on full mixes, and we treat it as a
+component of the modular family.
+
+This review covers the task definition and its metrics
+(Section~\ref{sec:task}), the datasets (Section~\ref{sec:datasets}), the
+components of modular pipelines (Section~\ref{sec:modular}), end-to-end
+audio-to-tablature models (Section~\ref{sec:e2e}), and a comparison with known
+failure modes and open problems (Section~\ref{sec:comparison}). The scope is
+the use case of transcribing a guitar part from a commercial song; results on
+solo, clean recordings are reported, but read with that use case in mind.
+
+\begin{figure}[t]
+\centering
+\begin{tikzpicture}[
+  node distance=2.2mm,
+  box/.style={draw, rounded corners=1pt, font=\scriptsize, align=center,
+              minimum height=5mm, inner sep=2pt, fill=white},
+  arr/.style={-{Stealth[length=1.6mm]}, semithick}]
+  % Modular
+  \node[box] (mix) {Mix};
+  \node[box, right=of mix] (sep) {Source\\separation};
+  \node[box, right=of sep] (amt) {Note\\transcription};
+  \node[box, right=of amt] (fing) {String-fret\\assignment};
+  \node[box, right=of fing] (tab) {Tab};
+  \node[box, above=of amt] (beat) {Beats,\\bars};
+  \node[box, below=of amt] (tech) {Techniques};
+  \draw[arr] (mix) -- (sep);
+  \draw[arr] (sep) -- (amt);
+  \draw[arr] (amt) -- (fing);
+  \draw[arr] (fing) -- (tab);
+  \draw[arr] (mix.north) |- (beat.west);
+  \draw[arr] (beat.east) -| (tab.north);
+  \draw[arr] (sep.south) |- (tech.west);
+  \draw[arr] (tech.east) -| (tab.south);
+  \begin{scope}[on background layer]
+    \node[draw, dashed, rounded corners, fit=(mix)(tab)(beat)(tech),
+          inner sep=2.5mm, label={[font=\scriptsize]above left:Modular}] {};
+  \end{scope}
+  % End-to-end
+  \node[box, below=13mm of mix] (mix2) {Solo\\guitar};
+  \node[box, right=6mm of mix2, minimum width=36mm] (e2e)
+       {Audio-to-tablature model\\(per-string frets, per frame or note)};
+  \node[box, right=6mm of e2e] (tab2) {Tab};
+  \draw[arr] (mix2) -- (e2e);
+  \draw[arr] (e2e) -- (tab2);
+  \begin{scope}[on background layer]
+    \node[draw, dashed, rounded corners, fit=(mix2)(tab2), inner sep=2.5mm,
+          label={[font=\scriptsize]below left:End-to-end}] {};
+  \end{scope}
+\end{tikzpicture}
+\caption{The two families of tablature transcription systems. Modular
+pipelines can start from a full mix; published end-to-end models start from
+an isolated guitar recording.}
+\label{fig:families}
+\end{figure}

@@ -1,0 +1,123 @@
+% !TeX root = ../main.tex
+\section{Comparison, Failure Modes and Open Problems}
+\label{sec:comparison}
+
+\subsection{Comparison}
+Table~\ref{tab:methods} places the main methods by input, output and
+availability. The pattern is a split: methods that handle real mixes
+(MuScriptor, YourMT3+, source separators) output notes or stems without
+fingering, and methods that output tablature (TabCNN, FretNet, Noise2Fret,
+TART) require solo guitar. A modular pipeline that chains a separator, a
+guitar note model and a fingering model is currently the only way to obtain
+tablature from a commercial recording, and its accuracy is bounded by the
+weakest stage and by error accumulation, as TART's drop from 71.8\% to
+54.08\% Tab F1 illustrates.
+
+\begin{table*}[t]
+\centering
+\caption{Main methods by stage. ``Mix'': designed or shown to work on
+multi-instrument recordings. Reported results use different test sets and are
+not directly comparable.}
+\label{tab:methods}
+\footnotesize
+\setlength{\tabcolsep}{3.5pt}
+\begin{tabular}{@{}llllll@{}}
+\toprule
+Method & Stage & Input & Output & Mix & Reported (as published) \\
+\midrule
+HT Demucs~\cite{rouard2023htdemucs} & separation & mix & 4 or 6 stems (guitar in 6s) & yes & 9.20\,dB SDR, MUSDB18 \\
+BS-RoFormer~\cite{lu2023bsroformer} & separation & mix & stems & yes & 9.80\,dB SDR, MUSDB18HQ; SDX23 winner \\
+Banquet~\cite{watcharasupat2024banquet} & separation & mix & queried stem & yes & beats htdemucs\_6s on guitar, MoisesDB \\
+Kong et al.~\cite{kong2021highres} & notes & solo piano & notes & no & 96.72\% onset F1, MAESTRO \\
+GAPS model~\cite{riley2024gaps} & notes & solo guitar & notes & no & SOTA on GuitarSet, zero-shot \\
+TIT~\cite{chen2025egdbpg} & notes & electric guitar & notes & no & gains across amp types \\
+Basic Pitch~\cite{bittner2022basicpitch} & notes & any instrument & notes, contour & no & lightweight baseline \\
+MT3~\cite{gardner2022mt3} & notes & mix & notes + instrument & yes & large gains on guitar \\
+YourMT3+~\cite{chang2024yourmt3} & notes & mix & notes + instrument & yes & 10 datasets; limited on pop \\
+MuScriptor~\cite{rouard2026muscriptor} & notes & mix & notes + instrument & yes & 11k\,h real data; 60.4 onset F1 (own test) \\
+Beat This!~\cite{foscarin2024beatthis} & rhythm & mix or solo & beats, downbeats & yes & SOTA beat F1 without DBN \\
+AlignBeat~\cite{ahn2025alignbeat} & rhythm & mix & beats, downbeats & yes & +3.6 downbeat CMLt over Beat This! \\
+Viterbi/HMM~\cite{sayegh1989fingering,hori2016minimax} & fingering & notes & string, fret & -- & hand-designed costs \\
+MIDI-to-Tab~\cite{edwards2024miditotab} & fingering & notes & string & -- & preferred in user study \\
+Fretting-Transformer~\cite{hamberger2025fretting} & fingering & notes & string, fret & -- & beats A* and Guitar Pro \\
+Hsu et al.~\cite{hsu2026noteevent} & fingering & notes & string, fret & -- & beats Fretting-Transformer \\
+Chen et al.~\cite{chen2015technique}, TENT~\cite{su2019tent} & techniques & solo guitar & technique per note & no & TENT: +14.7\% note F \\
+TabCNN~\cite{wiggins2019tabcnn} & end-to-end & solo guitar & frets per frame & no & GuitarSet baseline \\
+FretNet~\cite{cwitkowitz2023fretnet} & end-to-end & solo guitar & string contours & no & finer pitch resolution \\
+Noise2Fret~\cite{simionato2026noise2fret} & end-to-end & solo guitar & string, fret & no & beats baselines, GuitarSet/GOAT \\
+TART~\cite{gupta2026tart} & hybrid & solo guitar & tab + techniques & no & 81.35 F50 / 71.8 / 54.08 Tab F1 \\
+\bottomrule
+\end{tabular}
+\end{table*}
+
+\subsection{Known and expected failure modes}
+\emph{Distorted electric guitar.} Models trained on clean or classical guitar
+lose accuracy on amplified tones~\cite{chen2022egdb}; in our measurements
+(below) most of the added errors are notes estimated an octave too low.
+Tone-diverse training data is the documented
+remedy~\cite{chen2025egdbpg,pedroza2024tones}.
+
+\emph{Separation residue.} Note models trained on solo guitar see bleed from
+other instruments and smeared transients after separation, which become
+false and missed onsets. No published guitar transcriber is trained on
+separated stems.
+
+\emph{Several guitars.} Separators produce one guitar stem and
+multi-instrument transcribers one stream per instrument class; two guitars
+playing different parts in the same region of the stereo image are merged.
+
+\emph{Unisons and repeated pitches.} MT3-style tokenizers cannot represent the
+same pitch twice on one instrument class at once~\cite{rouard2026muscriptor};
+on guitar this occurs for unisons played on two strings and for overlapping
+repeated notes.
+
+\emph{Fingering conventions.} Symbolic fingering models learn the conventions
+of their training tablatures; DadaGP consists of user-made tablatures, so
+models pre-trained on it reproduce their choices, and they cannot use
+timbre unless conditioned on audio.
+
+\emph{Expressive and unusual rhythm.} Beat trackers fail on slow, expressive
+or rubato music~\cite{ahn2026smc}; compound meters and tuplets are rarely
+notated correctly by GTT systems.
+
+\emph{Techniques under distortion.} Contour-based detection assumes a clean
+pitch track and a visible pick attack; both degrade with distortion and
+compression.
+
+\subsection{Observations from our own measurements}
+As a reference point for the use case, we scored the GAPS model and two
+versions fine-tuned on electric guitar in many tones (EGDB, Guitar-TECHS and,
+for the second, GuitarSet players 00--02) on held-out sets, with
+\texttt{mir\_eval} F50 on raw notes. The fine-tuned model raised F50 on
+GOAT amplifier renders, which it never saw, from 0.56 to 0.71 and halved
+octave-low errors there (8\% to 5\% of notes), while staying at 0.89--0.92 on
+GuitarSet. Fed band mixes (labelled guitar over MUSDB18 backing tracks)
+without separation, every variant scored 0.50--0.51. These numbers support
+two points of this review: tone augmentation addresses distortion, and the
+mix, not the guitar model, is now the bottleneck.
+
+\subsection{Open problems}
+\begin{enumerate}
+\item \emph{Mix-level tablature.} No method outputs string and fret from a
+band recording. Extending a multi-instrument transcriber such as MuScriptor
+with string and fret tokens would combine mix robustness with timbre-aware
+fingering, and adding the string to each note token would also remove the
+same-pitch limitation.
+\item \emph{Separation for transcription.} Separators are evaluated by SDR,
+not by the transcription accuracy of their stems; transcribers are not
+trained on separated stems. Training each on the other's output is untested
+for guitar.
+\item \emph{Part separation.} Splitting several guitars of the same class
+(rhythm and lead, doubled parts) needs either spatial cues or separators
+conditioned on a part.
+\item \emph{Techniques in context.} Learned technique classifiers trained on
+GOAT and IDMT-SMT-Guitar with tone augmentation, evaluated on amplified and
+polyphonic material.
+\item \emph{A real benchmark.} A public set of commercial recordings with
+aligned reference tablatures would make the use case measurable. MuScriptor's
+alignment procedure (bar-line interpolation and DTW on chroma and onset
+features with Sync Toolbox~\cite{muller2021sync}) shows a way to build one
+from existing tablatures.
+\item \emph{Rhythm notation.} Quantisation, tuplets and compound meters are
+handled by rules in current systems and are not evaluated.
+\end{enumerate}

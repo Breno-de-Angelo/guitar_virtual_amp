@@ -1,0 +1,77 @@
+% !TeX root = main.tex
+\documentclass[conference]{IEEEtran}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage{microtype}
+\usepackage{graphicx}
+\usepackage{tikz}
+\usetikzlibrary{positioning,arrows.meta,fit,backgrounds}
+\usepackage{booktabs}
+\usepackage{makecell}
+\usepackage{multirow}
+\usepackage{amsmath,amssymb}
+\usepackage[table]{xcolor}
+\usepackage{cite}
+\usepackage[hidelinks]{hyperref}
+
+\graphicspath{{figures/}}
+
+% Draft-only marker for claims that still need checking.
+\newif\ifdraft\drafttrue
+\newcommand{\TODO}[1]{\ifdraft\textcolor{red}{[TODO: #1]}\fi}
+
+\title{Automatic Guitar Tablature Transcription from Commercial Recordings:\\
+A Review of Modular and End-to-End Approaches}
+
+\author{
+  \IEEEauthorblockN{Breno de Angelo}
+  \IEEEauthorblockA{
+    UFES \\
+    Email: breno.angelo@lcad.inf.ufes.br
+  }
+}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Producing a guitar tablature from a commercial recording requires more than
+note transcription: the guitar must be isolated from a band mix, every note
+assigned to a string and fret, the rhythm written in bars, and playing
+techniques such as bends and slides marked. This review surveys the literature
+on each of these sub-problems and on systems that solve several of them at
+once. We organise the work into two families. Modular pipelines chain source
+separation, note transcription, beat tracking, string-fret assignment and
+technique detection; their components are mature individually, and the
+strongest recent system, TART, reports 81.35\% note F1, 71.8\% string-fret F1
+and 54.08\% end-to-end tablature F1 averaged over four solo-guitar benchmarks.
+End-to-end models predict string and fret directly from audio, from TabCNN to
+diffusion-based Noise2Fret, but remain trained and evaluated on solo guitar,
+mostly acoustic. In parallel, large sequence-to-sequence transcription models
+(MT3, YourMT3+, MuScriptor) now transcribe real multi-instrument mixes,
+including distorted electric guitar, yet output notes without fingering. We
+compare datasets, metrics and reported results, list where each method is known
+or expected to fail, and identify the gaps that matter for transcribing real
+songs: no method combines mix-level robustness with fingering, distorted
+guitar and several simultaneous guitar parts remain weak points, and no public
+benchmark pairs commercial recordings with reference tablatures.
+\end{abstract}
+
+\begin{IEEEkeywords}
+automatic music transcription, guitar tablature, source separation,
+beat tracking, sequence-to-sequence models, music information retrieval
+\end{IEEEkeywords}
+
+\input{sections/01-introduction}
+\input{sections/02-task-and-evaluation}
+\input{sections/03-datasets}
+\input{sections/04-modular}
+\input{sections/05-end-to-end}
+\input{sections/06-comparison}
+\input{sections/07-conclusion}
+
+\bibliographystyle{IEEEtran}
+\bibliography{references}
+
+\end{document}
