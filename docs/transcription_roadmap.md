@@ -477,7 +477,31 @@ window. Running it on our sets needs its windowing applied to whole recordings p
 detector to place the events; its event-based follow-up (`Noise2Fret_and_Onsets`, under review)
 targets that.
 
-**Not run, and why**: MuScriptor (gated), TART (no public code), MIDI-to-Tab and
+**EGSet12** (Pedroza et al., DAFx 2024, Zenodo 11406378, CC BY 4.0): 12 real solo electric
+guitar performances (380 s), Telecaster into a miked Yamaha amp, JAMS labels with strings. The
+first real electric recordings with string labels in the benchmark; none of the models trained
+on it. All 12 items:
+
+| Method | F50 | Offset F1 | Tab F1 |
+|---|---|---|---|
+| GAPS CRNN (+ Viterbi for Tab) | **0.89** | 0.41 | 0.57 |
+| v2 CRNN (+ Viterbi) | 0.88 | **0.57** | 0.57 |
+| MuScriptor large, guitar classes (+ Viterbi) | **0.89** | 0.56 | **0.63** |
+| MuScriptor medium / small | 0.88 / 0.85 | 0.53 / 0.53 | - |
+| Basic Pitch (+ Viterbi) | 0.76 | 0.56 | 0.40 |
+| YourMT3+, guitar classes / any instrument (+ Viterbi) | 0.54 / 0.63 | 0.45 / 0.50 | 0.30 |
+| TabCNN / TabCNN-GPFX (end-to-end) | 0.48 / 0.56 | - | 0.31 / 0.40 |
+| Viterbi on true notes: string accuracy | - | - | 0.69 (lowest fret: 0.43) |
+
+- On this clean-amp electric set GAPS, v2 and MuScriptor large tie on onsets (0.88-0.89); v2 and
+  MuScriptor have the better note ends.
+- MuScriptor large's notes give the best tablature (0.63 Tab F1 with the same Viterbi): fewer
+  stray notes inside chords, so the fingering stage gets cleaner chord shapes.
+- TabCNN-GPFX reports 0.585 frame-level tab F1 on EGSet12 in its paper; at note level here it
+  reaches 0.40 Tab F1, well below the modular pipeline.
+- YourMT3+ labels much of this guitar as other instruments (any-instrument F50 0.63 vs 0.54).
+
+**Not run, and why**: TART (no public code), MIDI-to-Tab and
 Fretting-Transformer (no weights), FretNet (code, no weights), Banquet (weights on Zenodo; next
 separator to try), All-In-One beats (needs NATTEN on ARM).
 

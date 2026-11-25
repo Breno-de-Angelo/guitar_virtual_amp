@@ -1,6 +1,9 @@
 """Note-level benchmark of transcription models on the labelled eval sets
 (`prepare_data.py` manifests plus GuitarSet players 03-05).
 
+Sets: the manifests (`--manifests`), GuitarSet players 03-05 (`--guitarset`)
+and EGSet12 (`--egset12`).
+
 Engines:
 - `crnn:NAME=CHECKPOINT`: the guitar CRNN (any `finetune_crnn.py` or GAPS
   checkpoint), run like guitar_core::transcribe::guitar_crnn: 10 s windows
@@ -82,7 +85,7 @@ def spread(items, limit):
     return [items[int(i * len(items) / limit)] for i in range(limit)]
 
 
-def items(data, guitarset, limit, manifests=None):
+def items(data, guitarset, limit, manifests=None, egset12=None):
     groups = defaultdict(list)
     for m in manifests or MANIFESTS:
         p = data / m
@@ -97,6 +100,11 @@ def items(data, guitarset, limit, manifests=None):
             kind = "comp" if jams.stem.endswith("_comp") else "solo"
             if audio.exists():
                 groups[f"guitarset/{kind}"].append({"audio": str(audio), "jams": str(jams), "group": f"guitarset/{kind}"})
+    if egset12:
+        # EGSet12 (Pedroza et al., DAFx 2024; CC BY 4.0): 12 real electric
+        # guitar performances, miked amp, JAMS labels in GuitarSet's format.
+        for jams in sorted(egset12.glob("*.jams")):
+            groups["egset12"].append({"audio": str(jams.with_suffix(".wav")), "jams": str(jams), "group": "egset12"})
     out = []
     for group in sorted(groups):
         for it in spread(groups[group], limit):
@@ -379,7 +387,7 @@ def run(args):
     notes_dir.mkdir(parents=True, exist_ok=True)
     (args.out / "timing").mkdir(exist_ok=True)
     timing = open(args.out / "timing" / f"{name}.jsonl", "a")
-    todo = [it for it in items(args.data, args.guitarset, args.limit, args.manifests) if not (notes_dir / f"{it['id']}.json").exists()]
+    todo = [it for it in items(args.data, args.guitarset, args.limit, args.manifests, args.egset12) if not (notes_dir / f"{it['id']}.json").exists()]
     print(f"{name}: {len(todo)} items to transcribe", flush=True)
     cache = args.data / "cache16k"
     for k, it in enumerate(todo):
@@ -436,7 +444,7 @@ def metrics(ref, est):
 
 
 def score(args):
-    all_items = items(args.data, args.guitarset, args.limit, args.manifests)
+    all_items = items(args.data, args.guitarset, args.limit, args.manifests, args.egset12)
     engines = sorted(p.name for p in (args.out / "notes").iterdir() if p.is_dir())
     rows = defaultdict(lambda: defaultdict(list))  # (engine, variant) -> group -> metrics
     for it in all_items:
@@ -485,6 +493,7 @@ def main():
     ap.add_argument("cmd", choices=["run", "score"])
     ap.add_argument("--data", type=Path, required=True, help="prepare_data.py output (eval_*.tsv, cache16k)")
     ap.add_argument("--guitarset", type=Path, default=None, help="GuitarSet folder (annotation/, audio/)")
+    ap.add_argument("--egset12", type=Path, default=None, help="EGSet12 folder (NN.wav, NN.jams; Zenodo 11406378)")
     ap.add_argument("--out", type=Path, required=True)
     ap.add_argument("--engine", default=None)
     ap.add_argument("--manifests", default=None, help="comma-separated manifest files in --data (default: " + ",".join(MANIFESTS) + ")")
@@ -495,6 +504,7 @@ def main():
     args.data, args.out = args.data.expanduser(), args.out.expanduser()
     args.manifests = args.manifests.split(",") if args.manifests else None
     args.guitarset = args.guitarset.expanduser() if args.guitarset else None
+    args.egset12 = args.egset12.expanduser() if args.egset12 else None
     args.out.mkdir(parents=True, exist_ok=True)
     if args.cmd == "run":
         if not args.engine:

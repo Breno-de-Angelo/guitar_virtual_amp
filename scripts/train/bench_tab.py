@@ -9,7 +9,7 @@ Methods:
   e.g. crnn-v2_spark_s5000; guitar-class notes for multi-instrument models)
   placed by the app's Viterbi.
 
-Sets: GuitarSet 03-05 comp/solo, EGDB test clips (DI and three amp tones),
+Sets: EGSet12 (real electric guitar, miked amp; `--egset12`), GuitarSet 03-05 comp/solo, EGDB test clips (DI and three amp tones),
 and the EGDB Marshall clips inside band mixes: raw mix, and the guitar stems
 of `bench_separation.py` (htdemucs_6s, BS-RoFormer SW).
 - End-to-end: TabCNN (Wiggins & Kim 2019; ONNX exports `cstr/tabcnn-onnx`,
@@ -97,8 +97,11 @@ def egdb_tab(midi_path):
     return sorted(out)
 
 
-def sets(data, guitarset, egdb, limit):
+def sets(data, guitarset, egdb, limit, egset12=None):
     groups = defaultdict(list)
+    if egset12:
+        for jams in sorted(egset12.glob("*.jams")):
+            groups["egset12"].append({"audio": str(jams.with_suffix(".wav")), "group": "egset12", "truth": ("gs", str(jams))})
     for jams in sorted((guitarset / "annotation").glob("0[345]_*.jams")):
         audio = guitarset / "audio" / (jams.stem + "_mic.wav")
         g = "guitarset/" + ("comp" if jams.stem.endswith("_comp") else "solo")
@@ -236,6 +239,7 @@ def main():
     ap.add_argument("--data", type=Path, required=True)
     ap.add_argument("--guitarset", type=Path, required=True)
     ap.add_argument("--egdb", type=Path, required=True)
+    ap.add_argument("--egset12", type=Path, default=None, help="EGSet12 folder (same JAMS layout as GuitarSet)")
     ap.add_argument("--bench", type=Path, required=True, help="bench_notes.py output (notes cache)")
     ap.add_argument("--notes-engines", default="crnn-gaps,crnn-v2_spark_s5000,basic-pitch,yourmt3")
     ap.add_argument("--fingering-bin", type=Path, required=True)
@@ -245,7 +249,8 @@ def main():
     args = ap.parse_args()
     for k in ("data", "guitarset", "egdb", "bench", "fingering_bin", "tabcnn"):
         setattr(args, k, getattr(args, k).expanduser())
-    items = sets(args.data, args.guitarset, args.egdb, args.limit)
+    args.egset12 = args.egset12.expanduser() if args.egset12 else None
+    items = sets(args.data, args.guitarset, args.egdb, args.limit, args.egset12)
     tab_models = {"tabcnn": TabCNN(args.tabcnn / "tabcnn.onnx", False), "tabcnn-gpfx": TabCNN(args.tabcnn / "tabcnn-gpfx.onnx", True)}
     rows = defaultdict(lambda: defaultdict(list))
     cache = (args.out or args.bench) / "tab_notes"
@@ -263,7 +268,7 @@ def main():
         for it in items:
             f = args.bench / "notes" / eng / f"{it['id']}.json"
             if f.exists():
-                ests.append([(n[0], n[1], n[2]) for n in json.load(open(f)) if len(n) < 4 or n[3] == "guitar"])
+                ests.append([(n[0], n[1], n[2]) for n in json.load(open(f)) if len(n) < 4 or "guitar" in n[3]])
                 ok.append(it)
         placed = viterbi(args.fingering_bin, [[(n[0], n[2]) for n in e] for e in ests])
         for it, e, pl in zip(ok, ests, placed):
