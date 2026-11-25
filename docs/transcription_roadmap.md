@@ -71,6 +71,24 @@ works here:
 
 The aligned set doubles as **training data** for Phase 2 (keep the hand-checked songs for test).
 
+**Status (tooling done, no real pairs yet).** `scripts/train/align_tabs.py` aligns a user's GP tab
+(GP3-8) to their recording with synctoolbox MrMsDTW (quantized chroma + DLNCO from the tab's notes,
+all pitched tracks; best chroma transposition on 1 Hz CENS, ±2 semitones applied to the labels).
+It writes per-guitar-track notes in recording time (`onset offset pitch velocity technique string
+fret`), a hand-check copy of the tab (repeats written out) with a `.gvtab.json` sidecar so the Tabs
+page plays the recording in sync, a checklist, and the manifests `eval_real.tsv` (hand-checked
+pairs only), `eval_real_tracks.tsv` and `train_real_unchecked.tsv`.
+`guitar_core/examples/tab_sync_check.rs` checks a copy and sidecar through the app's own loader.
+Validation on recordings with known note times (`validate_tab_align.py`): note F1 at 50 ms between
+aligned tab and labels is 0.92 on EGSet12 (median onset error 12 ms) and 0.80 on the GOAT test
+split (18 ms), 0.84 / 0.73 with per-bar tempo drift plus an intro, and 0.48-0.54 over unrelated
+MUSDB backing. The tab's own timing on these click-tracked sets gives 0.95 / 0.92, the ceiling.
+Rejection (`cost_ratio` > 0.70 or `stall` > 0.10) kept 121/128 correct pairs and rejected all 168
+wrong-tab pairs and all 28 tabs with 15-25% of their bars removed; the margin to the closest wrong
+pair is thin (cost 0.56, stall 0.103). Known gaps: no local handling of tab-recording structure
+differences (rejection only), per-song offsets of 30-40 ms on some items, per-bar cursor sync.
+Next: collect 30-50 pairs, hand-check 20-30, record the current pipeline's row.
+
 **Exit criterion for Phase 0:** one command produces the full matrix (sets x metrics) for a
 pipeline configuration, and the current pipeline's row is recorded as the baseline.
 
@@ -195,9 +213,20 @@ Targets: distortion octave errors, notes lost to separation artifacts.
   frozen because of batch size 4. Stays a CRNN of the same size, so tract inference is unchanged.
 - Measure: Note F50 on EGDB/Guitar-TECHS/GOAT tests per tone, Mixes set through the separator.
 
-### T2. Fingering transformer
+### T2. Fingering model
 
 Targets: the 65-75% string accuracy ceiling of the Viterbi.
+
+Step 1 done: an encoder tagger (results under "Learned fingering" below) beats the Viterbi on every
+set with true notes, most on EGDB and solos. Next:
+- Integrate the "ship" tagger in `arrange::fret_events` behind a setting: port `common.features`,
+  `windowed` and `decode` to Rust and keep the Viterbi as fallback. Retrain without EGDB if its
+  authors don't allow redistribution.
+- Data for player diversity: DadaGP (research access on request) for pre-training, then fine-tune
+  on the current sets.
+- The T5-style seq2seq below only after DadaGP pre-training: without it, larger models don't help.
+
+Original plan:
 - Model: T5-small-sized encoder-decoder (~60M), note-event tokens, pitch-valid constrained
   decoding (2607.26440), tuning as a prefix token.
 - Data: DadaGP (26k GP songs, research access on request), then fine-tune on GuitarSet 00-02,
@@ -505,7 +534,7 @@ on it. All 12 items:
 Fretting-Transformer (no weights), FretNet (code, no weights), Banquet (weights on Zenodo; next
 separator to try), All-In-One beats (needs NATTEN on ARM).
 
-**What changes in the plan**:
+**What changes in the plan** (item 1 done and item 3 started on 2026-11-25, see below):
 1. Switch the app's separator to BS-RoFormer (or another band-split model) and Beat This! to
    final0. Both are drop-in changes with measured gains.
 2. Separation-aware CRNN training (T1) is now lower priority: with BS-RoFormer, stems cost only
@@ -539,6 +568,54 @@ conditioned on the guitar classes (plus bass, drums and voice on the mixes), gui
 - At 1.3x real time on the GPU, large is too slow for the app's CPU path; medium (4x) is close
   to large on electric guitar.
 
+### In the app: BS-RoFormer, final0, electric CRNN option (2026-11-25, laptop RTX 4070 8 GB)
+
+- BS-RoFormer SW is the default separator when installed (`scripts/install_bs_roformer.sh`, MSST
+  1523206, torch 2.13 cu126). On a 261 s song: separation 34 s on the GPU (Demucs 10 s), about
+  3.5 GB of VRAM and 3.7 GB of RAM in the runner, fp16 autocast from the MSST config, default chunk
+  size. With the GPU full it falls back to the CPU at about 5.4x real time.
+- Beat This! final0 replaces small0 when installed. `eval_guitarset` players 03-05 (60 excerpts,
+  clean, GAPS): tempo right 51 vs 49 of 60, bar lines aligned 41 vs 35 (solo 11 vs 6, comp 30 vs
+  29). Beat stage on 261 s: 13.5 s vs 8.3 s.
+- electric_gs_v2 (`spark_tf32`) against GAPS, `eval_guitarset` players 03-05, final-tab F1 median /
+  raw F1 / octave errors:
+
+  | Tone | GAPS | electric |
+  |---|---|---|
+  | Clean | 0.84 / 0.89 / 1.2% | **0.86 / 0.90 / 0.8%** |
+  | Blues Crunch | 0.76 / 0.81 / 1.5% | **0.81 / 0.85 / 1.0%** |
+  | Metal High Gain | 0.43 / 0.49 / 4.5% | **0.69 / 0.75 / 2.3%** |
+
+  It is a user option (local file `guitar_electric_crnn.onnx`), not the default, because of the
+  EGDB license.
+
+### Learned fingering (T2, step 1: encoder tagger, 2026-11-25)
+
+`scripts/train/fingering/`. A 4-layer Transformer tagger (0.57 M parameters; per note: the fret on
+each string, timing, chord and interval features) predicts the string, then a decoder places each
+chord on distinct strings, adds a stretch cost and runs a hand-position Viterbi. Trained on
+GuitarSet 00-02, EGDB train and Guitar-TECHS P1/P2 ("ship", 70k notes), plus GOAT train at 0.1
+weight for "full". Settings were chosen with GuitarSet player 02 held out. String accuracy on true
+notes, all test items, mean of 3 seeds:
+
+| Method | GuitarSet comp | GuitarSet solo | EGDB test | EGSet12 | GOAT test |
+|---|---|---|---|---|---|
+| Viterbi (app) | 0.807 | 0.549 | 0.677 | 0.688 | 0.648 |
+| Tagger, ship | **0.853** | **0.616** | **0.806** | 0.698 | 0.667 |
+| Tagger, full (GOAT, non-commercial) | 0.845 | 0.613 | 0.783 | **0.722** | **0.674** |
+
+- With v2 CRNN notes, Tab F1 goes from 0.53-0.60 to 0.64-0.68 on the EGDB tones, from 0.53 to 0.63
+  on GuitarSet solo, from 0.59 / 0.54 to 0.65 / 0.64 on the BS-RoFormer / htdemucs stems, and from
+  0.27 to 0.32 on the GOAT amps. It is even on EGSet12 (0.56) and lower on the 12 cached GuitarSet
+  comp items (0.68 vs 0.73), where its true-note accuracy is also lower.
+- Chords stay playable (< 0.5% impossible stretches, except 6.5% on EGSet12).
+- Transposing the training passages (frets shifted by k) hurts: solo 0.43. Positions depend on the
+  key.
+- Near-perfect on training players (0.95+), 0.57-0.69 on new ones: too few players is now the
+  limit, not model size (3.3 M parameters did no better).
+- The ONNX (2.3 MB, standard ops) runs in tract 0.23 with a dynamic note count, ~6-10 ms per
+  128-note window on the CPU. Checkpoints: `~/.cache/gva_test/runs/fingering_runs/`.
+
 ## Order of work
 
 Two tracks can run at once now: evaluation and data generation on the Sparks, benchmark code and
@@ -547,10 +624,11 @@ the real-song set on the laptop.
 1. Phase 0.1 metrics and the matrix runner (unblocks everything). In parallel: Spark setup and
    throughput probe.
 2. Phase 1.2 MuScriptor (all sizes) and 1.4 techniques on the matrix, on the Sparks.
-3. Phase 0.3 real-song set (slowest to build; start early).
+3. Phase 0.3 real-song set: aligner done; collect and hand-check song + tab pairs.
 4. Data generation on the Sparks: tone renders, separated mixes, DadaGP renders, pseudo-labels.
 5. T1 sweep with separation-aware data; Phase 1.1 separators and 1.5 fingering candidates.
-6. T2 and T3 in parallel.
+6. T2: integrate the tagger (step 1 done), request DadaGP, then audio conditioning. T3 in
+   parallel.
 7. T4 small, then T4 large if small wins. With the Sparks this no longer waits on a rented GPU,
    so it moves up from "only if needed" to the main bet for full mixes.
 8. T5 only if multi-guitar songs remain the main error source.

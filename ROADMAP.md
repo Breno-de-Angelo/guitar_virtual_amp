@@ -327,20 +327,26 @@ apps: Premium owner, 5 allow-listed users, `GET /search` capped at 10 results.
 - **YouTube**: batch from a Spotify playlist (search + transcribe every track missing a
   tab); show the match confidence and let the user confirm before downloading in batch
   mode; trim intros/outros of music videos against the Spotify duration.
-- **Real band-recording benchmark**: collect GP8 files with embedded audio and sync points and
-  run `eval_real`; request GOAT (DI electric guitar with technique-annotated tabs, ISMIR 2025,
+- **Real band-recording benchmark**: the tab-to-audio aligner is built
+  (`scripts/train/align_tabs.py`); collect 30-50 song + human tab pairs and hand-check them, or
+  GP8 files with embedded audio for `eval_real`; request GOAT (DI electric guitar with technique-annotated tabs, ISMIR 2025,
   non-commercial); GOAT is now the technique benchmark.
 - **Rhythm**: compound meters are written as 2/4 or 6/4 with triplets, not 6/8; 16th-note
   triplets and 32nds.
 - **Techniques**: palm mute and harmonics; tune the hammer-on attack threshold and the bend
   rules on GOAT / Guitar-TECHS; a learned technique classifier (TART, 2026) if rules plateau.
 - **Several guitar tracks**: guitars in the same spot of the mix stay one track (needs a
-  separator for multiple guitars); try a RoFormer guitar model (MSST) against `htdemucs_6s`;
+  separator for multiple guitars); BS-RoFormer SW (MSST) is now the preferred separator
+  (checkpoint license unknown: local use only; find a licensed RoFormer guitar checkpoint before
+  shipping one);
   **drums** (onset classification on the drum stem) and **vocal melody** tracks.
-- **Fingering**: the string prior and weights come from GuitarSet + 10 tabs. A learned model
+- **Fingering**: a learned tagger (`scripts/train/fingering/`) beats the Viterbi on true notes
+  (GuitarSet solo 0.55 -> 0.62, EGDB 0.68 -> 0.81) and still has to be ported into
+  `arrange::fret_events`. The string prior and weights come from GuitarSet + 10 tabs. A learned model
   (MIDI-to-Tab, Fretting-Transformer, or TART's audio-conditioned AudioFret, +4.8 points from
   timbre) needs weights we can ship; DadaGP-scale statistics would also help the prior.
-- **Electric-guitar model**: ship it (EGDB license, or retrain without EGDB on Guitar-TECHS +
+- **Electric-guitar model**: it is already a local user option (`guitar_electric_crnn.onnx`;
+  Metal High Gain final-tab F1 0.69 vs 0.43 for GAPS). Ship it (EGDB license, or retrain without EGDB on Guitar-TECHS +
   GuitarSet renders), add NAM-capture renders, and train on band mixes (Demucs guitar stems of
   labelled mixes) to fix the band-mix regression on Guitar-TECHS. A GOAT-trained research
   model can't ship (non-commercial).
