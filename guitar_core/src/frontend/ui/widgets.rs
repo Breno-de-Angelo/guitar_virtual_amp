@@ -207,6 +207,8 @@ impl Widget for Knob<'_> {
             );
         }
         let value_text = format_value(*self.value, self.decimals, self.suffix);
+        let (value, label) = (*self.value as f64, self.label.to_string());
+        response.widget_info(|| egui::WidgetInfo::slider(true, value, label.clone()));
         response.on_hover_text(format!(
             "{}: {value_text}\nDrag to turn (Shift: fine), double-click to reset, right-click to type",
             self.label

@@ -117,6 +117,24 @@ impl DeviceManager {
         }
     }
 
+    /// Sends the chain to the audio thread without ever blocking. The audio
+    /// thread applies whole chains, so when the channel is full (no output
+    /// stream is draining it: no device, or a switch in progress) the oldest
+    /// pending chain is dropped to make room for this one.
+    pub fn send_chain(&self, pedal_tx: &Sender<Vec<PedalInstance>>, chain: &[PedalInstance]) {
+        let mut message = chain.to_vec();
+        for _ in 0..16 {
+            match pedal_tx.try_send(message) {
+                Ok(()) => return,
+                Err(crossbeam::channel::TrySendError::Full(back)) => {
+                    let _ = self.shared.pedal_rx.try_recv();
+                    message = back;
+                }
+                Err(crossbeam::channel::TrySendError::Disconnected(_)) => return,
+            }
+        }
+    }
+
     /// Sample rate of the output stream (what recordings are written at).
     pub fn output_rate(&self) -> u32 {
         self.shared.song_player.status().output_rate()

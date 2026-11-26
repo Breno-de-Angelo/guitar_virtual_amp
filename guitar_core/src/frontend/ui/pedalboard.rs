@@ -41,25 +41,30 @@ pub fn insert_in_signal_order(chain: &mut Vec<PedalInstance>, pedal: PedalDescri
     at
 }
 
-/// The "➕ Add pedal" menu contents. Returns the pedal picked.
+/// The "Add pedal" menu contents, in two columns of effect families.
+/// Returns the pedal picked.
 pub fn add_pedal_menu(ui: &mut Ui) -> Option<PedalDescription> {
     let palette = Palette::of(ui.ctx());
     let mut picked = None;
-    ui.set_min_width(260.0);
-    for category in PedalCategory::iter() {
-        let pedals: Vec<PedalDescription> = PedalDescription::iter().filter(|p| p.category() == category).collect();
-        if pedals.is_empty() {
-            continue;
+    let categories: Vec<PedalCategory> = PedalCategory::iter().collect();
+    let (left, right) = categories.split_at(categories.len() / 2);
+    ui.horizontal_top(|ui| {
+        for column in [left, right] {
+            ui.vertical(|ui| {
+                ui.set_min_width(170.0);
+                for &category in column {
+                    ui.label(RichText::new(category.label()).small().strong().color(palette.category(category)));
+                    for pedal in PedalDescription::iter().filter(|p| p.category() == category) {
+                        if ui.button(pedal.name()).on_hover_text(pedal.blurb()).clicked() {
+                            picked = Some(pedal);
+                            ui.close();
+                        }
+                    }
+                    ui.add_space(4.0);
+                }
+            });
         }
-        ui.label(RichText::new(category.label()).small().strong().color(palette.category(category)));
-        for pedal in pedals {
-            if ui.button(pedal.name()).on_hover_text(pedal.blurb()).clicked() {
-                picked = Some(pedal);
-                ui.close();
-            }
-        }
-        ui.add_space(2.0);
-    }
+    });
     picked
 }
 

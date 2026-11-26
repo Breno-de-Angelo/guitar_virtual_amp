@@ -72,8 +72,12 @@ pub fn pedal_card(ui: &mut Ui, index: usize, count: usize, instance: &mut PedalI
                 instance.enabled = !instance.enabled;
                 action = PedalAction::Updated;
             }
-            ui.label(RichText::new(instance.description.name()).strong().color(palette.text))
-                .on_hover_text(instance.description.blurb());
+            let title = ui
+                .add(egui::Label::new(RichText::new(instance.description.name()).strong().color(palette.text)).sense(Sense::click()))
+                .on_hover_text(format!("{}\nClick to {} the knobs", instance.description.blurb(), if collapsed { "show" } else { "hide" }));
+            if title.clicked() {
+                collapsed = !collapsed;
+            }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.menu_button("…", |ui| {
                     if ui.add_enabled(index > 0, egui::Button::new("◀ Move earlier")).clicked() {
@@ -99,10 +103,6 @@ pub fn pedal_card(ui: &mut Ui, index: usize, count: usize, instance: &mut PedalI
                 })
                 .response
                 .on_hover_text("Pedal options");
-                let arrow = if collapsed { "⏵" } else { "⏷" };
-                if ui.small_button(arrow).on_hover_text(if collapsed { "Show knobs" } else { "Hide knobs" }).clicked() {
-                    collapsed = !collapsed;
-                }
             });
         });
 

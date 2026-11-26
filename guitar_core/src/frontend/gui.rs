@@ -203,7 +203,7 @@ impl AudioApp {
         let initial_pedal_chain = current_preset.as_ref().map(|c| c.pedals.clone()).unwrap_or_default();
         if !initial_pedal_chain.is_empty() {
             preload_nam_models(&initial_pedal_chain);
-            let _ = setup.pedal_tx.send(initial_pedal_chain.clone());
+            devices.send_chain(&setup.pedal_tx, &initial_pedal_chain);
         }
 
         let mut metronome_panel =
@@ -866,7 +866,7 @@ impl eframe::App for AudioApp {
 
         if chain_changed {
             preload_nam_models(&self.pedal_chain);
-            let _ = self.pedal_tx.send(self.pedal_chain.clone());
+            self.devices.send_chain(&self.pedal_tx, &self.pedal_chain);
         }
 
         ctx.request_repaint();
@@ -902,6 +902,15 @@ mod tests {
                     app.bottom_bar(ui);
                 });
             });
+        }
+    }
+
+    #[test]
+    fn chain_updates_never_block_without_an_audio_stream() {
+        let app = app();
+        // Far more updates than the channel holds, and nobody draining it.
+        for _ in 0..100 {
+            app.devices.send_chain(&app.pedal_tx, &[PedalInstance::new(PedalDescription::Reverb(Default::default()))]);
         }
     }
 
