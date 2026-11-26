@@ -56,5 +56,5 @@ practice mode heard the metronome click.
 
 `cargo test --workspace --exclude guitar_android` (319 tests) and clippy are clean. The pages
 were also rendered offscreen with `egui_kittest` + wgpu at 1280 × 820 and 390 × 844, dark and
-light, including clicks and a knob drag. That harness lives outside the repo, since it pulls in
-wgpu.
+light, including clicks and a knob drag: `tools/ui_snapshots/` (its own Cargo workspace, so
+regular builds don't compile wgpu).

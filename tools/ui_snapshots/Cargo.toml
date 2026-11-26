@@ -1,0 +1,20 @@
+# Renders every page of the app offscreen to PNGs, for checking UI changes
+# without opening audio devices. Its own workspace (not a member of the root
+# one), so regular builds don't compile wgpu. See README.md.
+[package]
+name = "ui_snapshots"
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-or-later"
+publish = false
+
+[workspace]
+
+[dependencies]
+guitar_core = { path = "../../guitar_core" }
+eframe = "0.32.1"
+egui_kittest = { version = "0.32.1", features = ["wgpu", "snapshot", "eframe"] }
+crossbeam = "0.8.4"
+
+[profile.dev.package."*"]
+opt-level = 1

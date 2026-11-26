@@ -25,6 +25,11 @@ cargo test --workspace --exclude guitar_android
 
 **Important:** always run tests/builds at the workspace level (or explicitly include `guitar_desktop`), not with `cargo test -p guitar_core` alone. `guitar_core`'s `eframe` dependency has `default-features = false` (only `glow`+`default_fonts`), so built in isolation, `winit` has no windowing backend (x11/wayland) and fails with `no PlatformIcon in platform_impl`. `guitar_desktop` depends on `eframe` with default features enabled, and Cargo's feature unification pulls that into `guitar_core` when both crates are built together — which is why workspace-level commands work.
 
+Render every page offscreen to PNGs (no audio devices, scratch settings) to check UI changes:
+```
+cd tools/ui_snapshots && cargo run -- /tmp/shots        # see tools/ui_snapshots/README.md
+```
+
 Run a single test:
 ```
 cargo test --workspace --exclude guitar_android <test_name>
