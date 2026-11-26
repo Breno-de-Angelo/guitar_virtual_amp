@@ -81,7 +81,7 @@ impl MetronomePanel {
         } else {
             palette.text_dim.gamma_multiply(0.5)
         };
-        ui.label(RichText::new(format!("● {:.0}", self.metronome.bpm)).color(color))
+        ui.label(RichText::new(format!("⚫ {:.0}", self.metronome.bpm)).color(color))
     }
 
     fn poll_clicks(&mut self, ctx: &egui::Context) {

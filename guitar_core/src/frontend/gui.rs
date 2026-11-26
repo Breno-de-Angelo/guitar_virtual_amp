@@ -70,7 +70,7 @@ impl Page {
 
     pub fn icon(self) -> &'static str {
         match self {
-            Page::Pedalboard => "🎛",
+            Page::Pedalboard => "🎸",
             Page::Presets => "📚",
             Page::Tuner => "🎵",
             Page::Tabs => "🎼",
@@ -397,7 +397,7 @@ impl AudioApp {
         if let Some(action) = self.settings_page.learning.take() {
             self.settings.ui.midi.bind(trigger, action);
             save_settings(&self.settings);
-            self.toast(format!("{} → {}", trigger.label(), action.label()), false);
+            self.toast(format!("{} ➡ {}", trigger.label(), action.label()), false);
             return false;
         }
         let mut changed = false;
@@ -499,19 +499,24 @@ impl AudioApp {
             level_meter(ui, &self.out_meter, meter, "OUT");
 
             // Volume and mute.
-            let mut db = self.settings.ui.output_volume_db;
-            let slider = ui.add_sized(
-                vec2(if narrow { 70.0 } else { 100.0 }, 18.0),
-                egui::Slider::new(&mut db, -60.0..=12.0).show_value(false),
-            );
-            if slider.changed() {
-                self.settings.ui.output_volume_db = db;
-                self.apply_levels();
+            // On phones the master volume lives on the Settings page only.
+            if !narrow {
+                let mut db = self.settings.ui.output_volume_db;
+                let slider = ui.add_sized(vec2(100.0, 18.0), egui::Slider::new(&mut db, -60.0..=12.0).show_value(false));
+                if slider.changed() {
+                    self.settings.ui.output_volume_db = db;
+                    self.apply_levels();
+                }
+                if slider.drag_stopped() {
+                    save_settings(&self.settings);
+                }
+                if slider.double_clicked() {
+                    self.settings.ui.output_volume_db = 0.0;
+                    self.apply_levels();
+                    save_settings(&self.settings);
+                }
+                slider.on_hover_text(format!("Master volume {db:+.1} dB (double-click: 0 dB)"));
             }
-            if slider.drag_stopped() {
-                save_settings(&self.settings);
-            }
-            slider.on_hover_text(format!("Master volume {:+.1} dB (double-click the label in Settings to reset)", db));
             let muted = self.controls.muted();
             let mute_text = if muted { RichText::new("🔇").color(palette.danger) } else { RichText::new("🔊") };
             if ui.add(egui::Button::new(mute_text).selected(muted)).on_hover_text("Mute (M)").clicked() {
@@ -552,10 +557,10 @@ impl AudioApp {
 
             if !narrow {
                 ui.separator();
-                if ui.add_enabled(self.pedalboard.history.can_undo(), egui::Button::new("↶")).on_hover_text("Undo (Ctrl+Z)").clicked() {
+                if ui.add_enabled(self.pedalboard.history.can_undo(), egui::Button::new("⟲")).on_hover_text("Undo (Ctrl+Z)").clicked() {
                     chain_changed |= self.pedalboard.undo(&mut self.pedal_chain);
                 }
-                if ui.add_enabled(self.pedalboard.history.can_redo(), egui::Button::new("↷")).on_hover_text("Redo (Ctrl+Shift+Z)").clicked() {
+                if ui.add_enabled(self.pedalboard.history.can_redo(), egui::Button::new("⟳")).on_hover_text("Redo (Ctrl+Shift+Z)").clicked() {
                     chain_changed |= self.pedalboard.redo(&mut self.pedal_chain);
                 }
                 let (buffer_ms, _, cpu) = self.devices.load();
@@ -734,7 +739,11 @@ impl eframe::App for AudioApp {
             });
         if let Some(error) = self.devices.error.clone() {
             egui::TopBottomPanel::top("audio_error")
-                .frame(egui::Frame::new().fill(palette.danger.gamma_multiply(0.25)).inner_margin(egui::Margin::symmetric(10, 4)))
+                .frame(
+                    egui::Frame::new()
+                        .fill(if palette.dark { egui::Color32::from_rgb(70, 28, 28) } else { egui::Color32::from_rgb(250, 222, 222) })
+                        .inner_margin(egui::Margin::symmetric(10, 4)),
+                )
                 .show(ctx, |ui| {
                     ui.horizontal_wrapped(|ui| {
                         ui.colored_label(palette.danger, format!("⚠ {error}"));

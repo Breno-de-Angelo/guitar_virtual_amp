@@ -236,6 +236,33 @@ pub fn card_frame(palette: &Palette) -> egui::Frame {
         .inner_margin(Margin::same(space::M as i8))
 }
 
+/// Lays `count` cells out in rows of fixed-width columns. egui can only
+/// wrap widgets whose size it knows up front, so groups and frames need
+/// this instead of `horizontal_wrapped`. `cell` gets the cell index and its
+/// width.
+pub fn grid_rows(ui: &mut egui::Ui, count: usize, min_cell_width: f32, mut cell: impl FnMut(&mut egui::Ui, usize, f32)) {
+    let gap = space::S;
+    let available = ui.available_width();
+    let per_row = (((available + gap) / (min_cell_width + gap)).floor() as usize).max(1);
+    let width = ((available + gap) / per_row as f32 - gap).max(min_cell_width.min(available));
+    for row_start in (0..count).step_by(per_row) {
+        ui.horizontal_top(|ui| {
+            ui.spacing_mut().item_spacing.x = gap;
+            for i in row_start..(row_start + per_row).min(count) {
+                ui.allocate_ui_with_layout(
+                    egui::vec2(width, 0.0),
+                    egui::Layout::left_to_right(egui::Align::Center),
+                    |ui| {
+                        ui.set_width(width);
+                        cell(ui, i, width);
+                    },
+                );
+            }
+        });
+        ui.add_space(gap / 2.0);
+    }
+}
+
 /// A section heading with the accent color.
 pub fn section_title(ui: &mut egui::Ui, title: &str) {
     let palette = Palette::of(ui.ctx());

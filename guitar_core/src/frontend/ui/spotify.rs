@@ -578,7 +578,7 @@ impl SpotifyPanel {
                 }
             } else {
                 if ui
-                    .button("🤖 Transcrever")
+                    .button("⚡ Transcrever")
                     .on_hover_text("Gera a tab a partir de um arquivo de áudio desta música que você tenha")
                     .clicked()
                 {
@@ -797,7 +797,7 @@ impl SpotifyPanel {
             None => {
                 link(ui, "🔎", &tab_search_url(track));
                 if ui
-                    .small_button("🤖 Transcrever")
+                    .small_button("⚡ Transcrever")
                     .on_hover_text("Gera a tab a partir de um arquivo de áudio desta música que você tenha")
                     .clicked()
                 {

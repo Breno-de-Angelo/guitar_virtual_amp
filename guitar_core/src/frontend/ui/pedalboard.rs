@@ -39,7 +39,7 @@ pub fn insert_in_signal_order(chain: &mut Vec<PedalInstance>, pedal: PedalDescri
     at
 }
 
-/// The "＋ Add pedal" menu contents. Returns the pedal picked.
+/// The "➕ Add pedal" menu contents. Returns the pedal picked.
 pub fn add_pedal_menu(ui: &mut Ui) -> Option<PedalDescription> {
     let palette = Palette::of(ui.ctx());
     let mut picked = None;
@@ -98,15 +98,15 @@ impl PedalboardPage {
 
         // Toolbar.
         ui.horizontal_wrapped(|ui| {
-            let add = ui.menu_button(RichText::new("＋ Add pedal").strong(), |ui| add_pedal_menu(ui));
+            let add = ui.menu_button(RichText::new("➕ Add pedal").strong(), add_pedal_menu);
             if let Some(Some(pedal)) = add.inner {
                 insert_in_signal_order(chain, pedal);
             }
             ui.separator();
-            if ui.add_enabled(self.history.can_undo(), egui::Button::new("↶ Undo")).on_hover_text("Ctrl+Z").clicked() {
+            if ui.add_enabled(self.history.can_undo(), egui::Button::new("⟲ Undo")).on_hover_text("Ctrl+Z").clicked() {
                 undo_redo |= self.undo(chain);
             }
-            if ui.add_enabled(self.history.can_redo(), egui::Button::new("↷ Redo")).on_hover_text("Ctrl+Shift+Z / Ctrl+Y").clicked() {
+            if ui.add_enabled(self.history.can_redo(), egui::Button::new("⟳ Redo")).on_hover_text("Ctrl+Shift+Z / Ctrl+Y").clicked() {
                 undo_redo |= self.redo(chain);
             }
             ui.separator();
@@ -158,26 +158,36 @@ impl PedalboardPage {
         let mut actions = Vec::new();
         let mut moved: Option<(usize, usize)> = None;
         egui::ScrollArea::vertical().id_salt("pedalboard_scroll").auto_shrink([false, false]).show(ui, |ui| {
-            ui.horizontal_wrapped(|ui| {
-                ui.spacing_mut().item_spacing = egui::vec2(style::space::M, style::space::M);
-                for (i, pedal) in chain.iter_mut().enumerate() {
-                    let card = ui.push_id(("pedal_card", i), |ui| pedal_card(ui, i, count, pedal)).inner;
-                    card.handle.dnd_set_drag_payload(i);
-                    let zone = ui.interact(card.rect, ui.id().with(("pedal_drop", i)), Sense::hover());
-                    if let Some(from) = zone.dnd_hover_payload::<usize>()
-                        && *from != i
-                    {
-                        let x = if *from < i { card.rect.right() + 5.0 } else { card.rect.left() - 5.0 };
-                        ui.painter().vline(x, card.rect.y_range(), egui::Stroke::new(3.0_f32, palette.accent));
+            // Rows of cards. egui can't wrap widgets whose size it only
+            // learns while drawing them, so the rows are laid out here.
+            let gap = style::space::M;
+            let available = ui.available_width();
+            let per_row = (((available + gap) / (style::PEDAL_CARD_WIDTH + gap)).floor() as usize).max(1);
+            let width = if per_row == 1 { available.min(520.0) } else { style::PEDAL_CARD_WIDTH };
+            for row_start in (0..count).step_by(per_row) {
+                ui.horizontal_top(|ui| {
+                    ui.spacing_mut().item_spacing.x = gap;
+                    let row_end = (row_start + per_row).min(count);
+                    for (i, pedal) in chain.iter_mut().enumerate().take(row_end).skip(row_start) {
+                        let card = ui.push_id(("pedal_card", i), |ui| pedal_card(ui, i, count, pedal, width)).inner;
+                        card.handle.dnd_set_drag_payload(i);
+                        let zone = ui.interact(card.rect, ui.id().with(("pedal_drop", i)), Sense::hover());
+                        if let Some(from) = zone.dnd_hover_payload::<usize>()
+                            && *from != i
+                        {
+                            let x = if *from < i { card.rect.right() + 5.0 } else { card.rect.left() - 5.0 };
+                            ui.painter().vline(x, card.rect.y_range(), egui::Stroke::new(3.0_f32, palette.accent));
+                        }
+                        if let Some(from) = zone.dnd_release_payload::<usize>() {
+                            moved = Some((*from, i));
+                        }
+                        if card.action != PedalAction::None {
+                            actions.push((i, card.action));
+                        }
                     }
-                    if let Some(from) = zone.dnd_release_payload::<usize>() {
-                        moved = Some((*from, i));
-                    }
-                    if card.action != PedalAction::None {
-                        actions.push((i, card.action));
-                    }
-                }
-            });
+                });
+                ui.add_space(gap);
+            }
             ui.add_space(style::space::XL);
         });
 
@@ -223,7 +233,7 @@ fn signal_flow(ui: &mut Ui, chain: &mut [PedalInstance]) {
         ui.spacing_mut().item_spacing.x = 4.0;
         ui.label(RichText::new("🎸 IN").color(palette.text_dim));
         for pedal in chain.iter_mut() {
-            ui.label(RichText::new("→").color(palette.text_dim));
+            ui.label(RichText::new("⏵").color(palette.text_dim));
             let color = palette.category(pedal.description.category());
             let text = RichText::new(pedal.description.name()).small();
             let text = if pedal.enabled { text.color(color).strong() } else { text.color(palette.text_dim).strikethrough() };
@@ -235,7 +245,7 @@ fn signal_flow(ui: &mut Ui, chain: &mut [PedalInstance]) {
                 pedal.enabled = !pedal.enabled;
             }
         }
-        ui.label(RichText::new("→ 🔊 OUT").color(palette.text_dim));
+        ui.label(RichText::new("⏵ 🔊 OUT").color(palette.text_dim));
     });
 }
 

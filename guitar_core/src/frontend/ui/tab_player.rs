@@ -610,7 +610,7 @@ impl TabPlayerPanel {
                 }
             }
             if ui
-                .add_enabled(!self.transcriber.is_running(), egui::Button::new("🤖 Transcrever áudio..."))
+                .add_enabled(!self.transcriber.is_running(), egui::Button::new("⚡ Transcrever áudio..."))
                 .on_hover_text("Gera uma tab (guitarra e baixo) a partir de um arquivo de música")
                 .clicked()
             {
@@ -680,7 +680,7 @@ impl TabPlayerPanel {
             } else if speed.changed() {
                 self.player.set_speed(self.speed as f64);
             }
-            ui.toggle_value(&mut self.show_mixer, "🎚 Mixer");
+            ui.toggle_value(&mut self.show_mixer, "🔉 Mixer");
             let mut practice = self.practice_on;
             if ui
                 .toggle_value(&mut practice, "🎯 Prática")

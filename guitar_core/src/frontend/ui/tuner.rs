@@ -29,8 +29,10 @@ pub fn detect(buffer: &VecDeque<f64>) -> Option<f64> {
         .iter()
         .copied()
         .collect::<Vec<_>>()
-        .chunks_exact(2)
-        .map(|pair| (pair[0] + pair[1]) * 0.5)
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|[a, b]| (a + b) * 0.5)
         .collect();
     detect_pitch(&decimated, GLOBAL_CONFIG.sample_rate / 2.0)
 }
@@ -203,19 +205,20 @@ impl TunerPanel {
         ui.vertical_centered(|ui| {
             ui.horizontal(|ui| {
                 let count = tuning.strings.len() as f32;
-                let w = 64.0;
-                ui.add_space(((ui.available_width() - count * (w + 8.0)) / 2.0).max(0.0));
+                let gap = ui.spacing().item_spacing.x;
+                let w = ((ui.available_width() - gap * count) / count).clamp(36.0, 64.0);
+                ui.add_space(((ui.available_width() - count * (w + gap)) / 2.0).max(0.0));
                 for (i, &open) in tuning.strings.iter().enumerate() {
                     let active = string_target.is_some_and(|(s, _)| s == i) && self.midi.is_some();
                     let cents = string_target.filter(|(s, _)| *s == i).map(|(_, c)| c);
                     let tuned = self.tuned.get(i).copied().unwrap_or(false);
-                    string_chip(ui, open as i32, i, active, cents, tuned, a4, &palette);
+                    string_chip(ui, open as i32, i, active, cents, tuned, a4, w, &palette);
                 }
             });
             if self.tuned.iter().any(|t| *t) {
                 let done = self.tuned.iter().filter(|t| **t).count();
                 let text = if done == self.tuned.len() {
-                    "✓ All strings tuned".to_string()
+                    "✔ All strings tuned".to_string()
                 } else {
                     format!("{done}/{} strings tuned", self.tuned.len())
                 };
@@ -260,8 +263,8 @@ fn needle(ui: &mut Ui, cents: f64, live: bool, palette: &Palette) {
         );
     }
     let small = FontId::proportional(style::text::SMALL);
-    painter.text(at(-50.0, radius - 26.0), Align2::CENTER_CENTER, "♭", FontId::proportional(18.0), palette.text_dim);
-    painter.text(at(50.0, radius - 26.0), Align2::CENTER_CENTER, "♯", FontId::proportional(18.0), palette.text_dim);
+    painter.text(at(-50.0, radius - 26.0), Align2::CENTER_CENTER, "b", FontId::proportional(18.0), palette.text_dim);
+    painter.text(at(50.0, radius - 26.0), Align2::CENTER_CENTER, "#", FontId::proportional(18.0), palette.text_dim);
     painter.text(at(0.0, radius - 26.0), Align2::CENTER_CENTER, "0", small, palette.text_dim);
     let in_tune = cents.abs() < IN_TUNE_CENTS;
     let color = if !live {
@@ -286,9 +289,11 @@ fn string_chip(
     cents: Option<f64>,
     tuned: bool,
     a4: f64,
+    width: f32,
     palette: &Palette,
 ) {
-    let (rect, response) = ui.allocate_exact_size(vec2(64.0, 52.0), Sense::hover());
+    let (rect, response) = ui.allocate_exact_size(vec2(width, 52.0), Sense::hover());
+    let compact = width < 56.0;
     let painter = ui.painter_at(rect);
     let fill = if active { palette.accent.gamma_multiply(0.25) } else { palette.card };
     painter.rect_filled(rect, 8.0, fill);
@@ -297,14 +302,15 @@ fn string_chip(
     painter.text(
         rect.center() - vec2(0.0, 7.0),
         Align2::CENTER_CENTER,
-        format!("{}{}", note_name(open), if tuned { " ✓" } else { "" }),
-        FontId::proportional(16.0),
+        format!("{}{}", note_name(open), if tuned { " ✔" } else { "" }),
+        FontId::proportional(if compact { 14.0 } else { 16.0 }),
         if tuned { palette.ok } else { palette.text },
     );
     let sub = match cents {
-        Some(c) if c.abs() < IN_TUNE_CENTS => "in tune".to_string(),
-        Some(c) if c < 0.0 => format!("↑ {:.0}", -c),
-        Some(c) => format!("↓ {c:.0}"),
+        Some(c) if c.abs() < IN_TUNE_CENTS => if compact { "ok".to_string() } else { "in tune".to_string() },
+        Some(c) if c < 0.0 => format!("⬆ {:.0}", -c),
+        Some(c) => format!("⬇ {c:.0}"),
+        None if compact => format!("{}", index + 1),
         None => format!("string {}", index + 1),
     };
     painter.text(
@@ -315,7 +321,7 @@ fn string_chip(
         palette.text_dim,
     );
     response.on_hover_text(format!(
-        "{} = {:.2} Hz. ↑ tune up, ↓ tune down",
+        "{} = {:.2} Hz. ⬆ tune up, ⬇ tune down",
         note_name(open),
         midi_to_freq(open as f64, a4)
     ));

@@ -53,7 +53,7 @@ pub fn list_recordings(dir: &Path) -> Vec<Recording> {
             Some((modified, Recording { path, duration_secs }))
         })
         .collect();
-    found.sort_by(|a, b| b.0.cmp(&a.0));
+    found.sort_by_key(|f| std::cmp::Reverse(f.0));
     found.into_iter().map(|(_, r)| r).collect()
 }
 

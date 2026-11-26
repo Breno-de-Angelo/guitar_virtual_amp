@@ -86,7 +86,7 @@ impl SettingsPage {
 
             section(ui, "🔊 Audio", &mut |ui| devices.ui(ui, chain, settings));
 
-            section(ui, "🎚 Levels", &mut |ui| {
+            section(ui, "🔉 Levels", &mut |ui| {
                 let prefs = &mut settings.ui;
                 ui.horizontal_wrapped(|ui| {
                     out.levels_changed |= ui
@@ -129,7 +129,7 @@ impl SettingsPage {
                 });
             });
 
-            section(ui, "🎛 MIDI controller", &mut |ui| {
+            section(ui, "🎹 MIDI controller", &mut |ui| {
                 save |= self.midi_ui(ui, settings, chain, midi);
             });
 
@@ -216,13 +216,11 @@ impl SettingsPage {
                     settings.ui.midi.input_port = None;
                     changed = true;
                 }
-                Some(Some(port)) => {
-                    if midi.connect(&port).is_ok() {
-                        settings.ui.midi.input_port = Some(port);
-                        changed = true;
-                    }
+                Some(Some(port)) if midi.connect(&port).is_ok() => {
+                    settings.ui.midi.input_port = Some(port);
+                    changed = true;
                 }
-                None => {}
+                _ => {}
             }
         });
         match &self.ports {

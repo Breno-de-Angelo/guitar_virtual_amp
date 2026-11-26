@@ -42,7 +42,9 @@ pub struct PedalCard {
 
 /// Draws one pedal card. `index`/`count` place it in the chain (for the
 /// move buttons and the collapse state).
-pub fn pedal_card(ui: &mut Ui, index: usize, count: usize, instance: &mut PedalInstance) -> PedalCard {
+/// `width` is the card's outer width (`style::PEDAL_CARD_WIDTH` on the
+/// grid, the screen width on phones).
+pub fn pedal_card(ui: &mut Ui, index: usize, count: usize, instance: &mut PedalInstance, width: f32) -> PedalCard {
     let palette = Palette::of(ui.ctx());
     let stripe = palette.category(instance.description.category());
     let collapsed_id = ui.id().with(("pedal_collapsed", index));
@@ -54,10 +56,12 @@ pub fn pedal_card(ui: &mut Ui, index: usize, count: usize, instance: &mut PedalI
         .inner_margin(egui::Margin { left: 10, right: 10, top: 12, bottom: 8 })
         .fill(if instance.enabled { palette.card } else { palette.card.gamma_multiply(0.75) });
     let inner = frame.show(ui, |ui| {
-        ui.set_width(style::PEDAL_CARD_WIDTH - 20.0);
+        ui.set_width(width - 22.0);
+        ui.set_max_width(width - 22.0);
+        ui.vertical(|ui| {
         ui.horizontal(|ui| {
             let h = ui
-                .add(egui::Label::new(RichText::new("⠿").color(palette.text_dim)).sense(Sense::drag()))
+                .add(egui::Label::new(RichText::new("☰").color(palette.text_dim)).sense(Sense::drag()))
                 .on_hover_cursor(egui::CursorIcon::Grab)
                 .on_hover_text("Drag to reorder");
             handle = Some(h);
@@ -71,21 +75,21 @@ pub fn pedal_card(ui: &mut Ui, index: usize, count: usize, instance: &mut PedalI
             ui.label(RichText::new(instance.description.name()).strong().color(palette.text))
                 .on_hover_text(instance.description.blurb());
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.menu_button("⋯", |ui| {
+                ui.menu_button("…", |ui| {
                     if ui.add_enabled(index > 0, egui::Button::new("◀ Move earlier")).clicked() {
                         action = PedalAction::Move(-1);
                     }
                     if ui.add_enabled(index + 1 < count, egui::Button::new("▶ Move later")).clicked() {
                         action = PedalAction::Move(1);
                     }
-                    if ui.button("⧉ Duplicate").clicked() {
+                    if ui.button("📋 Duplicate").clicked() {
                         action = PedalAction::Duplicate;
                     }
                     if ui.button("↺ Reset to defaults").clicked() {
                         reset_to_defaults(&mut instance.description);
                         action = PedalAction::Updated;
                     }
-                    if ui.button(if collapsed { "▾ Expand" } else { "▸ Collapse" }).clicked() {
+                    if ui.button(if collapsed { "⏷ Expand" } else { "⏶ Collapse" }).clicked() {
                         collapsed = !collapsed;
                     }
                     ui.separator();
@@ -95,7 +99,7 @@ pub fn pedal_card(ui: &mut Ui, index: usize, count: usize, instance: &mut PedalI
                 })
                 .response
                 .on_hover_text("Pedal options");
-                let arrow = if collapsed { "▸" } else { "▾" };
+                let arrow = if collapsed { "⏵" } else { "⏷" };
                 if ui.small_button(arrow).on_hover_text(if collapsed { "Show knobs" } else { "Hide knobs" }).clicked() {
                     collapsed = !collapsed;
                 }
@@ -121,6 +125,7 @@ pub fn pedal_card(ui: &mut Ui, index: usize, count: usize, instance: &mut PedalI
                 }
             });
         }
+        });
     });
     ui.data_mut(|d| d.insert_temp(collapsed_id, collapsed));
 
@@ -139,7 +144,7 @@ pub fn pedal_card(ui: &mut Ui, index: usize, count: usize, instance: &mut PedalI
 /// One pedal card on its own (outside a chain), returning only the action.
 #[cfg(test)]
 pub fn render_pedal_ui(ui: &mut Ui, instance: &mut PedalInstance) -> PedalAction {
-    pedal_card(ui, 0, 1, instance).action
+    pedal_card(ui, 0, 1, instance, style::PEDAL_CARD_WIDTH).action
 }
 
 /// Puts the pedal's parameters back to their defaults, keeping loaded files
@@ -481,9 +486,9 @@ fn looper_ui(ui: &mut Ui, params: &mut LooperParams, color: Color32) -> bool {
     let mut changed = false;
     let (status, status_color) = match params.command {
         LooperCommand::Idle | LooperCommand::Clear => ("Empty", palette.text_dim),
-        LooperCommand::Record => ("● Recording", palette.danger),
+        LooperCommand::Record => ("⏺ Recording", palette.danger),
         LooperCommand::Play => ("▶ Playing", palette.ok),
-        LooperCommand::Overdub => ("● Overdubbing", palette.warn),
+        LooperCommand::Overdub => ("⏺ Overdubbing", palette.warn),
         LooperCommand::Stop => ("■ Stopped", palette.text_dim),
     };
     ui.label(RichText::new(status).color(status_color).strong());
@@ -576,7 +581,7 @@ fn cabinet_ui(ui: &mut Ui, params: &mut CabinetParams, color: Color32) -> (bool,
         source_block(ui, source);
     }
 
-    ui.horizontal_wrapped(|ui| {
+    ui.vertical(|ui| {
         // `rfd` (native file picker) has no Android backend, so Android
         // falls back to a plain text field below.
         #[cfg(not(target_os = "android"))]
@@ -629,7 +634,7 @@ fn nam_ui(ui: &mut Ui, params: &mut NamParams, color: Color32) -> (bool, Option<
         source_block(ui, source);
     }
 
-    ui.horizontal_wrapped(|ui| {
+    ui.vertical(|ui| {
         #[cfg(not(target_os = "android"))]
         if ui.button("Load .nam...").clicked()
             && let Some(path) = rfd::FileDialog::new()
@@ -710,7 +715,7 @@ mod tests {
         let _ = ctx.run(egui::RawInput::default(), |ctx| {
             egui::CentralPanel::default().show(ctx, |ui| {
                 for (i, pedal) in chain.iter_mut().enumerate() {
-                    let card = pedal_card(ui, i, count, pedal);
+                    let card = pedal_card(ui, i, count, pedal, style::PEDAL_CARD_WIDTH);
                     assert_eq!(card.action, PedalAction::None);
                 }
             });

@@ -298,11 +298,11 @@ impl PresetPanel {
                     if is_renaming {
                         let (_, new_name) = self.renaming.as_mut().expect("checked above");
                         ui.text_edit_singleline(new_name);
-                        if ui.button("✓").clicked() {
+                        if ui.button("✔").clicked() {
                             let new_name = self.renaming.take().expect("checked above").1;
                             to_rename = Some((listing.path.clone(), new_name));
                         }
-                        if ui.button("✗").clicked() {
+                        if ui.button("✖").clicked() {
                             self.renaming = None;
                         }
                     } else if self.confirm_delete.as_ref() == Some(&listing.path) {
@@ -378,32 +378,35 @@ impl PresetPanel {
 
             ui.add_space(style::space::M);
             style::section_title(ui, "Factory presets");
-            ui.horizontal_wrapped(|ui| {
-                for preset in factory_presets() {
-                    if !matches(&preset.name) {
-                        continue;
-                    }
-                    let preset_ref = PresetRef::Factory(preset.name.clone());
-                    ui.group(|ui| {
-                        ui.horizontal(|ui| {
-                            prefs_changed |= setlist_star(ui, prefs, &preset_ref);
-                            let is_current = current == Some(&preset_ref);
-                            let text = if is_current {
-                                RichText::new(&preset.name).strong().color(palette.accent)
-                            } else {
-                                RichText::new(&preset.name)
-                            };
-                            let chain: Vec<&str> = preset.pedals.iter().map(|p| p.description.name()).collect();
-                            if ui.selectable_label(is_current, text).on_hover_text(chain.join(" → ")).clicked() {
-                                loaded = Some(LoadedPreset {
-                                    pedals: preset.pedals.clone(),
-                                    preset_ref,
-                                    name: preset.name.clone(),
-                                });
-                            }
-                        });
+            let factory: Vec<Preset> = factory_presets().into_iter().filter(|p| matches(&p.name)).collect();
+            style::grid_rows(ui, factory.len(), 220.0, |ui, i, width| {
+                let preset = &factory[i];
+                let preset_ref = PresetRef::Factory(preset.name.clone());
+                let is_current = current == Some(&preset_ref);
+                let stroke = if is_current { palette.accent } else { palette.card_stroke };
+                egui::Frame::new()
+                    .fill(palette.card)
+                    .stroke(egui::Stroke::new(1.0_f32, stroke))
+                    .corner_radius(egui::CornerRadius::same(6))
+                    .inner_margin(egui::Margin::symmetric(6, 4))
+                    .show(ui, |ui| {
+                        ui.set_width(width - 14.0);
+                        prefs_changed |= setlist_star(ui, prefs, &preset_ref);
+                        let text = if is_current {
+                            RichText::new(&preset.name).strong().color(palette.accent)
+                        } else {
+                            RichText::new(&preset.name)
+                        };
+                        let chain: Vec<&str> = preset.pedals.iter().map(|p| p.description.name()).collect();
+                        let button = egui::Button::new(text).frame(false).min_size(egui::vec2(width - 50.0, 0.0));
+                        if ui.add(button).on_hover_text(chain.join(" ➡ ")).clicked() {
+                            loaded = Some(LoadedPreset {
+                                pedals: preset.pedals.clone(),
+                                preset_ref: preset_ref.clone(),
+                                name: preset.name.clone(),
+                            });
+                        }
                     });
-                }
             });
         });
 

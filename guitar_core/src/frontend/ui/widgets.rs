@@ -73,7 +73,7 @@ impl<'a> Knob<'a> {
         self
     }
 
-    fn to_normalized(&self, value: f32) -> f32 {
+    fn value_to_t(&self, value: f32) -> f32 {
         let (min, max) = (*self.range.start(), *self.range.end());
         if max <= min {
             return 0.0;
@@ -86,7 +86,7 @@ impl<'a> Knob<'a> {
         t.clamp(0.0, 1.0)
     }
 
-    fn from_normalized(&self, t: f32) -> f32 {
+    fn t_to_value(&self, t: f32) -> f32 {
         let (min, max) = (*self.range.start(), *self.range.end());
         let t = t.clamp(0.0, 1.0);
         let value = if self.logarithmic { min * (max / min).powf(t) } else { min + (max - min) * t };
@@ -113,18 +113,18 @@ impl Widget for Knob<'_> {
         let accent = self.color.unwrap_or(palette.accent);
 
         let before = *self.value;
-        let mut t = self.to_normalized(*self.value);
+        let mut t = self.value_to_t(*self.value);
         if response.dragged() {
             let fine = ui.input(|i| i.modifiers.shift);
             let pixels = if fine { DRAG_PIXELS * 5.0 } else { DRAG_PIXELS };
             t = (t - response.drag_delta().y / pixels + response.drag_delta().x / pixels).clamp(0.0, 1.0);
-            *self.value = self.from_normalized(t);
+            *self.value = self.t_to_value(t);
         }
         if response.double_clicked()
             && let Some(default) = self.default
         {
             *self.value = default;
-            t = self.to_normalized(default);
+            t = self.value_to_t(default);
         }
         let mut typed = *self.value;
         let (min, max) = (*self.range.start(), *self.range.end());
@@ -145,7 +145,7 @@ impl Widget for Knob<'_> {
         });
         if typed != *self.value {
             *self.value = if self.integer { typed.round() } else { typed };
-            t = self.to_normalized(*self.value);
+            t = self.value_to_t(*self.value);
         }
         if *self.value != before {
             response.mark_changed();
@@ -172,7 +172,7 @@ impl Widget for Knob<'_> {
             let start = SWEEP_START;
             painter.add(Shape::line(arc(start, start + SWEEP), Stroke::new(3.0_f32, palette.control)));
             // Bipolar ranges (e.g. -12..12 dB) fill from the center.
-            let zero = if min < 0.0 && max > 0.0 { self.to_normalized(0.0) } else { 0.0 };
+            let zero = if min < 0.0 && max > 0.0 { self.value_to_t(0.0) } else { 0.0 };
             let (a0, a1) = (start + SWEEP * zero.min(t), start + SWEEP * zero.max(t));
             if a1 - a0 > 0.5 {
                 painter.add(Shape::line(arc(a0, a1), Stroke::new(3.0_f32, accent)));
@@ -362,15 +362,15 @@ mod tests {
     fn knob_mapping_round_trips_linear_and_log() {
         let mut v = 0.0;
         let k = Knob::new(&mut v, -12.0..=12.0, "x");
-        assert!((k.to_normalized(0.0) - 0.5).abs() < 1e-6);
-        assert!((k.from_normalized(0.25) + 6.0).abs() < 1e-5);
+        assert!((k.value_to_t(0.0) - 0.5).abs() < 1e-6);
+        assert!((k.t_to_value(0.25) + 6.0).abs() < 1e-5);
         let mut f = 1000.0;
         let k = Knob::new(&mut f, 100.0..=10_000.0, "f").logarithmic(true);
-        assert!((k.to_normalized(1000.0) - 0.5).abs() < 1e-5);
-        assert!((k.from_normalized(0.5) - 1000.0).abs() < 0.1);
+        assert!((k.value_to_t(1000.0) - 0.5).abs() < 1e-5);
+        assert!((k.t_to_value(0.5) - 1000.0).abs() < 0.1);
         let mut n = 0.0;
         let k = Knob::new(&mut n, 1.0..=8.0, "n").integer();
-        assert_eq!(k.from_normalized(0.49), 4.0);
+        assert_eq!(k.t_to_value(0.49), 4.0);
     }
 
     #[test]
