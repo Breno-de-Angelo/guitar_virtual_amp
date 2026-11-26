@@ -101,7 +101,17 @@ $PY bench_moisesdb.py --data $D --bench bench_moises --ref crnn-v2,crnn-gaps [--
 ```
 
 `bench_moisesdb.py` compares each model's notes on the mix or stem with notes from the isolated
-guitars (the same model's, and a consensus of `--ref` engines). `--common` restricts the table to
+guitars (the same model's, and a consensus of `--ref` engines). `--songs test_songs.txt` keeps
+the held-out songs only.
+
+Separation-aware fine-tuning on the same songs (results in `docs/transcription_roadmap.md`, "T1 on
+MoisesDB pseudo-labels": small onset gains, worse note ends, not adopted):
+
+```bash
+$PY pseudo_label_moisesdb.py --data $D --bench bench_moises --teacher crnn-v2_spark_s5000
+$PY finetune_crnn.py --data prepared_gs --init runs/spark_tf32/model.pt --steps 4000 --lr 5e-5 \
+    --extra-train $D/train_moises.jsonl --extra-weight 0.3 --extra-val $D/val_moises.tsv --out runs/moises_w03
+``` `--common` restricts the table to
 the songs an engine ran on (MuScriptor is too slow for all 222). `moises_parts.tsv` lists the
 single guitar tracks of songs with several guitars, for multi-guitar work.
 

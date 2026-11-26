@@ -19,12 +19,18 @@ Usage:
       --out runs/electric [--steps 8000] [--batch 4] [--accum 2] [--seconds 4] [--lr 1e-4]
 Writes `<out>/model.pt` (best on the held-out EGDB tabs), `<out>/model.onnx`
 and `<out>/log.jsonl`.
+
+`--extra-train FILE.jsonl` adds a second pool of items (same format, e.g.
+`pseudo_label_moisesdb.py`'s separated stems with teacher notes), drawn for a
+`--extra-weight` share of the examples; `--extra-val FILE.tsv` adds a second
+validation set, and the checkpoint is then picked by the mean of both F1s.
 """
 
 import argparse
 import hashlib
 import json
 import math
+import os
 import random
 import sys
 import time
@@ -58,7 +64,10 @@ def load_16k(path, cache):
         x = resample_poly(x, SAMPLE_RATE // g, sr // g).astype(np.float32)
     peak = max(1e-6, float(np.abs(x).max()))
     x = np.clip(x / peak * 0.9 * 32767, -32767, 32767).astype(np.int16)
-    np.save(key, x)
+    # Write then rename, so a parallel run never maps a half-written file.
+    tmp = key.with_name(f"{key.stem}.{os.getpid()}.tmp.npy")
+    np.save(tmp, x)
+    os.replace(tmp, key)
     return np.load(key, mmap_mode="r")
 
 
@@ -99,10 +108,12 @@ def targets(notes, start, frames=FRAMES):
 
 
 class Clips(torch.utils.data.Dataset):
-    """Random 10 s crops of random variants, with gain augmentation."""
+    """Random 10 s crops of random variants, with gain augmentation. With
+    `extra` items, a share `extra_weight` of the crops comes from them."""
 
-    def __init__(self, items, cache, length, seconds):
+    def __init__(self, items, cache, length, seconds, extra=(), extra_weight=0.0):
         self.items, self.cache, self.length = items, cache, length
+        self.extra, self.extra_weight = list(extra), extra_weight
         self.samples = int(seconds * SAMPLE_RATE)
         self.frames = self.samples // (SAMPLE_RATE // FPS) + 1
 
@@ -111,7 +122,8 @@ class Clips(torch.utils.data.Dataset):
 
     def __getitem__(self, i):
         rng = random.Random()
-        item = rng.choice(self.items)
+        pool = self.extra if self.extra and rng.random() < self.extra_weight else self.items
+        item = rng.choice(pool)
         audio = load_16k(rng.choice(item["audio"]), self.cache)
         notes = item["notes_list"]
         n, seg = len(audio), self.samples
@@ -220,6 +232,9 @@ def main():
     ap.add_argument("--val-every", type=int, default=1000)
     ap.add_argument("--workers", type=int, default=6)
     ap.add_argument("--sources", default="", help="comma-separated source prefixes to train on (default: all)")
+    ap.add_argument("--extra-train", type=Path, default=None, help="second pool of train items (jsonl)")
+    ap.add_argument("--extra-weight", type=float, default=0.5, help="share of crops from --extra-train")
+    ap.add_argument("--extra-val", type=Path, default=None, help="second validation set (audio, notes, group tsv)")
     args = ap.parse_args()
     data, out = args.data.expanduser(), args.out.expanduser()
     out.mkdir(parents=True, exist_ok=True)
@@ -232,9 +247,15 @@ def main():
         items = [i for i in items if any(i["source"].startswith(p) for p in prefixes)]
     for it in items:
         it["notes_list"] = read_notes(it["notes"])
-    print(f"{len(items)} recordings, {sum(len(i['audio']) for i in items)} variants", flush=True)
+    extra = []
+    if args.extra_train:
+        extra = [json.loads(l) for l in open(args.extra_train.expanduser()) if l.strip()]
+        for it in extra:
+            it["notes_list"] = read_notes(it["notes"])
+    print(f"{len(items)} recordings, {sum(len(i['audio']) for i in items)} variants"
+          + (f"; extra pool {len(extra)} recordings at weight {args.extra_weight}" if extra else ""), flush=True)
     print("caching audio at 16 kHz...", flush=True)
-    for it in items:
+    for it in items + extra:
         for a in it["audio"]:
             load_16k(a, cache)
     val = []
@@ -242,6 +263,20 @@ def main():
         a, n, g, *_ = line.rstrip("\n").split("\t")
         if g in ("egdb/DI", "egdb/Plexi", "egdb/real"):
             val.append({"audio": a, "notes_list": read_notes(n), "group": g})
+    val2 = []
+    if args.extra_val:
+        for line in open(args.extra_val.expanduser()):
+            if line.strip():
+                a, n, g, *_ = line.rstrip("\n").split("\t")
+                val2.append({"audio": a, "notes_list": read_notes(n), "group": g})
+
+    def evaluate():
+        """(selection score, EGDB val F1, extra val F1 or None)."""
+        f1 = validate(model, val, cache, device)
+        if not val2:
+            return f1, f1, None
+        f2 = validate(model, val2, cache, device)
+        return (f1 + f2) / 2, f1, f2
 
     device = "cuda"
     model = GuitarCRNN()
@@ -266,15 +301,15 @@ def main():
         opt, lambda s: min(1.0, (s + 1) / 300) * 0.5 * (1 + math.cos(math.pi * min(s, args.steps) / args.steps))
     )
     loader = torch.utils.data.DataLoader(
-        Clips(items, cache, args.steps * args.batch * args.accum, args.seconds),
+        Clips(items, cache, args.steps * args.batch * args.accum, args.seconds, extra, args.extra_weight),
         batch_size=args.batch,
         num_workers=args.workers,
         persistent_workers=True,
     )
-    best = validate(model, val, cache, device)
-    print(f"step 0 val onset F1 {best:.4f}", flush=True)
+    best, f1, f2 = evaluate()
+    print(f"step 0 val onset F1 {f1:.4f}" + (f", extra {f2:.4f}" if f2 is not None else ""), flush=True)
     log = open(out / "log.jsonl", "a")
-    log.write(json.dumps({"step": 0, "val_f1": best}) + "\n")
+    log.write(json.dumps({"step": 0, "val_f1": f1, "extra_val_f1": f2, "score": best}) + "\n")
     torch.save({"model": model.state_dict()}, out / "model.pt")
     t0, running = time.time(), 0.0
     batches = iter(loader)
@@ -294,16 +329,17 @@ def main():
         if step % 100 == 0:
             print(f"step {step} loss {running:.4f} lr {sched.get_last_lr()[0]:.2e} {(time.time() - t0) / step:.2f}s/step", flush=True)
         if step % args.val_every == 0 or step == args.steps:
-            f1 = validate(model, val, cache, device)
-            print(f"step {step} val onset F1 {f1:.4f} (best {best:.4f})", flush=True)
-            log.write(json.dumps({"step": step, "loss": running, "val_f1": f1}) + "\n")
+            score, f1, f2 = evaluate()
+            extra_text = f", extra {f2:.4f}" if f2 is not None else ""
+            print(f"step {step} val onset F1 {f1:.4f}{extra_text} (score {score:.4f}, best {best:.4f})", flush=True)
+            log.write(json.dumps({"step": step, "loss": running, "val_f1": f1, "extra_val_f1": f2, "score": score}) + "\n")
             log.flush()
-            if f1 > best:
-                best = f1
+            if score > best:
+                best = score
                 torch.save({"model": model.state_dict()}, out / "model.pt")
     model.load_state_dict(torch.load(out / "model.pt", weights_only=False)["model"])
     export(model, out / "model.onnx")
-    print(f"best val onset F1 {best:.4f}; exported {out / 'model.onnx'}", flush=True)
+    print(f"best val score {best:.4f}; exported {out / 'model.onnx'}", flush=True)
 
 
 if __name__ == "__main__":

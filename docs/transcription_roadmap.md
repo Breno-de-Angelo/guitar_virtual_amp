@@ -674,6 +674,43 @@ The 24 songs MuScriptor-large ran on (8 per guitar kind; consensus = v2 & MuScri
 - Reports: `~/.cache/gva_test/bench_moises/report*.{md,json}`; notes cache on the Spark in
   `~/gva/bench_moises`.
 
+### T1 on MoisesDB pseudo-labels (2026-11-26, `spark-ef6b`)
+
+`pseudo_label_moisesdb.py` splits the 222 songs by guitar kind into train 150 / val 17 / test 55
+(the 24 MuScriptor songs always in test) and writes training items whose audio is the
+BS-RoFormer stem, the htdemucs_6s stem or the isolated guitars of a 60 s window, with the notes
+the v2 CRNN transcribed from the isolated guitars as labels (no velocity). `finetune_crnn.py
+--extra-train/--extra-weight/--extra-val` mixes them into the usual training data and picks the
+checkpoint by the mean of the EGDB and MoisesDB-val onset F1. Two runs from v2 (`spark_tf32`),
+4000 steps, lr 5e-5, 30% (`moises_w03`) and 50% (`moises_w05`) of the crops from MoisesDB, ~1.7 h
+each with both on the GPU.
+
+| Set (F50) | v2 | w03 | w05 |
+|---|---|---|---|
+| MoisesDB test, BS-RoFormer stem vs teacher on isolated guitars (55 songs) | 0.761 | 0.764 | 0.766 |
+| same, distorted songs only (28) | 0.701 | 0.709 | 0.710 |
+| MoisesDB test, raw mix | 0.438 | 0.461 | 0.459 |
+| 24 MuScriptor songs, BS-RoFormer stem, consensus v2 & MuScriptor-large | 0.711 | 0.710 | 0.716 |
+| EGDB Marshall / Mesa / Plexi | 0.834 / 0.845 / 0.804 | 0.847 / 0.846 / 0.817 | 0.857 / 0.857 / 0.827 |
+| Synthetic mix, BS-RoFormer stem, EGDB Marshall | 0.823 | 0.836 | 0.843 |
+| GOAT amps (mean of 5) | 0.714 | 0.716 | 0.714 |
+| EGSet12 | 0.880 | 0.885 | 0.884 |
+| GuitarSet comp / solo | 0.886 / 0.921 | 0.888 / 0.921 | 0.884 / 0.920 |
+| Guitar-TECHS P3 mic'd amp, BS-RoFormer stem | 0.748 | 0.748 | 0.747 |
+| F50+offset, EGSet12 / GuitarSet comp | 0.566 / 0.586 | 0.573 / 0.583 | 0.502 / 0.522 |
+| F50+offset, GOAT amps (mean) | 0.517 | 0.498 | 0.475 |
+
+- Onsets gain little: +0.01-0.02 on the EGDB amp tones and separated EGDB mixes, +0.009 on
+  distorted MoisesDB songs, nothing on GOAT, GuitarSet or Guitar-TECHS.
+- Note ends get worse, the more MoisesDB crops the run sees (w05: -0.04 to -0.06 F50+offset on
+  EGSet12, GuitarSet and GOAT). The teacher's offsets on dense, multi-guitar stems are poor
+  labels.
+- Not worth switching: v2 stays the electric option. A labels-from-self teacher mostly teaches
+  the student what it already does; the separator is not where the remaining loss is.
+- If T1 is retried: onset-only loss on the pseudo-labelled crops (mask frame and offset), whole
+  songs instead of 60 s (4x the data), and a better teacher on distorted guitar (notes where v2
+  and MuScriptor-large agree, at the cost of recall).
+
 ## Order of work
 
 Two tracks can run at once now: evaluation and data generation on the Sparks, benchmark code and
@@ -685,7 +722,8 @@ the real-song set on the laptop.
    on real mixes: done (MoisesDB), it doesn't replace separator + CRNN.
 3. Phase 0.3 real-song set: aligner done; collect and hand-check song + tab pairs.
 4. Data generation on the Sparks: tone renders, separated mixes, DadaGP renders, pseudo-labels.
-5. T1 sweep with separation-aware data; Phase 1.1 separators and 1.5 fingering candidates.
+5. T1 sweep with separation-aware data (MoisesDB pseudo-labels tried: +0.01 onsets, worse
+   offsets, not adopted); Phase 1.1 separators and 1.5 fingering candidates.
 6. T2: tagger integrated; request DadaGP, then audio conditioning. T3 in parallel.
 7. T4 small, then T4 large if small wins. With the Sparks this no longer waits on a rented GPU,
    so it moves up from "only if needed" to the main bet for full mixes.
@@ -704,7 +742,7 @@ the real-song set on the laptop.
 | GuitarSet, Guitar-TECHS | CC BY 4.0 | |
 | GAPS weights, Beat This!, Demucs | MIT | |
 | BS-RoFormer SW checkpoint | Unclear (mirror of a deleted account) | Use locally only |
-| YouTube audio | YouTube ToS forbid downloading | Unchanged from `ROADMAP.md`: personal use only, not in a store build |
+| YouTube audio | YouTube ToS forbid downloading | Unchanged from `ROADMAP.md`: personal use only |
 | TONE3000 captures | API terms: no bulk download or caching of the catalog | Use only captures the user downloaded for playing |
 
 ## Sources
