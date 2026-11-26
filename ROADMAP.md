@@ -278,8 +278,12 @@ apps: Premium owner, 5 allow-listed users, `GET /search` capped at 10 results.
     `echo_scores`). The pluck model is still 9.9 dB from real DI with an EQ allowed; a sampler of
     real single-note DI (Guitar-TECHS) did worse (e.g. Marshall 7.6 vs 6.3), as did raising the
     distance floor to 45 dB.
-  - Next: a preset prior in the search (Gaussian/GMM over factory and user presets, as MAP-ITO), to
-    stop it fitting stem artefacts; a better dry signal (learned DI renderer or effect remover; the
+  - Preset prior (diagonal Gaussian over the factory presets, weight 1, now the default; MAP-ITO
+    idea): separated stems 6.63 -> 6.12 dB and wins 6/12 instead of 3/12 against preset + match;
+    Marshall 6.42 / Mesa 5.70 / Plexi 6.57 / chain 5.84 (+0.0 to +0.34 dB). Weight 3 was worse
+    except on stems (5.96). Because neither result wins reliably on stems, the app saves both as
+    presets for each track: the search result and the nearest factory preset + match IR.
+  - Next: a better dry signal (learned DI renderer or effect remover; the
     player's DI through a pre-chain tap); modulation from the notes; a learned initial guess (Sparks);
     listening tests on the `GVA_TONE_OUT` WAVs; real songs (MoisesDB isolated guitars as reference).
 - **Tab library**: match by the title/artist inside the file, not only the file name; cache the

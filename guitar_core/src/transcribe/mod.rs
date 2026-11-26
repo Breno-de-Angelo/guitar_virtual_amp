@@ -135,7 +135,8 @@ pub struct Output {
     pub guitar_notes: Vec<NoteEstimate>,
     /// Techniques of `guitar_notes`, index for index.
     pub guitar_techniques: Vec<techniques::Technique>,
-    /// With [`Request::tone`]: (track name, preset file) per guitar track.
+    /// With [`Request::tone`]: (track name, preset file), two per guitar
+    /// track (`tone::save_presets`).
     pub tone_presets: Vec<(String, PathBuf)>,
 }
 
@@ -1011,8 +1012,8 @@ pub fn run(
                 &part.notes,
                 &crate::tone::Options::default(),
             );
-            match crate::tone::save_preset(&estimate, &request.title, &request.artist, track) {
-                Ok(path) => tone_presets.push((track.clone(), path)),
+            match crate::tone::save_presets(&estimate, &request.title, &request.artist, track) {
+                Ok(paths) => tone_presets.extend(paths.into_iter().map(|p| (track.clone(), p))),
                 Err(e) => log::warn!("tone preset for {track}: {e}"),
             }
         }

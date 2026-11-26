@@ -248,9 +248,119 @@ impl Settings {
     }
 }
 
+/// The template settings closest to a preset's pedals: amounts of pedals
+/// the preset lacks are 0, and parameters that don't apply (a missing
+/// pedal's knobs) are `None`. The input level is the renderer's default.
+pub fn from_preset(pedals: &[PedalInstance]) -> (Vec<Option<f64>>, AmpVoicing) {
+    let mut x: Vec<Option<f64>> = vec![None; PARAMS.len()];
+    let unit = |i: usize, v: f32| Some(PARAMS[i].unit(v));
+    x[LEVEL] = unit(LEVEL, 0.1);
+    x[COMP_AMOUNT] = Some(0.0);
+    x[DRIVE_MIX] = Some(0.0);
+    x[REVERB_MIX] = Some(0.0);
+    x[DELAY_MIX] = Some(0.0);
+    x[AMP_GAIN] = unit(AMP_GAIN, 1.0);
+    let mut voicing = AmpVoicing::Clean;
+    for p in pedals.iter().filter(|p| p.enabled) {
+        match &p.description {
+            PedalDescription::Compressor(c) => {
+                x[COMP_AMOUNT] = Some(((c.ratio - 1.0) / (MAX_RATIO - 1.0)).clamp(0.0, 1.0) as f64);
+                x[COMP_THRESHOLD] = unit(COMP_THRESHOLD, c.threshold);
+            }
+            PedalDescription::Distortion(d) => {
+                x[DRIVE_MIX] = unit(DRIVE_MIX, d.mix);
+                x[DRIVE] = unit(DRIVE, d.drive);
+                x[DRIVE_TONE] = unit(DRIVE_TONE, d.tone);
+            }
+            PedalDescription::Amp(a) => {
+                x[AMP_GAIN] = unit(AMP_GAIN, a.gain);
+                voicing = a.voicing;
+            }
+            PedalDescription::Reverb(r) => {
+                x[REVERB_MIX] = unit(REVERB_MIX, r.mix);
+                x[REVERB_ROOM] = unit(REVERB_ROOM, r.room_size);
+                x[REVERB_DAMPING] = unit(REVERB_DAMPING, r.damping);
+            }
+            PedalDescription::Delay(d) => {
+                x[DELAY_MIX] = unit(DELAY_MIX, d.mix);
+                x[DELAY_FEEDBACK] = unit(DELAY_FEEDBACK, d.feedback);
+            }
+            _ => {}
+        }
+    }
+    (x, voicing)
+}
+
+/// A diagonal Gaussian over the unit-cube settings, fitted on presets
+/// (MAP-style regularisation of the search, after Yu et al., WASPAA 2025).
+#[derive(Clone, Debug)]
+pub struct Prior {
+    pub mean: Vec<f64>,
+    pub sd: Vec<f64>,
+}
+
+/// Smallest standard deviation per parameter, so a parameter all presets
+/// agree on isn't pinned.
+const MIN_SD: f64 = 0.15;
+
+impl Prior {
+    pub fn fit(presets: &[Vec<PedalInstance>]) -> Self {
+        let rows: Vec<Vec<Option<f64>>> = presets.iter().map(|p| from_preset(p).0).collect();
+        let n = PARAMS.len();
+        let mut mean = vec![0.5; n];
+        let mut sd = vec![0.5; n];
+        for i in 0..n {
+            let v: Vec<f64> = rows.iter().filter_map(|r| r[i]).collect();
+            if v.len() < 2 {
+                continue;
+            }
+            let m = v.iter().sum::<f64>() / v.len() as f64;
+            let var = v.iter().map(|x| (x - m).powi(2)).sum::<f64>() / (v.len() - 1) as f64;
+            mean[i] = m;
+            sd[i] = var.sqrt().max(MIN_SD);
+        }
+        Self { mean, sd }
+    }
+
+    /// Mean squared z-score of `x`: 0 at the mean, ~1 for a typical preset.
+    pub fn penalty(&self, x: &[f64]) -> f64 {
+        x.iter()
+            .zip(&self.mean)
+            .zip(&self.sd)
+            .map(|((v, m), s)| ((v - m) / s).powi(2))
+            .sum::<f64>()
+            / x.len().max(1) as f64
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_template_chain_maps_back_to_its_settings() {
+        let mut s = Settings::start(AmpVoicing::Lead);
+        s.x[COMP_AMOUNT] = 0.5;
+        s.delay_ms = Some(300.0);
+        let (x, voicing) = from_preset(&s.pedals());
+        assert_eq!(voicing, AmpVoicing::Lead);
+        for i in [COMP_AMOUNT, COMP_THRESHOLD, DRIVE_MIX, DRIVE, DRIVE_TONE, AMP_GAIN, REVERB_MIX, DELAY_MIX] {
+            assert!((x[i].unwrap() - s.x[i]).abs() < 1e-4, "{}", PARAMS[i].name);
+        }
+    }
+
+    #[test]
+    fn the_prior_prefers_typical_settings() {
+        let presets: Vec<Vec<PedalInstance>> = crate::shared::factory_presets::factory_presets()
+            .into_iter()
+            .map(|p| p.pedals)
+            .collect();
+        let prior = Prior::fit(&presets);
+        let typical = prior.mean.clone();
+        let extreme: Vec<f64> = typical.iter().map(|m| if *m < 0.5 { 1.0 } else { 0.0 }).collect();
+        assert!(prior.penalty(&typical) < 1e-9);
+        assert!(prior.penalty(&extreme) > 1.0);
+    }
 
     #[test]
     fn unit_and_value_are_inverse() {

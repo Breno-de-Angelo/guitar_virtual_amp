@@ -19,7 +19,8 @@
 //! (default 30), `GVA_TONE_SECS` excerpt length (default 12),
 //! `GVA_TONE_ORACLE=0` skips the true-DI search, `GVA_TONE_OUT=<dir>` writes
 //! WAVs (target, estimate from notes, best preset) for listening,
-//! `GVA_TONE_FLOOR` sets the search distance floor (dB), `GVA_TONE_PLUCK=0`
+//! `GVA_TONE_FLOOR` sets the search distance floor (dB), `GVA_TONE_PRIOR`
+//! the weight of the preset prior, `GVA_TONE_PLUCK=0`
 //! skips the pluck dry signal, `GVA_TONE_SAMPLES=<di.wav>:<notes.txt>,...`
 //! adds the sampler dry signal, `GVA_TONE_STEMS=<eval_mix_bsrofo_sw.tsv>`
 //! adds BS-RoFormer stems of the Marshall renders mixed over MUSDB18
@@ -444,6 +445,7 @@ fn eval_tone() {
         max_secs: env("GVA_TONE_SECS", 12.0),
         generations: env("GVA_TONE_GENS", 30.0) as usize,
         floor_db: env("GVA_TONE_FLOOR", features::FLOOR_DB as f64) as f32,
+        prior_weight: env("GVA_TONE_PRIOR", Options::default().prior_weight as f64) as f32,
         ..Options::default()
     };
 

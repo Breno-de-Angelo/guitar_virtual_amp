@@ -30,6 +30,43 @@ pub mod template;
 #[cfg(test)]
 mod eval;
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_saved_chain_plays_like_the_estimate_at_the_reference_level() {
+        // A chain whose drive depends on level: the live chain (input at the
+        // reference level, gain stage first) must match the estimate.
+        let settings = {
+            let mut s = Settings::start(AmpVoicing::Lead);
+            s.x[template::LEVEL] = template::PARAMS[template::LEVEL].unit(0.3);
+            s.x[template::COMP_AMOUNT] = 0.0;
+            s.x[template::REVERB_MIX] = 0.0;
+            s.x[template::DELAY_MIX] = 0.0;
+            s
+        };
+        let c = Candidate {
+            label: "search".into(),
+            pedals: settings.pedals(),
+            level: settings.level(),
+            distance: 0.0,
+            eq_db: vec![],
+            eq_hz: vec![],
+        };
+        let dry: Vec<f32> = (0..48_000)
+            .map(|i| (std::f32::consts::TAU * 110.0 * i as f32 / 48_000.0).sin() * (1.0 - i as f32 / 48_000.0))
+            .collect();
+        let estimate = render_at(c.pedals.clone(), &dry, c.level);
+        let mut live = c.chain_with_ir("/nonexistent.wav");
+        live.pop(); // the Cabinet with a missing IR is a pass-through anyway
+        assert!(matches!(live[0].description, PedalDescription::Compressor(_)));
+        let played = render_at(live, &dry, REFERENCE_LEVEL);
+        let err: f32 = estimate.iter().zip(&played).map(|(a, b)| (a - b).abs()).sum::<f32>() / dry.len() as f32;
+        assert!(err < 0.01, "{err}");
+    }
+}
+
 use crate::backend::offline::{RENDER_RATE, render_at};
 use crate::shared::pedals::{AmpVoicing, CabinetParams, PedalDescription, PedalInstance};
 use features::{Comparison, Target};
@@ -47,6 +84,11 @@ pub struct Options {
     /// Floor of the search distance, dB below the loudest band (see
     /// [`features::Target::with_floor`]).
     pub floor_db: f32,
+    /// Weight (dB per unit of mean squared z-score) of the preset prior
+    /// ([`template::Prior`], fitted on the factory presets) added to the
+    /// search distance. 0 = no prior. On separated stems 1 brought the
+    /// search from 6.63 to 6.12 dB; 3 was worse elsewhere (`ROADMAP.md`).
+    pub prior_weight: f32,
 }
 
 impl Default for Options {
@@ -58,6 +100,7 @@ impl Default for Options {
             threads: std::thread::available_parallelism().map_or(4, |n| n.get()),
             seed: 1,
             floor_db: features::FLOOR_DB,
+            prior_weight: 1.0,
         }
     }
 }
@@ -82,10 +125,28 @@ impl Candidate {
         matching::ir_from_eq(&self.eq_db, &self.eq_hz, RENDER_RATE)
     }
 
-    /// The full chain for a preset, with the matching IR (written at
-    /// `ir_path`) in a Cabinet pedal at the end.
+    /// The full chain for a preset: a clean gain stage first when the
+    /// estimate plays the guitar hotter or softer than the live reference
+    /// level (a DI at -20 dBFS RMS, as [`crate::backend::offline::render`]
+    /// assumes), then the pedals, then the matching IR (written at
+    /// `ir_path`) in a Cabinet pedal.
     pub fn chain_with_ir(&self, ir_path: &str) -> Vec<PedalInstance> {
-        let mut chain = self.pedals.clone();
+        let mut chain = Vec::new();
+        let gain = self.level / REFERENCE_LEVEL;
+        if (20.0 * gain.log10()).abs() > 1.0 {
+            // A compressor at ratio 1 is a clean gain: makeup only.
+            chain.push(PedalInstance {
+                enabled: true,
+                description: PedalDescription::Compressor(crate::shared::pedals::CompressorParams {
+                    threshold: 1.0,
+                    ratio: 1.0,
+                    attack_ms: 10.0,
+                    release_ms: 100.0,
+                    makeup_gain: gain.clamp(0.0, MAX_INPUT_GAIN),
+                }),
+            });
+        }
+        chain.extend(self.pedals.iter().cloned());
         chain.push(PedalInstance {
             enabled: true,
             description: PedalDescription::Cabinet(CabinetParams {
@@ -103,6 +164,12 @@ impl Candidate {
         matching::convolve(&render_at(self.pedals.clone(), dry, self.level), &self.ir())
     }
 }
+
+/// RMS the live guitar is assumed to have (-20 dBFS), as in
+/// `backend::offline::render`.
+pub const REFERENCE_LEVEL: f32 = 0.1;
+/// Largest input gain the Compressor's makeup knob allows.
+const MAX_INPUT_GAIN: f32 = 5.0;
 
 /// Result of [`estimate`].
 #[derive(Clone, Debug)]
@@ -176,7 +243,7 @@ pub fn estimate(target: &[f32], dry: &[f32], opts: &Options) -> Estimate {
 
     // Baseline: every factory preset at the default level, in parallel.
     let presets = preset_candidates();
-    let level = 0.1;
+    let level = REFERENCE_LEVEL;
     let mut scored: Vec<Candidate> = std::thread::scope(|s| {
         let handles: Vec<_> = presets
             .iter()
@@ -202,6 +269,7 @@ pub fn estimate(target: &[f32], dry: &[f32], opts: &Options) -> Estimate {
     let mut evaluations = scored.len();
 
     // Search: one CMA-ES run per voicing.
+    let prior = template::Prior::fit(&presets.iter().map(|p| p.pedals.clone()).collect::<Vec<_>>());
     let mut best: Option<(Settings, f64)> = None;
     for (k, voicing) in [AmpVoicing::Clean, AmpVoicing::Crunch, AmpVoicing::Lead]
         .into_iter()
@@ -210,6 +278,7 @@ pub fn estimate(target: &[f32], dry: &[f32], opts: &Options) -> Estimate {
         let f = |x: &[f64]| -> f64 {
             let s = Settings::new(x.to_vec(), voicing).with_delay(delay_ms);
             compare(&goal, s.pedals(), dry, s.level()).distance as f64
+                + opts.prior_weight as f64 * prior.penalty(x)
         };
         let found = cmaes::minimize(
             &f,
@@ -267,32 +336,42 @@ pub fn estimate_from_transcription(
     estimate_from_notes(audio, &notes, opts)
 }
 
-/// Saves an estimate as a user preset for this song and track: the
-/// matching IR goes to `<data dir>/guitar_virtual_amp/tone_match/`, the
-/// preset (chain + a final Cabinet pedal with that IR) to the user preset
-/// folder, with `song`/`artist` set so the Tabs page offers it, and the
-/// tags `timbre-estimado` and `faixa:<track>`. Re-estimating overwrites.
-pub fn save_preset(est: &Estimate, title: &str, artist: &str, track: &str) -> Result<std::path::PathBuf, String> {
+/// Saves an estimate as two user presets for this song and track, since
+/// neither wins reliably on separated stems (see `ROADMAP.md`): the search
+/// result ("timbre estimado") and the nearest factory preset with the
+/// matching filter. Each matching IR goes to
+/// `<data dir>/guitar_virtual_amp/tone_match/`, each preset (chain + a
+/// final Cabinet pedal with its IR) to the user preset folder, with
+/// `song`/`artist` set so the Tabs page offers them and the tags
+/// `timbre-estimado` and `faixa:<track>`. Re-estimating overwrites.
+pub fn save_presets(est: &Estimate, title: &str, artist: &str, track: &str) -> Result<Vec<std::path::PathBuf>, String> {
     use crate::shared::preset::{Preset, sanitize_file_stem, save_to_file, user_preset_dir};
     let data = crate::shared::paths::app_data_dir().ok_or("no data folder")?;
-    let stem = sanitize_file_stem(&format!("{artist} - {title} - {track}"));
     let ir_dir = data.join("tone_match");
     std::fs::create_dir_all(&ir_dir).map_err(|e| e.to_string())?;
-    let ir_path = ir_dir.join(format!("{stem}.wav"));
-    matching::write_ir(&ir_path, &est.best.ir(), RENDER_RATE)?;
-    let preset = Preset {
-        name: format!("{title} - {track} (timbre estimado)"),
-        author: Some("estimativa automática".into()),
-        pedals: est.best.chain_with_ir(&ir_path.to_string_lossy()),
-        tags: vec![ESTIMATED_TAG.into(), format!("{TRACK_TAG_PREFIX}{track}")],
-        song: Some(title.to_string()).filter(|s| !s.trim().is_empty()),
-        artist: Some(artist.to_string()).filter(|s| !s.trim().is_empty()),
-    };
-    let path = user_preset_dir()
-        .ok_or("no preset folder")?
-        .join(format!("{stem}.json"));
-    save_to_file(&preset, &path).map_err(|e| format!("{e:?}"))?;
-    Ok(path)
+    let presets_dir = user_preset_dir().ok_or("no preset folder")?;
+    let base = format!("{artist} - {title} - {track}");
+    let mut paths = Vec::new();
+    for (candidate, label, suffix) in [
+        (&est.best, "timbre estimado".to_string(), ""),
+        (&est.preset, format!("{} + EQ", est.preset.label), " - preset"),
+    ] {
+        let stem = sanitize_file_stem(&format!("{base}{suffix}"));
+        let ir_path = ir_dir.join(format!("{stem}.wav"));
+        matching::write_ir(&ir_path, &candidate.ir(), RENDER_RATE)?;
+        let preset = Preset {
+            name: format!("{title} - {track} ({label})"),
+            author: Some("estimativa automática".into()),
+            pedals: candidate.chain_with_ir(&ir_path.to_string_lossy()),
+            tags: vec![ESTIMATED_TAG.into(), format!("{TRACK_TAG_PREFIX}{track}")],
+            song: Some(title.to_string()).filter(|s| !s.trim().is_empty()),
+            artist: Some(artist.to_string()).filter(|s| !s.trim().is_empty()),
+        };
+        let path = presets_dir.join(format!("{stem}.json"));
+        save_to_file(&preset, &path).map_err(|e| e.to_string())?;
+        paths.push(path);
+    }
+    Ok(paths)
 }
 
 use crate::shared::tab::tone::{ESTIMATED_TAG, TRACK_TAG_PREFIX};
