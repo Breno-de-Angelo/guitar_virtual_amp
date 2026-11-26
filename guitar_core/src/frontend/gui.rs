@@ -33,7 +33,7 @@ use crate::{
         ui::spotify::{SpotifyAction, SpotifyPanel},
         ui::tab_player::TabPlayerPanel,
         ui::tone3000::{LoadedTone, Tone3000Panel, ToneTarget},
-        ui::tuner::TunerPanel,
+        ui::tuner::{TAB_TUNING, TunerPanel},
         ui::widgets::{MeterState, level_meter},
     },
     shared::{
@@ -677,6 +677,11 @@ impl AudioApp {
                     let name = preset_ref_name(&preset_ref);
                     self.load_preset(LoadedPreset { pedals, preset_ref, name });
                     chain_changed = true;
+                }
+                if self.tab_panel.take_tuner_request() {
+                    self.settings.ui.tuner_tuning = TAB_TUNING.to_string();
+                    save_settings(&self.settings);
+                    self.page = Page::Tuner;
                 }
             }
             Page::Spotify => match self.spotify_panel.ui(ui, &mut self.settings) {

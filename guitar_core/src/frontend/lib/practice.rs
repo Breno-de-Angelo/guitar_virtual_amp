@@ -341,6 +341,23 @@ impl PracticeSession {
         self.stats
     }
 
+    /// `bar -> (notes hit, notes judged)` from the latest marks.
+    pub fn bar_results(&self) -> std::collections::BTreeMap<usize, (u32, u32)> {
+        let mut results = std::collections::BTreeMap::new();
+        for (key, &hit) in &self.marks {
+            let entry = results.entry(key.bar).or_insert((0, 0));
+            entry.0 += u32::from(hit);
+            entry.1 += 1;
+        }
+        results
+    }
+
+    /// Forgets the marks of the bars in `bars` (before another loop pass),
+    /// keeping the statistics.
+    pub fn clear_marks_in(&mut self, bars: std::ops::RangeInclusive<usize>) {
+        self.marks.retain(|key, _| !bars.contains(&key.bar));
+    }
+
     /// Clears results and statistics (keeps settings).
     pub fn reset(&mut self) {
         self.marks.clear();
@@ -608,6 +625,20 @@ mod tests {
         let played = tone(&[45, 52, 57, 64], 0.2);
         let result = matched(&played, &[45, 52, 57, 61, 64]);
         assert!(!result[3], "C#4 was not played: {result:?}");
+    }
+
+    #[test]
+    fn bar_results_count_marks_per_bar_and_can_be_cleared() {
+        let mut session = PracticeSession::new(Vec::new(), SR, PracticeSettings::default());
+        let key = |bar, note| NoteKey { bar, voice: 0, beat: 0, note };
+        session.marks.insert(key(0, 0), true);
+        session.marks.insert(key(0, 1), false);
+        session.marks.insert(key(3, 0), true);
+        let results = session.bar_results();
+        assert_eq!(results.get(&0), Some(&(1, 2)));
+        assert_eq!(results.get(&3), Some(&(1, 1)));
+        session.clear_marks_in(0..=2);
+        assert_eq!(session.bar_results().len(), 1);
     }
 
     #[test]
