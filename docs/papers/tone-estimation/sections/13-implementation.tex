@@ -14,19 +14,19 @@ this description.
 \item \code{tone::estimate(target, dry, &Options)} \done: \code{target} and
   \code{dry} are 48\kHz{} mono and aligned. Returns an \code{Estimate}: the best
   search result (\code{best}), the closest factory preset (\code{preset}), the
-  template settings, the excerpt used, the measured echo (\wip) and the number
-  of renders.
+  template settings, the excerpt used, the measured echo and the number of
+  renders.
 \item \code{tone::estimate_from_notes(target, notes, &Options)} \done: renders the
   stand-in dry signal from notes with the plucked-string model, then calls
   \code{estimate}.
-\item \code{tone::estimate_from_transcription(audio, notes, &Options)} \wip: the
+\item \code{tone::estimate_from_transcription(audio, notes, &Options)} \done: the
   same, from the transcriber's notes (the model's mean posterior stands in for
   velocity: $v = 0.4 + 0.6\,a$, clamped to $[0.05, 1]$).
-\item \code{tone::save_preset(estimate, title, artist, track)} \wip: writes the
-  match IR and a user preset (Section~\ref{sec:impl-save}).
+\item \code{tone::save_presets(estimate, title, artist, track)} \done: writes
+  two user presets per track with their match IRs (Section~\ref{sec:impl-save}).
 \end{itemize}
 \code{Options} defaults: excerpt 12\,s, population 16, 30 generations, all CPU
-threads, seed 1, spectral floor 80\dB.
+threads, seed 1, spectral floor 80\dB, preset prior weight 1.
 \end{inapp}
 
 The algorithm, in order:
@@ -34,12 +34,12 @@ The algorithm, in order:
 \item Cut the 12\,s window of the target with the most energy (energy summed in
   0.1\,s blocks; \code{loudest_window}), and the same window of the dry signal.
 \item Analyse the target once (\code{features::Target}).
-\item Measure the delay time, if there is an echo (\code{analysis::echo_delay},
-  \wip).
+\item Measure the delay time, if there is an echo (\code{analysis::echo_delay}).
 \item Score every factory preset at input RMS 0.1 (presets with a Looper or a
   Pitch Shifter are excluded); keep the closest as the baseline.
 \item For each amp voicing (Clean, Crunch, Lead), run separable CMA-ES over the
-  template chain from a neutral start; keep the best of the three.
+  template chain from a neutral start, minimising the distance plus the preset
+  prior; keep the best of the three.
 \item Return the best chain and the EQ it still needs, which becomes the match
   IR.
 \end{enumerate}
@@ -83,14 +83,32 @@ notes: \code{pluck_position} 0.48, \code{release_secs} 0.45, \code{low_e_t60} 16
 never on EGDB (the benchmark).
 \end{inapp}
 
-\begin{inapp}[: the sampler, \file{tone/sampler.rs} \wip]
+\begin{inapp}[: the sampler, \file{tone/sampler.rs} \done{} (experiments only)]
 An alternative stand-in built from real recordings: Guitar-TECHS
 ``allsinglenotes'' DI (every pitch of a guitar, plucked and held; CC BY 4.0).
 Each transcribed note gets the recorded note of the nearest pitch, re-pitched by
 resampling if needed, scaled by the velocity ratio (clamped to 0.2--4), started
 10\ms{} early so the attack is whole, and faded out over 60\ms{} after the note's
 end. It has a real pickup's attack and decay, from another guitar. Selected in
-the benchmark with \code{GVA_TONE_SAMPLES}; not yet measured.
+the benchmark with \code{GVA_TONE_SAMPLES}. It did \emph{worse} than the
+plucked string (for example 7.6 against 6.3\dB{} on Marshall targets, 6 items
+\measured), so the app does not use it.
+\end{inapp}
+
+\begin{inapp}[: colour calibration, \file{tone/mod.rs} \wip{} (benchmark only)]
+\label{sec:impl-colour}
+\code{colour_from_di(di, stand_in)} measures a guitar's colour against the
+stand-in: the centred long-term EQ of Section~\ref{sec:app-distance} between a DI
+recording and the stand-in playing its notes, kept only between 250\Hz{} and
+8\kHz{} (\code{CALIBRATION_HZ}; flat outside) and within $\pm9\dB$
+(\code{CALIBRATION_DB}). \code{mean_colour} averages several recordings;
+\code{apply_colour} filters a stand-in with the result (minimum-phase IR). Why the
+limits: across 16 EGDB recordings the measured colour varies by a standard
+deviation of 6--9\dB{} per band below 300\Hz{} (it depends on which notes were
+played) and above 9\kHz{} (pick noise and hiss the stand-in lacks), and by only
+2--4\dB{} in between \measured{} (\code{eval::colour_spread}). The benchmark uses
+it (\code{GVA_TONE_CALIBRATE}, Section~\ref{sec:results-colour}); the app does
+not yet.
 \end{inapp}
 
 \subsection{The distance}
@@ -113,7 +131,8 @@ fine time, coarse frequency & 512 / 128 (11\ms{} / 2.7\ms) & 250\Hz & 20 \\
 \end{tabular}
 \end{center}
 Band energies in dB are floored at 80\dB{} below the loudest band (the search
-may use a higher floor, \code{Options::floor_db}, \wip). Call the target's value
+may use a higher floor, \code{Options::floor_db}; 45\dB{} made every group
+worse except one \measured, so the default stays 80). Call the target's value
 $T_r(t,b)$ and the render's $R_r(t,b)$ for frame $t$ and band $b$.
 
 \paragraph{Active frames.} Only frames of the target within 45\dB{} of its
@@ -162,8 +181,8 @@ switch pedals off.
 
 \begin{table}[h]
 \centering
-\caption{Searched parameters. The first ten are in the committed version
-\done; the two delay parameters are in the working tree \wip.}
+\caption{Searched parameters \done. The delay parameters only matter when an
+echo was measured (Section~\ref{sec:impl-delay}).}
 \label{tab:template}
 \small
 \begin{tabular}{@{}rllll@{}}
@@ -204,10 +223,36 @@ Settings: population 16, 30 generations, initial step size 0.3, seed
 incremented per voicing. The amp voicing is discrete, so there is one search per
 voicing.
 
+\subsection{The preset prior}
+\label{sec:impl-prior}
+
+\file{tone/template.rs} \done. Unconstrained, the search can reach settings no
+guitarist would use, for instance to imitate the warble of separation
+artefacts. Following Yu et al.~\cite{yu2025improving}, the objective adds a
+penalty for settings far from the factory presets, which turns the search into a
+maximum-a-posteriori estimate:
+\begin{itemize}
+\item \code{template::from_preset} maps each factory preset onto the template's
+  unit cube: the amount of a pedal the preset lacks is 0, and the knobs of a
+  missing pedal are left undefined.
+\item \code{Prior::fit} takes, per coordinate, the mean $\mu_i$ and standard
+  deviation $s_i$ of the defined values (at least 0.15, so a knob every preset
+  agrees on is not pinned).
+\item The search minimises $D + w \cdot \frac{1}{n}\sum_i \bigl((x_i - \mu_i)/s_i\bigr)^2$,
+  with $w$ = \code{Options::prior_weight} = 1\dB{} per unit of mean squared
+  $z$-score. A typical preset costs about 1\dB; the factory mean costs 0.
+\end{itemize}
+Weight 1 lowered the separated-stem score from 6.63 to 6.12\dB{} and cost
+0.0--0.34\dB{} on the other groups; weight 3 helped stems a little more (5.96)
+and the other groups less \measured{} (\file{ROADMAP.md}). These differences
+are of the order of the run-to-run change from 10 to 30 generations
+(Section~\ref{sec:results}), so the prior's benefit is suggestive rather than
+established.
+
 \subsection{Measuring the delay time}
 \label{sec:impl-delay}
 
-\file{tone/analysis.rs} \wip.
+\file{tone/analysis.rs} \done.
 \begin{keyidea}[: echoes repeat onsets]
 A delay repeats every onset of the target after the delay time. The stand-in dry
 signal has the same notes without echoes. So a time lag at which the target's
@@ -218,7 +263,9 @@ Both signals are turned into an onset envelope (positive spectral flux of the lo
 magnitude, 1024-point FFT, one value every 5\ms). For each lag from 60\ms{} to
 1.2\,s the code computes the normalised autocorrelation of the target envelope
 minus that of the dry envelope (the \emph{excess}). If the largest excess is
-below 0.12 there is no echo and no delay pedal. Otherwise it takes the
+below \code{ECHO_THRESHOLD} = 0.21 there is no echo and no delay pedal. That
+threshold is the 95th percentile of the scores of 64 EGDB clips without a delay
+(DI and amp renders against the pluck stand-in, \code{eval::echo_scores}). Otherwise it takes the
 \emph{shortest} lag whose excess reaches 70\% of the best (a feedback delay also
 correlates at two and three times its time), refined to the local maximum. The
 benchmark counts a delay time within 5\% of the truth as right.
@@ -246,11 +293,23 @@ the end of the chain (\code{Candidate::chain_with_ir}).
 \subsection{Saving the result and the UI}
 \label{sec:impl-save}
 
-\wip{} (working tree, not committed at the time of writing).
-\code{save_preset} writes the IR to \file{<data dir>/guitar_virtual_amp/tone_match/}
-and a user preset named ``\emph{title} -- \emph{track} (timbre estimado)'' with
+\done. Neither the search result nor the nearest factory preset with its match
+IR wins reliably on separated stems (Section~\ref{sec:results}), so
+\code{save_presets} saves both for each track: ``\emph{title} -- \emph{track}
+(timbre estimado)'' and ``\emph{title} -- \emph{track} (\emph{preset} + EQ)''.
+Each IR goes to \file{<data dir>/guitar_virtual_amp/tone_match/}; each preset has
 \code{song} and \code{artist} set and the tags \code{timbre-estimado} and
-\code{faixa:<track>}; estimating again overwrites it.
+\code{faixa:<track>}; estimating again overwrites them.
+\code{Candidate::chain_with_ir} builds the saved chain:
+\begin{enumerate}
+\item a clean gain stage (a Compressor at ratio 1 whose make-up gain is the
+  estimated input level divided by \code{REFERENCE_LEVEL} = 0.1) when the
+  estimate plays the guitar more than 1\dB{} away from the $-20$\,dBFS RMS
+  the renderer assumes for a live DI, so the pedals are driven as in the
+  estimate (a unit test checks this);
+\item the pedals;
+\item the match IR in a Cabinet pedal.
+\end{enumerate}
 \code{shared::tab::tone::preset_fits_track} keeps a preset tagged for one track
 from being suggested for another. In the Transcribe form, ``Estimar o timbre
 (experimental)'' (\code{AppSettings::transcription_tone}, off by default, needs

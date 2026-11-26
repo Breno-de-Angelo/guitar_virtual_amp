@@ -29,9 +29,13 @@ estimates an editable amplifier, cabinet and effects chain from a guitar
 separated out of a commercial song. The app now has a first version of exactly
 that: a gradient-free search (CMA-ES) over its own compressor, distortion, amp,
 delay and reverb, driven by a stand-in dry signal synthesised from the
-transcribed notes, followed by a matching filter. On 12 EGDB test items it beats
-the best factory preset on every target group, but most of the remaining error
-comes from the stand-in dry signal, not from the search.
+transcribed notes, followed by a matching filter. On 12 EGDB test items it
+clearly beats the nearest factory preset with the same filter only on targets
+made with its own chain, and ties on amplifier simulations and separated stems.
+Most of the remaining error comes from the stand-in dry signal, and mostly from
+its colour: calibrating that colour on another recording of the same guitar
+lowers the error by 0.25--0.56\dB{} on clean targets, though not on separated
+stems.
 \end{abstract}
 
 \tableofcontents

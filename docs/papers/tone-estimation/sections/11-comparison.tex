@@ -44,7 +44,7 @@ Tone embedding~\cite{chen2024zeroshot} & wet ref.\ + DI & neural amp & -- & yes 
 Open-Amp~\cite{wright2025openamp} & paired (enrol) & neural, 394 devices & -- & yes & no & -- & 91.1\% class acc. \\
 Tone Match~\cite{fractalndtonematch} & isolated wet & EQ / IR & yes & yes & no & product & -- \\
 \midrule
-This app & stem + notes & app chain + IR & yes & yes & \wip & GPL-3.0 & Section~\ref{sec:results} \\
+This app & stem + notes & app chain + IR & yes & yes & yes & GPL-3.0 & Section~\ref{sec:results} \\
 \bottomrule
 \end{tabular}}
 \end{table}
@@ -67,8 +67,8 @@ This app & stem + notes & app chain + IR & yes & yes & \wip & GPL-3.0 & Section~
   renders of similar circuits~\cite{comunita2021guitar}, and order is harder than
   presence~\cite{wada2025hyperbolic}. Harmless for reproduction if the result
   sounds alike, which is why audio objectives are preferred~\cite{peladeau2024blind}.
-  The app's benchmark shows it: the right amp voicing is found in only 7 of 12
-  items, yet the sound gets closer \measured.
+  The app's benchmark shows it: in its first run the right amp voicing was
+  found in only 7 of 12 items, yet the sound got closer \measured.
 \item[Equipment outside the chain] Guitar, pickups and microphone shape the tone
   and can only be compensated by EQ. A mono chain cannot reproduce stereo
   effects. Generic blocks may lack a specific amp's character, as EG-VAE's

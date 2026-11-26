@@ -1,6 +1,6 @@
 //! Tone from a recording: finds settings of the app's own pedals that make
 //! a dry guitar sound like a target recording (a separated guitar stem, no
-//! DI). Design and literature: `docs/papers/tone-estimation/` (Section 10).
+//! DI). Design and literature: `docs/papers/tone-estimation/` (Part III).
 //!
 //! The estimate is analysis by synthesis with the real chain as the forward
 //! model:
@@ -16,8 +16,8 @@
 //! 4. that EQ turned into a minimum-phase impulse response for the Cabinet
 //!    pedal ([`matching`]), placed last in the chain.
 //!
-//! Blocking and CPU-heavy: call it from a worker thread. Not yet wired to
-//! the UI; `eval_tone` (ignored test) measures it.
+//! Blocking and CPU-heavy: call it from a worker thread. The transcription
+//! pipeline's tone stage runs it; `eval_tone` (ignored test) measures it.
 
 pub mod analysis;
 pub mod cmaes;
@@ -64,6 +64,41 @@ mod tests {
         let played = render_at(live, &dry, REFERENCE_LEVEL);
         let err: f32 = estimate.iter().zip(&played).map(|(a, b)| (a - b).abs()).sum::<f32>() / dry.len() as f32;
         assert!(err < 0.01, "{err}");
+    }
+
+    /// Noise through a gentle tilt: brighter by `tilt_db` per octave above
+    /// 1 kHz.
+    fn tilted_noise(tilt_db: f32) -> Vec<f32> {
+        let mut rng = cmaes::Rng::new(5);
+        let noise: Vec<f32> = (0..96_000).map(|_| rng.normal() as f32 * 0.1).collect();
+        let hz: Vec<f32> = (0..24).map(|i| 60.0 * 1.3f32.powi(i)).collect();
+        let db: Vec<f32> = hz.iter().map(|f| tilt_db * (f / 1000.0).log2()).collect();
+        matching::convolve(&noise, &matching::ir_from_eq(&db, &hz, RENDER_RATE))
+    }
+
+    #[test]
+    fn a_measured_colour_is_limited_to_the_reliable_bands() {
+        let (flat, bright) = (tilted_noise(0.0), tilted_noise(4.0));
+        let c = colour_from_di(&bright, &flat);
+        let at = |f: f32| c.hz.iter().zip(&c.db).min_by(|a, b| (a.0 - f).abs().total_cmp(&(b.0 - f).abs())).unwrap();
+        // Brighter than the stand-in in the highs, darker in the lows (the
+        // colour is centred), flat outside the calibration range.
+        assert!(*at(4000.0).1 > at(500.0).1 + 4.0, "{:?}", c.db);
+        assert!(c.db.iter().all(|v| v.abs() <= CALIBRATION_DB));
+        assert!(c.hz.iter().zip(&c.db).filter(|(f, _)| **f < CALIBRATION_HZ.0 || **f > CALIBRATION_HZ.1).all(|(_, v)| *v == 0.0));
+        // Applying it brings the stand-in's colour to the target's.
+        let fixed = apply_colour(&flat, &c);
+        let before = colour_from_di(&bright, &flat).db.iter().map(|v| v.abs()).sum::<f32>();
+        let after = colour_from_di(&bright, &fixed).db.iter().map(|v| v.abs()).sum::<f32>();
+        assert!(after < 0.3 * before, "{after} vs {before}");
+    }
+
+    #[test]
+    fn the_mean_colour_averages_band_by_band() {
+        let a = GuitarColour { db: vec![2.0, -4.0], hz: vec![500.0, 2000.0] };
+        let b = GuitarColour { db: vec![0.0, 0.0], hz: vec![500.0, 2000.0] };
+        assert_eq!(mean_colour(&[a, b]).db, vec![1.0, -2.0]);
+        assert_eq!(mean_colour(&[]), GuitarColour::default());
     }
 }
 
@@ -375,6 +410,61 @@ pub fn save_presets(est: &Estimate, title: &str, artist: &str, track: &str) -> R
 }
 
 use crate::shared::tab::tone::{ESTIMATED_TAG, TRACK_TAG_PREFIX};
+
+/// The colour of a guitar relative to the stand-in dry signal: dB per band
+/// centre (Hz), the smoothed long-term spectrum of a DI recording of that
+/// guitar minus the stand-in's for the same notes.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct GuitarColour {
+    pub db: Vec<f32>,
+    pub hz: Vec<f32>,
+}
+
+/// Bands a measured [`GuitarColour`] keeps (Hz): below, the difference
+/// depends on which notes were played; above, on pick noise and hiss the
+/// stand-in lacks. On EGDB the colour of one recording differs from
+/// another's by 6-9 dB SD outside this range, 2-4 dB inside
+/// (`eval::colour_spread`).
+pub const CALIBRATION_HZ: (f32, f32) = (250.0, 8000.0);
+/// Largest boost or cut a measured colour keeps.
+pub const CALIBRATION_DB: f32 = 9.0;
+
+/// Measures [`GuitarColour`] from a DI recording (48 kHz mono) and the
+/// stand-in playing its notes (same length and alignment), limited to
+/// [`CALIBRATION_HZ`] (flat outside) and ±[`CALIBRATION_DB`].
+pub fn colour_from_di(di: &[f32], stand_in: &[f32]) -> GuitarColour {
+    let c = Target::new(di, RENDER_RATE).compare(stand_in);
+    let db = c
+        .eq_db
+        .iter()
+        .zip(&c.eq_hz)
+        .map(|(v, f)| {
+            if (CALIBRATION_HZ.0..=CALIBRATION_HZ.1).contains(f) {
+                v.clamp(-CALIBRATION_DB, CALIBRATION_DB)
+            } else {
+                0.0
+            }
+        })
+        .collect();
+    GuitarColour { db, hz: c.eq_hz }
+}
+
+/// The mean of colours measured on several recordings of one guitar.
+pub fn mean_colour(colours: &[GuitarColour]) -> GuitarColour {
+    let Some(first) = colours.first() else {
+        return GuitarColour::default();
+    };
+    let n = colours.len() as f32;
+    GuitarColour {
+        db: (0..first.db.len()).map(|b| colours.iter().map(|c| c.db[b]).sum::<f32>() / n).collect(),
+        hz: first.hz.clone(),
+    }
+}
+
+/// `x` (48 kHz) filtered with `colour`, as a minimum-phase IR.
+pub fn apply_colour(x: &[f32], colour: &GuitarColour) -> Vec<f32> {
+    matching::convolve(x, &matching::ir_from_eq(&colour.db, &colour.hz, RENDER_RATE))
+}
 
 /// [`estimate`] with the dry signal played from the target's notes
 /// (seconds from the start of `target`).

@@ -25,7 +25,13 @@
 //! adds the sampler dry signal, `GVA_TONE_STEMS=<eval_mix_bsrofo_sw.tsv>`
 //! adds BS-RoFormer stems of the Marshall renders mixed over MUSDB18
 //! backing ("sep-Marshall": estimated from the stem, scored against the
-//! clean render), `GVA_TONE_STEMS_ONLY=1` keeps only items with a stem.
+//! clean render), `GVA_TONE_STEMS_ONLY=1` keeps only items with a stem,
+//! `GVA_TONE_ITEMS=105,125` keeps only those items, `GVA_TONE_VERBOSE=1`
+//! prints each estimate's settings, `GVA_TONE_CALIBRATE=1` adds the pluck dry signal with its colour
+//! calibrated on other EGDB recordings' DI (`tone::colour_from_di`,
+//! `GVA_TONE_CALIBRATION_ITEMS` of them, default 3),
+//! `GVA_TONE_ABLATE=1` adds oracle variants of the pluck dry signal with
+//! the true DI's long-term colour, broadband level envelope, or both.
 
 use super::cmaes::Rng;
 use super::template::{PARAMS, Settings};
@@ -371,6 +377,58 @@ fn echo_scores() {
     }
 }
 
+/// The guitar colour ([`super::colour_from_di`]) of EGDB DI recordings
+/// against the pluck model: per item, and how much items differ, to see
+/// whether one recording can calibrate another. Same `GVA_TONE_MANIFEST`
+/// as `eval_tone`; `GVA_TONE_LIMIT` items (default 16).
+#[test]
+#[ignore]
+fn colour_spread() {
+    let Ok(manifest) = std::env::var("GVA_TONE_MANIFEST") else {
+        eprintln!("set GVA_TONE_MANIFEST");
+        return;
+    };
+    let limit = std::env::var("GVA_TONE_LIMIT").ok().and_then(|v| v.parse().ok()).unwrap_or(16);
+    let mut items: BTreeMap<String, PathBuf> = BTreeMap::new();
+    for line in std::fs::read_to_string(&manifest).unwrap().lines() {
+        let f: Vec<&str> = line.split('\t').collect();
+        if f.len() >= 3 && f[2].ends_with("/DI") {
+            items.insert(f[1].to_string(), PathBuf::from(f[0]));
+        }
+    }
+    let step = (items.len() / limit).max(1);
+    let mut colours = Vec::new();
+    for (notes, wav) in items.iter().step_by(step).take(limit) {
+        let di = load_48k(wav);
+        let dry = pluck::render(&load_notes(Path::new(notes)), di.len(), RENDER_RATE);
+        let c = super::colour_from_di(&di, &dry);
+        let line: Vec<String> = c.db.iter().step_by(3).map(|v| format!("{v:4.0}")).collect();
+        eprintln!("{:>4}: {}", Path::new(notes).file_stem().unwrap().to_string_lossy(), line.join(""));
+        colours.push(c);
+    }
+    let hz: Vec<String> = colours[0].hz.iter().step_by(3).map(|v| format!("{:4.0}", v / 100.0)).collect();
+    eprintln!("hHz : {}", hz.join(""));
+    let n = colours.len() as f32;
+    let bands = colours[0].db.len();
+    let mean: Vec<f32> = (0..bands).map(|b| colours.iter().map(|c| c.db[b]).sum::<f32>() / n).collect();
+    let sd: Vec<f32> = (0..bands)
+        .map(|b| (colours.iter().map(|c| (c.db[b] - mean[b]).powi(2)).sum::<f32>() / (n - 1.0)).sqrt())
+        .collect();
+    let fmt = |v: &[f32]| v.iter().step_by(3).map(|x| format!("{x:4.0}")).collect::<String>();
+    eprintln!("mean: {}\nsd  : {}", fmt(&mean), fmt(&sd));
+    // Mean absolute difference between items vs from the mean colour.
+    let mut pair = 0.0;
+    let mut pairs = 0;
+    for i in 0..colours.len() {
+        for j in 0..i {
+            pair += colours[i].db.iter().zip(&colours[j].db).map(|(a, b)| (a - b).abs()).sum::<f32>() / bands as f32;
+            pairs += 1;
+        }
+    }
+    let flat = colours.iter().map(|c| c.db.iter().map(|v| v.abs()).sum::<f32>() / bands as f32).sum::<f32>() / n;
+    eprintln!("mean |colour| {flat:.1} dB, mean |difference| between two items {:.1} dB", pair / pairs as f32);
+}
+
 /// `GVA_TONE_SAMPLES=<di.wav>:<notes.txt>,...`: single-note DI recordings
 /// for the sampler dry signal (Guitar-TECHS `allsinglenotes`).
 fn sampler_from_env() -> Option<Sampler> {
@@ -414,6 +472,50 @@ fn align_to(reference: &[f32], x: Vec<f32>) -> Vec<f32> {
         }
     }
     out
+}
+
+/// `x` through the EQ that gives it the long-term spectrum of `reference`
+/// (the true DI): the stand-in with the right guitar colour. Oracle, for
+/// the `GVA_TONE_ABLATE` diagnosis only.
+fn with_colour_of(x: &[f32], reference: &[f32]) -> Vec<f32> {
+    let c = features::Target::new(reference, RENDER_RATE).compare(x);
+    matching::convolve(x, &matching::ir_from_eq(&c.eq_db, &c.eq_hz, RENDER_RATE))
+}
+
+/// `x` with the broadband level envelope of `reference` (RMS over 10 ms,
+/// every 5 ms, gain capped at ±24 dB): the stand-in with the true DI's
+/// dynamics (note levels, decays, note ends). Oracle, for `GVA_TONE_ABLATE`.
+fn with_envelope_of(x: &[f32], reference: &[f32]) -> Vec<f32> {
+    let hop = 240;
+    let env = |v: &[f32]| -> Vec<f32> {
+        // Frame k is centred on sample k * hop.
+        (0..=v.len() / hop)
+            .map(|k| {
+                let c = &v[(k * hop).saturating_sub(hop)..(k * hop + hop).min(v.len())];
+                (c.iter().map(|s| s * s).sum::<f32>() / c.len().max(1) as f32).sqrt()
+            })
+            .collect()
+    };
+    let rms = |v: &[f32]| (v.iter().map(|s| s * s).sum::<f32>() / v.len().max(1) as f32).sqrt();
+    let (ex, er) = (env(x), env(reference));
+    // Relative to each signal's overall level, so only the shape changes.
+    let (lx, lr) = (rms(x).max(1e-9), rms(reference).max(1e-9));
+    let eps = 1e-3;
+    let gain: Vec<f32> = ex
+        .iter()
+        .zip(&er)
+        .map(|(a, b)| ((b / lr + eps) / (a / lx + eps)).clamp(1.0 / 16.0, 16.0))
+        .collect();
+    x.iter()
+        .enumerate()
+        .map(|(i, v)| {
+            let pos = i as f32 / hop as f32;
+            let k = (pos as usize).min(gain.len() - 1);
+            let next = (k + 1).min(gain.len() - 1);
+            let t = pos - k as f32;
+            v * (gain[k] * (1.0 - t) + gain[next] * t)
+        })
+        .collect()
 }
 
 /// One target: the audio the estimator sees, and the audio its estimate is
@@ -472,12 +574,20 @@ fn eval_tone() {
         read(&stems, "sep-");
     }
     let stems_only = std::env::var("GVA_TONE_STEMS_ONLY").is_ok_and(|v| v == "1");
+    // Every recording with a DI: the pool for colour calibration.
+    let all_items: Vec<_> = items.iter().filter(|(_, g)| g.contains_key("DI")).map(|(k, v)| (k.clone(), v.clone())).collect();
     let mut items: Vec<_> = items
         .into_iter()
         .filter(|(_, g)| g.contains_key("DI") && (!stems_only || g.keys().any(|k| k.starts_with("sep-"))))
         .collect();
     let step = (items.len() / limit.max(1)).max(1);
     items = items.into_iter().step_by(step).take(limit).collect();
+    // GVA_TONE_ITEMS=105,125: only these items (file stems of the notes).
+    if let Ok(only) = std::env::var("GVA_TONE_ITEMS") {
+        let only: Vec<&str> = only.split(',').collect();
+        items.retain(|(p, _)| only.iter().any(|o| Path::new(p).file_stem().is_some_and(|s| s == *o)));
+    }
+    let verbose = std::env::var("GVA_TONE_VERBOSE").is_ok_and(|v| v == "1");
 
     let mut methods = vec!["dry DI", "best preset", "preset + match"];
     if with_pluck {
@@ -485,6 +595,18 @@ fn eval_tone() {
     }
     if sampler.is_some() {
         methods.push("search, sampler");
+    }
+    // Oracle variants of the pluck stand-in that borrow one property of the
+    // true DI each: which property the stand-in lacks costs the most?
+    let ablate = with_pluck && std::env::var("GVA_TONE_ABLATE").is_ok_and(|v| v == "1");
+    if ablate {
+        methods.extend(["search, pluck + DI colour", "search, pluck + DI dynamics", "search, pluck + both"]);
+    }
+    // The stand-in's colour calibrated on another recording of the same
+    // guitar, as a player would record a short DI of their own guitar.
+    let calibrate = with_pluck && std::env::var("GVA_TONE_CALIBRATE").is_ok_and(|v| v == "1");
+    if calibrate {
+        methods.push("search, pluck calibrated");
     }
     if oracle {
         methods.push("search, true DI");
@@ -506,6 +628,31 @@ fn eval_tone() {
         }
         if let Some(s) = &sampler {
             drys.push(("sampler", s.render(&notes, di.len())));
+        }
+        if ablate {
+            let base = drys[0].1.clone();
+            let coloured = with_colour_of(&base, &di);
+            drys.push(("pluck+colour", coloured.clone()));
+            drys.push(("pluck+dynamics", with_envelope_of(&base, &di)));
+            drys.push(("pluck+both", with_envelope_of(&coloured, &di)));
+        }
+        if calibrate {
+            // The next GVA_TONE_CALIBRATION_ITEMS (default 3) items in
+            // manifest order that are not benchmark items.
+            let count = env("GVA_TONE_CALIBRATION_ITEMS", 3.0) as usize;
+            let at = all_items.iter().position(|(p, _)| p == notes_path).unwrap_or(0);
+            let colours: Vec<_> = (1..all_items.len())
+                .map(|k| &all_items[(at + k) % all_items.len()])
+                .filter(|(p, _)| !items.iter().any(|(q, _)| q == p))
+                .take(count)
+                .map(|(cal_notes, cal_group)| {
+                    let cal_di = load_48k(&cal_group["DI"]);
+                    let cal_dry = pluck::render(&load_notes(Path::new(cal_notes)), cal_di.len(), RENDER_RATE);
+                    super::colour_from_di(&cal_di, &cal_dry)
+                })
+                .collect();
+            let colour = super::mean_colour(&colours);
+            drys.push(("pluck calibrated", super::apply_colour(&drys[0].1, &colour)));
         }
 
         let truth = random_settings(&mut rng);
@@ -552,6 +699,11 @@ fn eval_tone() {
                     row.push(features::plain_distance(goal, &est.preset.render(dry), RENDER_RATE));
                 }
                 row.push(score(&est).0);
+                if verbose {
+                    eprintln!("    {name}: {:.2} dB, {}", est.best.distance, est.settings.describe());
+                    let eq: Vec<String> = est.best.eq_db.iter().step_by(3).map(|v| format!("{v:.0}")).collect();
+                    eprintln!("      match EQ every 3rd band: {}", eq.join(" "));
+                }
                 let true_delay = truth.delay_ms.filter(|_| case.group == "chain");
                 let entry = delay_hits.entry((name, true_delay.is_some())).or_default();
                 entry.1 += 1;

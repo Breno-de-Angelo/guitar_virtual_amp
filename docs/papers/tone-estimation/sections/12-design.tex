@@ -55,12 +55,12 @@ in detail.
   arr/.style={-{Stealth[length=2mm]}, semithick}]
   \node[box, fill=appc!10] (s1) {1. Separation, pan split, notes, beats \hfill \textsf{\scriptsize built (transcription)}};
   \node[box, below=of s1, fill=appc!10] (s2) {2. Pick an excerpt per part \hfill \textsf{\scriptsize built: loudest 12\,s}};
-  \node[box, below=of s2, fill=appc!10] (s3) {3. Stand-in dry signal from the notes \hfill \textsf{\scriptsize built: pluck; sampler in progress}};
+  \node[box, below=of s2, fill=appc!10] (s3) {3. Stand-in dry signal from the notes \hfill \textsf{\scriptsize built: pluck; colour calibration in progress}};
   \node[box, below=of s3, fill=warnc!10] (s4) {4. Starting points: factory presets; learned guess \hfill \textsf{\scriptsize presets built; learned planned}};
-  \node[box, below=of s4, fill=appc!10] (s5) {5. CMA-ES through the offline renderer \hfill \textsf{\scriptsize built}};
-  \node[box, below=of s5, fill=warnc!10] (s6) {6. Delay, reverb, modulation from notes and tempo \hfill \textsf{\scriptsize delay in progress}};
+  \node[box, below=of s4, fill=appc!10] (s5) {5. CMA-ES through the offline renderer, preset prior \hfill \textsf{\scriptsize built}};
+  \node[box, below=of s5, fill=warnc!10] (s6) {6. Delay, reverb, modulation from notes and tempo \hfill \textsf{\scriptsize delay built}};
   \node[box, below=of s6, fill=appc!10] (s7) {7. Linear match: minimum-phase IR in a Cabinet \hfill \textsf{\scriptsize built}};
-  \node[box, below=of s7, fill=warnc!10] (s8) {8. Save as a preset tagged with the song \hfill \textsf{\scriptsize in progress}};
+  \node[box, below=of s7, fill=appc!10] (s8) {8. Save as presets tagged with the song and track \hfill \textsf{\scriptsize built}};
   \foreach \a/\b in {s1/s2,s2/s3,s3/s4,s4/s5,s5/s6,s6/s7,s7/s8} \draw[arr] (\a) -- (\b);
 \end{tikzpicture}
 \caption{The planned tone-estimation pipeline and the status of each step.
@@ -80,7 +80,9 @@ The plan, step by step (Figure~\ref{fig:pipeline}):
   notes, (b) an effect-removal model trained on the app's own renders, or (c) the
   player's own DI recorded while playing along in practice mode. (c) has the right
   guitar and the wrong timing; (a) the right timing and the wrong guitar; (b)
-  both, with removal errors. \emph{Built}: (a).
+  both, with removal errors. \emph{Built}: (a). A fourth source, measured
+  later, is a mix: (a) for the notes, with its colour calibrated on (c)
+  (Section~\ref{sec:results-colour}).
 \item \textbf{Starting points}: the closest factory preset, then a network
   trained on renders of the template chain, mixed over backing tracks and
   separated by the same BS-RoFormer so it sees separation artefacts (the StemFX
@@ -92,12 +94,12 @@ The plan, step by step (Figure~\ref{fig:pipeline}):
   per register, crest factor, compression statistics), a small-weight
   effect-embedding term, and a prior over factory and user
   presets~\cite{yu2025improving}. \emph{Built}: the aligned spectral term, with an
-  EQ allowance.
+  EQ allowance, and a prior over the factory presets.
 \item \textbf{Time-based effects from the notes}: delay time from echoes of
   onsets (or candidate values tied to the tempo), reverb decay from rests after a
   note ends, modulation rate from sustained notes or an LFO
   extractor~\cite{mitcheltree2023modulation}. Measured values fix or initialise
-  the search, which avoids rugged landscapes. \emph{In progress}: delay.
+  the search, which avoids rugged landscapes. \emph{Built}: delay.
 \item \textbf{Linear match}: the smoothed difference between the long-term
   spectra of the stem and of the rendered chain, as a minimum-phase IR in a
   Cabinet pedal with a gain limit, as Tone Match does~\cite{fractalndtonematch}.

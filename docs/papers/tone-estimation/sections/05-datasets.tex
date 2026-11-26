@@ -95,12 +95,16 @@ improvisations and GuitarSet~\cite{xi2018guitarset}.
 \item \textbf{Benchmark}: EGDB test items (DI, the Marshall, Mesa and Plexi
   renders, and labelled notes), through the manifest \code{eval_egdb.tsv}
   written by \code{scripts/train/prepare_data.py} (Section~\ref{sec:results}).
-  The working tree adds Guitar-TECHS miked-amp recordings and separated stems as
-  targets \wip.
+  Separated stems of the Marshall renders mixed over MUSDB18 backing
+  (\code{eval_mix_bsrofo_sw.tsv}) are targets too; Guitar-TECHS miked-amp
+  recordings can be.
 \item \textbf{Fitting the plucked-string model}: 14 Guitar-TECHS DI recordings
   (P1/P2 single notes, chords, scales), CC BY 4.0. Never EGDB, which is the
   benchmark.
-\item \textbf{Sampler dry signal}: Guitar-TECHS ``allsinglenotes'' DI \wip.
+\item \textbf{Sampler dry signal}: Guitar-TECHS ``allsinglenotes'' DI (tried,
+  worse than the plucked string).
+\item \textbf{Colour calibration}: in the benchmark, EGDB DI recordings outside
+  the 12 benchmark items stand in for the player's own DI.
 \end{itemize}
 All of it lives outside the repository, under \file{~/.cache/gva_test}.
 \end{inapp}

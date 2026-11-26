@@ -10,17 +10,17 @@
 \toprule
 File (under \file{guitar_core/src/}) & Role and section \\
 \midrule
-\file{tone/mod.rs} & \code{estimate}, baseline, per-voicing search, \code{save_preset} (\S\ref{sec:impl}) \\
+\file{tone/mod.rs} & \code{estimate}, baseline, per-voicing search, guitar colour, \code{save_presets} (\S\ref{sec:impl}) \\
 \file{tone/pluck.rs} & plucked-string stand-in and \code{DI_EQ} (\S\ref{sec:impl-dry}) \\
-\file{tone/sampler.rs} & sampler stand-in from real DI notes (\S\ref{sec:impl-dry}, \wip) \\
+\file{tone/sampler.rs} & sampler stand-in from real DI notes (\S\ref{sec:impl-dry}, experiments only) \\
 \file{tone/features.rs} & log-band distance with EQ allowance; \code{plain_distance} (\S\ref{sec:app-distance}) \\
-\file{tone/template.rs} & template chain and parameter ranges (Table~\ref{tab:template}) \\
+\file{tone/template.rs} & template chain, parameter ranges (Table~\ref{tab:template}), preset prior (\S\ref{sec:impl-prior}) \\
 \file{tone/cmaes.rs} & separable CMA-ES (\S\ref{sec:search}) \\
-\file{tone/analysis.rs} & delay time from echoes of onsets (\S\ref{sec:impl-delay}, \wip) \\
-\file{tone/matching.rs} & minimum-phase match IR, FFT convolution (\S\ref{sec:impl-match}) \\
-\file{tone/eval.rs} & \code{eval_tone}, \code{fit_pluck}, \code{pluck_vs_di} (\S\ref{sec:results}) \\
+\file{tone/analysis.rs} & delay time from echoes of onsets (\S\ref{sec:impl-delay}) \\
+\file{tone/matching.rs} & minimum-phase match IR, FFT convolution, \code{Filterable} (\S\ref{sec:impl-match}) \\
+\file{tone/eval.rs} & \code{eval_tone}, \code{echo_scores}, \code{colour_spread}, \code{fit_pluck}, \code{pluck_vs_di} (\S\ref{sec:results}) \\
 \file{backend/offline.rs} & \code{render_at}: the chain offline at a given input level \\
-\file{shared/tab/tone.rs} & tone suggestions; estimated-preset tags (\wip) \\
+\file{shared/tab/tone.rs} & tone suggestions; estimated-preset tags \\
 \bottomrule
 \end{tabularx}
 \end{center}
@@ -39,15 +39,23 @@ GVA_TONE_MANIFEST=~/.cache/gva_test/prepared/eval_egdb.tsv \
 \toprule
 Variable & Effect \\
 \midrule
-\code{GVA_TONE_LIMIT} & number of items (default 8; the recorded run used 12) \\
+\code{GVA_TONE_LIMIT} & number of items (default 8; the recorded runs used 12) \\
+\code{GVA_TONE_ITEMS=105,125} & only these items \\
+\code{GVA_TONE_VERBOSE=1} & print each estimate's settings and match EQ \\
 \code{GVA_TONE_GENS} & CMA-ES generations (default 30) \\
 \code{GVA_TONE_SECS} & excerpt length in seconds (default 12) \\
 \code{GVA_TONE_ORACLE=0} & skip the true-DI search \\
 \code{GVA_TONE_OUT=<dir>} & write WAVs (target, estimate, preset) for listening \\
-\code{GVA_TONE_STEMS=<tsv>} & separated-stem targets (\wip) \\
-\code{GVA_TONE_SAMPLES=<di:notes,...>} & sampler stand-in (\wip) \\
-\code{GVA_TONE_FLOOR} & search floor in dB (\wip) \\
-\code{GVA_TONE_PLUCK=0} & skip the pluck stand-in (\wip) \\
+\code{GVA_TONE_STEMS=<tsv>} & separated-stem targets (\file{eval_mix_bsrofo_sw.tsv}) \\
+\code{GVA_TONE_STEMS_ONLY=1} & only items that have a stem (the recorded runs) \\
+\code{GVA_TONE_SAMPLES=<di:notes,...>} & sampler stand-in \\
+\code{GVA_TONE_FLOOR} & search floor in dB \\
+\code{GVA_TONE_PRIOR} & weight of the preset prior (default 1) \\
+\code{GVA_TONE_PLUCK=0} & skip the pluck stand-in \\
+\code{GVA_TONE_COLOUR=1} & search the guitar colour with the chain \\
+\code{GVA_TONE_ABLATE=1} & oracle stand-ins with the DI's colour, dynamics, both \\
+\code{GVA_TONE_CALIBRATE=1} & stand-in colour calibrated on other recordings \\
+\code{GVA_TONE_CALIBRATION_ITEMS} & how many (default 3) \\
 \bottomrule
 \end{tabularx}
 \end{center}

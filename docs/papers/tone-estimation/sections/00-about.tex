@@ -32,13 +32,14 @@ repository; \reported{} stated by a paper's authors; \expected{} a hypothesis.
 For the app: \done{} in the committed code, \wip{} in the working tree or being
 changed, \planned{} only in the roadmap.
 
-\paragraph{Snapshot and moving parts.} Written on 25 November 2026. The tone
-module was committed in \code{7db5015}; at the time of writing an agent is
-extending it in the working tree (a measured delay time, a sampler-based dry
-signal, more benchmark targets, and an optional stage in the transcription
-pipeline that saves the estimate as a preset). Section~\ref{sec:impl} marks
-which parts are committed and which are in progress. The results in
-Section~\ref{sec:results} are from the committed version.
+\paragraph{Snapshot and moving parts.} Written on 25 November 2026, updated on
+26 November. The tone module was committed in \code{7db5015} (search, pluck
+stand-in, match IR), \code{25f53ea} (measured delay, separated-stem targets, the
+tone stage of the transcription pipeline) and \code{9939922} (preset prior, two
+saved presets). The 26 November update adds a breakdown of where the error comes
+from and a colour calibration of the stand-in, measured in the benchmark but not
+yet used by the app (Section~\ref{sec:results-colour}). The results in
+Section~\ref{sec:results} are from the committed defaults.
 
 \paragraph{Related files.} \file{ROADMAP.md} (``Tone from the recording''),
 \file{CLAUDE.md} (section ``Tone from a recording''), and the companion
@@ -60,10 +61,10 @@ Question & Literature & Guitar Virtual Amp \\
 \midrule
 Which effects are present? & Close to solved on synthetic isolated guitar (set F1 0.987 on 3-effect chains) \reported & Not estimated separately: the search switches pedals off \\
 Knob values of a known chain? & Regression MAE 0.02--0.05 on a unit scale for known plugins \reported; search by re-rendering beats prediction (wet SI-SDR 18.2 $\to$ 23.1\dB) \reported & CMA-ES search through the app's own renderer \done \\
-Without the dry signal? & Unpaired amp models score 77--84 MUSHRA \reported; effect removal; no notes-based resynthesis found & Dry signal synthesised from the transcribed notes (plucked-string model) \done; sampler of real DI notes \wip \\
-On a stem from a commercial mix? & Only one measurement: effect retrieval halves on separated stems \reported & Benchmark has separated-stem targets \wip; not yet measured \\
+Without the dry signal? & Unpaired amp models score 77--84 MUSHRA \reported; effect removal; no notes-based resynthesis found & Dry signal synthesised from the transcribed notes (plucked-string model) \done; its colour calibrated on the player's DI measured \wip \\
+On a stem from a commercial mix? & Only one measurement: effect retrieval halves on separated stems \reported & Separated-stem targets measured: search and preset + match tie (5.9 and 5.8\dB) \measured \\
 Final colour (cabinet, mix EQ) & Spectral matching to an IR, after the gain is right (Tone Match) & Minimum-phase match IR in a Cabinet pedal \done \\
-How good is it? & No benchmark for the full task & EGDB, 12 items: 5.3--6.5\dB{} against 6.5--7.6\dB{} for the best baseline; 0.7--3.1\dB{} with the true DI \measured \\
+How good is it? & No benchmark for the full task & EGDB, 12 items: 5.6--6.5\dB{} against 5.8--6.9\dB{} for preset + match; 1.7--3.1\dB{} with the true DI; 5.0--5.9\dB{} with a calibrated stand-in \measured \\
 \bottomrule
 \end{tabularx}
 \end{table}

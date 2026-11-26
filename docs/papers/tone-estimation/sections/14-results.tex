@@ -7,18 +7,25 @@
 \code{eval_tone} (an ignored test in \file{tone/eval.rs}) uses EGDB test items:
 each has the DI of a performance, renders of the same DI through three
 amplifier simulations (Marshall, Mesa, Plexi: equipment \emph{outside} the app's
-chain) and labelled notes. Per item there are four kinds of target:
+chain) and labelled notes. The recorded runs use the 12 items that also have a
+separated stem. Per item there are five kinds of target:
 \begin{description}[style=nextline,leftmargin=1.2cm]
 \item[chain] The DI through a random template chain followed by a random
   cabinet-like EQ (a high-pass near 80\Hz, a roll-off above 3--7\kHz, six
   smooth bumps of up to $\pm4\dB$). The true settings are known, so parameter
   error can be measured. Random settings: a random voicing, each parameter
   uniform in 0.1--0.9, and the compressor, drive and reverb each switched off
-  with probability 0.5, 0.4 and 0.5. In the working tree half of these targets
-  also get a delay of 150--700\ms{} \wip.
+  with probability 0.5, 0.4 and 0.5. Half of these targets also get a delay of
+  150--700\ms.
 \item[Marshall, Mesa, Plexi] The EGDB renders: can the app's chain imitate gear
   it does not contain?
+\item[sep-Marshall] The Marshall render mixed over a MUSDB18 backing track and
+  separated again by BS-RoFormer (\code{GVA_TONE_STEMS}). The estimator sees the
+  stem; the estimate is scored against the clean Marshall render. This is the
+  closest the benchmark gets to a commercial song.
 \end{description}
+The benchmark can also read Guitar-TECHS miked amplifiers (``Micamp''); they are
+not in the recorded runs.
 
 Each target is estimated by five methods, all ending in the same kind of chain:
 \begin{enumerate}
@@ -42,13 +49,15 @@ far is it from the record? It also makes the five methods comparable.
 
 \subsection{Results}
 
-Committed run (\code{7db5015}): 12 EGDB items, 12\,s excerpts, about 15\,s per
-estimate on 28 threads \measured.
+Run of 26 November 2026 with the committed defaults (\code{9939922}: preset
+prior weight 1, measured delay, 30 generations), 12 EGDB items, 12\,s excerpts,
+about 8\,s per estimate on 28 threads \measured.
 
 \begin{table}[h]
 \centering
 \caption{Mean log-band distance (dB, lower is better) between the true DI
-rendered through each estimate and the target, 12 EGDB items \measured.}
+rendered through each estimate and the target, 12 EGDB items \measured. In
+brackets: items where the search from notes beats preset + match.}
 \label{tab:tone-results}
 \footnotesize
 \setlength{\tabcolsep}{4pt}
@@ -56,33 +65,42 @@ rendered through each estimate and the target, 12 EGDB items \measured.}
 \toprule
 Target & Dry DI & Best preset & Preset + match & Search, notes & Search, true DI \\
 \midrule
-Random app chain + cab EQ & 6.60 & 9.29 & 6.64 & \textbf{5.30} & 0.66 \\
-EGDB Marshall & 7.52 & 7.55 & 6.84 & \textbf{6.49} & 3.11 \\
-EGDB Mesa & 7.94 & 8.90 & 6.52 & \textbf{5.83} & 2.67 \\
-EGDB Plexi & 7.61 & 8.16 & 7.63 & \textbf{6.26} & 2.32 \\
+Random app chain + cab EQ & 7.34 & 8.25 & 6.45 & \textbf{5.55} (10) & 1.73 \\
+EGDB Marshall & 6.82 & 7.02 & \textbf{6.16} & 6.20 (6) & 3.07 \\
+EGDB Mesa & 7.71 & 8.15 & 5.84 & \textbf{5.79} (5) & 2.44 \\
+EGDB Plexi & 6.77 & 8.84 & 6.86 & \textbf{6.45} (7) & 2.66 \\
+Marshall, separated stem & 6.84 & 7.07 & \textbf{5.79} & 5.91 (6) & 5.33 \\
 \bottomrule
 \end{tabular}
 \end{table}
 
 \paragraph{What the table says.}
 \begin{itemize}
-\item \textbf{The estimator works, modestly.} Search from notes beats every
-  baseline on average in all four groups, and in 7--8 of the 12 items per group.
-  The gain over the best baseline is 0.35--1.35\dB.
+\item \textbf{The search clearly wins only on targets made with the app's own
+  chain.} There it beats preset + match on 10 of 12 items (5.55 against
+  6.45\dB). On the amp simulations and the stems the two are within 0.4\dB{}
+  and each wins about half the items. That is why the app saves both as presets
+  (Section~\ref{sec:impl-save}).
 \item \textbf{The match filter matters.} A factory preset alone is often
-  \emph{worse} than no processing (9.29 against 6.60 on chain targets), because
+  \emph{worse} than no processing (8.25 against 7.34 on chain targets), because
   its colour is wrong; with the match IR it gets close to or better than the dry
   DI.
 \item \textbf{The search itself is good; the stand-in dry signal is the
-  bottleneck.} With the true DI the search gets within 0.66\dB{} of targets made
-  with the app's own chain, essentially solving them, and to 2.3--3.1\dB{} of
-  real amp simulations. From the notes it stays at 5.3--6.5\dB. The difference
-  (3.2--4.6\dB) is the cost of the plucked-string stand-in, which is still
-  9.9\dB{} from real DI even with an EQ allowed.
+  bottleneck.} With the true DI the search gets to 1.7\dB{} of targets made
+  with the app's own chain and to 2.4--3.1\dB{} of real amp simulations. From
+  the notes it stays at 5.6--6.5\dB. Section~\ref{sec:results-gap} breaks this
+  gap down.
+\item \textbf{Separation costs about as much as the stand-in.} With the true DI,
+  the separated stem scores 5.33\dB{} against 3.07 for the clean render of the
+  same performance: 2.3\dB{} lost to separation artefacts, which a perfect dry
+  signal cannot recover.
+\item \textbf{Delays are found.} The measured delay time is right (within 5\%)
+  in 7 of the 8 chain targets that have one, and no delay is found in 47 of the
+  52 targets without one.
 \item \textbf{Settings are not recovered, and that is expected.} On chain targets
-  the mean parameter error is 0.41 on the 0--1 scale and the amp voicing is right
-  in 7 of 12 items. Several settings sound alike (Section~\ref{sec:comparison}),
-  so the search finds \emph{a} chain that sounds close, not \emph{the} chain.
+  the mean parameter error is 0.30 on the 0--1 scale. Several settings sound
+  alike (Section~\ref{sec:comparison}), so the search finds \emph{a} chain that
+  sounds close, not \emph{the} chain.
 \end{itemize}
 
 \begin{worked}[: what a decibel of distance means]
@@ -93,29 +111,87 @@ small error everywhere from a large error in a few bands, and it has not been
 checked against listeners for these sounds.
 \end{worked}
 
-\begin{caution}[: what this benchmark does not yet test]
-\begin{itemize}
-\item \textbf{Perfect notes}: the stand-in plays labelled notes. With
-  transcribed notes, missed and extra notes will add error \expected.
-\item \textbf{Isolated guitar}: no target is a separated stem. The working tree
-  adds separated-stem targets (\code{GVA_TONE_STEMS}), scored against the clean
-  render they came from \wip.
-\item \textbf{Small sample}: 12 items. Differences of a few tenths of a dB
-  between methods are within item-to-item variation.
-\item \textbf{The score is not validated}: no listening test yet. The benchmark
-  writes WAVs (\code{GVA_TONE_OUT}) for listening.
-\item \textbf{Only simulated amps} for the gear-outside-the-chain case; the
-  working tree adds Guitar-TECHS miked real amplifiers \wip.
-\end{itemize}
+\begin{caution}[: noise between runs]
+The same 12 items with 10 instead of 30 generations, or before the preset prior
+was added, moved the group means by up to 0.4\dB{} (separated stems: 6.21,
+6.63 and 6.12\dB{} in three earlier runs) \measured. Differences of a few tenths
+of a decibel between methods are within that noise; the item counts in brackets
+are a better guide.
 \end{caution}
 
-\subsection{Being measured in the working tree}
+\subsection{Where the remaining error comes from}
+\label{sec:results-gap}
 
-At the time of writing, the benchmark in the working tree \wip{} adds: the
-sampler stand-in as a sixth method (\code{GVA_TONE_SAMPLES}); delay-time accuracy
-(right within 5\% when the target has a delay, ``no delay'' when it has none);
-separated-stem and Guitar-TECHS miked-amp targets; a higher search floor
-(\code{GVA_TONE_FLOOR}) so the search ignores quiet bands where a stand-in
-differs most from a real DI; and \code{GVA_TONE_PLUCK=0} to skip the pluck
-stand-in. No numbers from it are recorded yet; when they are, this section and
-Table~\ref{tab:tone-results} should be updated.
+The stand-in differs from the real DI in two broad ways: its \emph{colour} (the
+long-term spectrum: a plucked string model of one average guitar against the
+recorded guitar and pickup) and its \emph{dynamics} (how loud each note is, how
+it decays, when it stops). \code{GVA_TONE_ABLATE=1} adds three oracle stand-ins
+that borrow one property from the true DI:
+\begin{description}[style=nextline,leftmargin=1.2cm]
+\item[+ DI colour] the pluck stand-in through the minimum-phase EQ that gives it
+  the true DI's long-term spectrum (the same centred, $\pm18\dB$ EQ as the
+  search distance, Section~\ref{sec:app-distance});
+\item[+ DI dynamics] the pluck stand-in times the ratio of the two signals'
+  broadband RMS envelopes (10\ms{} windows every 5\ms, capped at $\pm24\dB$);
+\item[+ both] colour, then dynamics.
+\end{description}
+They cannot be used in the app (they need the DI); they say which property is
+worth estimating.
+
+\begin{table}[h]
+\centering
+\caption{Search from notes with oracle stand-ins, same run and items as
+Table~\ref{tab:tone-results} \measured. In brackets: items where the variant
+beats the plain pluck stand-in.}
+\label{tab:tone-ablation}
+\footnotesize
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{@{}lccccc@{}}
+\toprule
+Target & Pluck & + DI colour & + DI dynamics & + both & True DI \\
+\midrule
+Random app chain + cab EQ & 5.55 & 4.28 (10) & 5.06 (9) & 3.65 (12) & 1.73 \\
+EGDB Marshall & 6.20 & 4.65 (11) & 5.67 (11) & 4.09 (12) & 3.07 \\
+EGDB Mesa & 5.79 & 4.26 (12) & 4.96 (8) & 3.59 (11) & 2.44 \\
+EGDB Plexi & 6.45 & 4.42 (11) & 6.27 (7) & 3.98 (12) & 2.66 \\
+Marshall, separated stem & 5.92 & 5.10 (7) & 6.00 (5) & 5.54 (6) & 5.33 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{keyidea}[: the guitar's colour is most of the gap]
+On the clean targets the right colour alone closes 1.3--2.0\dB{} of the
+3.1--3.8\dB{} between the pluck stand-in and the true DI, and wins on 10--12
+items out of 12. The right dynamics alone are worth 0.2--0.8\dB. Together they
+leave about 1--1.9\dB. Colour matters twice: in front of a distortion it changes
+which frequencies clip; and the match IR, fitted to the stand-in's colour, is
+then applied to the true DI. Fixed \code{DI_EQ} gives the stand-in the colour of
+an \emph{average} Guitar-TECHS DI, but EGDB's guitar sounds different, and so
+will every user's guitar.
+\end{keyidea}
+
+On separated stems the oracles help less (0.8\dB{} for colour, nothing for
+dynamics) because separation, not the stand-in, is the larger error there.
+
+\subsection{Estimating the colour}
+\label{sec:results-colour}
+
+Two ways of getting the colour without the record's DI were tried.
+
+\paragraph{Blind: search it with the chain.} \code{Options::guitar_colour}
+(\code{GVA_TONE_COLOUR=1}) adds five EQ points (100\Hz{} to 8\kHz, $\pm12\dB$,
+prior standard deviation 6\dB) applied to the stand-in before the chain, searched
+by the same CMA-ES. It made things \emph{worse}: on the 31 cases run before it
+was stopped, 0.1--0.4\dB{} worse than the plain search on every clean group, and
+a tie on stems \measured. With the EQ allowance after the chain, colour before
+it is only visible through the distortion, weakly; the search spends the extra
+freedom on other faults of the stand-in. It stays off.
+
+\paragraph{Calibrated: measure it on another recording of the guitar.} The
+benchmark question is ``this performance, on this guitar, through the preset'',
+and in the app the guitar is the player's. A player can record a short DI of
+their own guitar once; its colour against the stand-in playing the same notes
+(\code{tone::colour_from_di}) is then applied to every stand-in
+(\code{tone::apply_colour}). \code{GVA_TONE_CALIBRATE=1} simulates that with
+EGDB recordings outside the 12 benchmark items.
+% CALIBRATION RESULTS
