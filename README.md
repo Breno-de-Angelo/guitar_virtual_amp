@@ -17,10 +17,27 @@ desktop (Linux, Windows, macOS) and Android.
   the whole catalog, and load them straight into the NAM Model or Cabinet pedal. See below.
 - **Cabinet simulator** that convolves the signal with a speaker impulse response (any `.wav` IR),
   using partitioned convolution so latency stays at one block regardless of IR length.
+- **Stompbox pedalboard**: each pedal is a card with knobs, a bypass LED and a footswitch,
+  colored by effect family. Add pedals from a menu grouped by family (they land in the usual
+  signal-chain order), drag them to reorder, duplicate, reset or collapse them, flip between two
+  sounds with **A/B**, and undo/redo every edit (Ctrl+Z / Ctrl+Shift+Z).
 - **20 factory presets** (clean jazz, blues crunch, metal djent, shoegaze wall, surf rock, …),
-  plus saving and loading your own.
-- **Tuner** based on the YIN pitch-detection algorithm, and a sample-accurate **metronome**.
-- **Live oscilloscope and FFT** view of the output signal.
+  plus saving and loading your own, with search, song/artist tags and a **setlist** you walk with
+  the top-bar arrows, PageUp/PageDown or a MIDI footswitch.
+- **Tuner** based on the YIN pitch-detection algorithm: needle, string targets for 15 tunings
+  (drop D, half step down, open G, 7-string, bass...) or the open tab's tuning, adjustable A4
+  reference, and a fretboard showing where the note is. Sample-accurate **metronome** with an
+  accented first beat, click volume and tap tempo, and one-click delay/tremolo sync to
+  quarter, eighth, dotted-eighth or triplet notes.
+- **Master section**: input and output level meters with clip lights, input gain, master volume
+  and mute in the top bar; the app warns when the input clips.
+- **Recorder**: record the processed guitar (or everything you hear) to WAV with one button.
+- **MIDI footswitches and expression pedals** (desktop): MIDI learn for pedal bypass, next/previous
+  preset, setlist slots by program change, mute, tap tempo, metronome, looper and master volume.
+- **Analyzer** page: a triggered oscilloscope (a held note stands still) and a log-frequency
+  spectrum in dBFS with peak hold and freeze, of the dry guitar or the processed one.
+- **Dark, light or system theme** and UI scaling; on narrow screens (phones) the navigation moves
+  to a bottom bar and controls grow to touch size.
 - **Tab player** (an open Songsterr-style view): opens Guitar Pro files (GP3, GP4, GP5, GPX, GP7/8),
   draws the tablature with a playback cursor, and plays it with a SoundFont synthesizer
   (per-track mute/solo, speed control) and/or an original recording (mp3, ogg, flac, wav, m4a)
@@ -32,7 +49,11 @@ desktop (Linux, Windows, macOS) and Android.
   you can choose one in the UI.
 - **Practice mode** in the tab player: while the song plays, it listens to your guitar and
   colors each note of the selected track green (right) or red (wrong or missing), with an
-  accuracy score and streak. It checks pitch (chords included) within a timing tolerance,
+  accuracy score and streak, a per-bar heat map, the bars that need work (one click loops them)
+  and your best result per tab. **Loop** any range of bars (Shift+click a bar to extend it), add
+  a count-in, and let the **speed trainer** start slow and speed up after every good pass.
+  **Latency calibration** on the Settings page measures the real round trip with a pulse through
+  your speakers and microphone (or a loopback cable). It checks pitch (chords included) within a timing tolerance,
   compensating the audio latency. Octave errors and the same note on another string count
   as right; a note held from the previous beat also counts (there's no onset detection yet).
 - **Tone suggestion** for the selected tab track: your own presets tagged with the song or
@@ -49,6 +70,32 @@ desktop (Linux, Windows, macOS) and Android.
   Guitar Pro files (matched by file name, or linked by hand). See below.
 - **Device selection and buffer-size control** from the UI (32 to 4096 frames), to trade
   latency against stability on your hardware.
+
+## Using the app
+
+The pages are on the left (or at the bottom on a phone): **Pedals**, **Presets**, **Tuner**
+(with the metronome), **Tabs**, **Spotify**, **Analyzer** and **Settings** (audio devices and
+buffer, levels, latency calibration, theme, MIDI, recordings). Without a working audio device
+the app still opens, with a banner and a Retry button.
+
+Keyboard shortcuts (F1 shows them in the app):
+
+| Keys | Action |
+| --- | --- |
+| Ctrl+Z / Ctrl+Shift+Z (Ctrl+Y) | Undo / redo pedal edits |
+| 1 … 9 | Bypass / enable pedal 1-9 |
+| PageUp / PageDown | Previous / next preset (setlist) |
+| Ctrl+S | Save the loaded user preset |
+| M / T / K / L | Mute, tap tempo, metronome on/off, looper record/play/overdub |
+| Ctrl+R | Start / stop recording |
+| Space | Play / pause the tab (Tabs page) |
+| Ctrl+1 … Ctrl+7 | Switch page |
+
+Knobs: drag up/down (Shift for fine steps), double-click to reset, right-click to type a value.
+
+MIDI (Settings → MIDI controller): pick the input port, press **Learn** next to an action and
+press the footswitch. Footswitch CCs toggle on press (value ≥ 64); an expression pedal bound to
+master volume uses every value. Recordings go to `<data dir>/guitar_virtual_amp/recordings/`.
 
 ## How it works
 

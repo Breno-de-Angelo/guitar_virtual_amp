@@ -94,6 +94,8 @@ pub struct UiPrefs {
     /// The tuner, practice mode and analyzer hear the guitar before the
     /// pedals (effects confuse pitch detection).
     pub analysis_dry: bool,
+    /// Page shown at launch (`frontend::gui::Page::label`).
+    pub last_page: Option<String>,
     /// Presets in performance order, for next/previous switching and MIDI
     /// program changes. Empty = every preset, user ones first.
     pub setlist: Vec<PresetRef>,
@@ -115,6 +117,7 @@ impl Default for UiPrefs {
             metronome_volume: 1.0,
             record_mix: false,
             analysis_dry: true,
+            last_page: None,
             setlist: Vec::new(),
             midi: Default::default(),
         }

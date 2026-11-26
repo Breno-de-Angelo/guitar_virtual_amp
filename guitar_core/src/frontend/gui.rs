@@ -81,6 +81,10 @@ impl Page {
         }
     }
 
+    pub fn from_label(label: &str) -> Option<Page> {
+        Page::ALL.into_iter().find(|p| p.label() == label)
+    }
+
     pub fn label(self) -> &'static str {
         match self {
             Page::Pedalboard => "Pedals",
@@ -184,6 +188,10 @@ pub struct AudioApp {
     latency_probe: LatencyProbe,
     /// Warned about input clipping (once per launch).
     warned_clipping: bool,
+    /// Window title last sent, so it's only updated on change.
+    title: String,
+    /// Page last persisted.
+    saved_page: Option<Page>,
     settings: AppSettings,
 }
 
@@ -237,7 +245,12 @@ impl AudioApp {
             settings_page: SettingsPage::default(),
             tab_panel: TabPlayerPanel::new(setup.song_player.clone(), &settings),
             spotify_panel: SpotifyPanel::new(),
-            page: if settings.last_tab.is_some() { Page::Tabs } else { Page::Pedalboard },
+            page: settings
+                .ui
+                .last_page
+                .as_deref()
+                .and_then(Page::from_label)
+                .unwrap_or(if settings.last_tab.is_some() { Page::Tabs } else { Page::Pedalboard }),
             current_preset,
             user_muted: false,
             in_meter: MeterState::default(),
@@ -248,6 +261,8 @@ impl AudioApp {
             received_total: 0,
             latency_probe: LatencyProbe::new(crate::shared::config::GLOBAL_CONFIG.sample_rate as f64),
             warned_clipping: false,
+            title: String::new(),
+            saved_page: None,
             devices,
             settings,
         }
@@ -356,6 +371,53 @@ impl AudioApp {
             Ok(_) => self.toast("Recording… (Ctrl+R or ⏹ to stop)", false),
             Err(e) => self.toast(e, true),
         }
+    }
+
+    /// Files dropped on the window outside the Tabs page (which handles its
+    /// own): presets load, `.nam` captures become NAM pedals, `.wav` files
+    /// cabinet IRs. Returns whether the chain changed.
+    fn handle_dropped_files(&mut self, ctx: &egui::Context) -> bool {
+        if self.page == Page::Tabs {
+            return false;
+        }
+        let dropped: Vec<std::path::PathBuf> =
+            ctx.input(|i| i.raw.dropped_files.iter().filter_map(|f| f.path.clone()).collect());
+        let mut changed = false;
+        for path in dropped {
+            let ext = path.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase).unwrap_or_default();
+            let before = self.pedal_chain.clone();
+            match ext.as_str() {
+                "json" => match preset::load_from_file(&path) {
+                    Ok(p) => {
+                        self.load_preset(LoadedPreset { pedals: p.pedals, preset_ref: PresetRef::User(path), name: p.name });
+                        changed = true;
+                    }
+                    Err(e) => self.toast(format!("Not a preset: {e}"), true),
+                },
+                "nam" => {
+                    self.pedal_chain.push(PedalInstance::new(PedalDescription::Nam(NamParams {
+                        model_path: Some(path.display().to_string()),
+                        ..Default::default()
+                    })));
+                    self.toast("Added a NAM Model pedal", false);
+                }
+                "wav" => {
+                    self.pedal_chain.push(PedalInstance::new(PedalDescription::Cabinet(CabinetParams {
+                        ir_path: Some(path.display().to_string()),
+                        ..Default::default()
+                    })));
+                    self.toast("Added a Cabinet pedal with this IR", false);
+                }
+                _ => self.toast("Drop a preset (.json), a NAM capture (.nam) or an IR (.wav) here; tabs go on the Tabs page", true),
+            }
+            if self.pedal_chain != before {
+                if !matches!(ext.as_str(), "json") {
+                    self.pedalboard.record_external(&before, &self.pedal_chain);
+                }
+                changed = true;
+            }
+        }
+        changed
     }
 
     fn toggle_looper(&mut self) -> bool {
@@ -781,6 +843,7 @@ impl eframe::App for AudioApp {
             chain_changed |= self.handle_midi(trigger, value);
         }
         chain_changed |= self.handle_shortcuts(ctx);
+        chain_changed |= self.handle_dropped_files(ctx);
 
         egui::TopBottomPanel::top("top_bar")
             .frame(egui::Frame::new().fill(palette.panel).inner_margin(egui::Margin::symmetric(10, 6)))
@@ -858,6 +921,22 @@ impl eframe::App for AudioApp {
                             });
                     });
             }
+        }
+
+        let title = match &self.current_preset {
+            Some(p) => format!("{}{} · Guitar Virtual Amp", p.name, if self.preset_dirty() { " •" } else { "" }),
+            None => "Guitar Virtual Amp".to_string(),
+        };
+        if title != self.title {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));
+            self.title = title;
+        }
+        if self.saved_page != Some(self.page) {
+            if self.saved_page.is_some() {
+                self.settings.ui.last_page = Some(self.page.label().to_string());
+                save_settings(&self.settings);
+            }
+            self.saved_page = Some(self.page);
         }
 
         // Mute while the tuner is open, if asked.
@@ -944,6 +1023,19 @@ mod tests {
         app.handle_midi(expression, 0);
         assert_eq!(app.settings.ui.output_volume_db, -60.0);
         assert!(app.controls.output_volume() < 0.01);
+    }
+
+    #[test]
+    fn pages_round_trip_through_their_labels() {
+        for page in Page::ALL {
+            assert_eq!(Page::from_label(page.label()), Some(page));
+        }
+        assert_eq!(Page::from_label("nope"), None);
+        let (audio_tx, audio_rx) = crossbeam::channel::bounded(16);
+        let mut settings = AppSettings::default();
+        settings.ui.last_page = Some("Tuner".into());
+        let app = AudioApp::new(audio_rx, AudioSetup::without_audio(audio_tx), settings);
+        assert_eq!(app.page, Page::Tuner);
     }
 
     #[test]
