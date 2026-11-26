@@ -1,0 +1,80 @@
+% !TeX root = ../main.tex
+\section{Products and Open-Source Tools}
+\label{sec:products}
+
+Products use three kinds of input (Table~\ref{tab:products}).
+
+\emph{Capture of physical equipment.} Kemper profiling plays test signals into
+the amplifier and analyses its response; compressors and time-based effects
+must be bypassed~\cite{kemper2018manual}. Neural DSP's Neural Capture,
+IK Multimedia's TONEX (with parametric models announced in October 2026),
+Line 6's Proxy and NAM work the same way with neural
+models~\cite{neuraldsp2026qcmanual,ik2026parametric,line6ndproxy,atkinsonndnam}.
+None accepts a recording. The Quad Cortex manual does say that a capture's gain
+metadata is estimated from the device's dynamic range and harmonic content,
+the only vendor statement we found of a gain descriptor computed from
+audio~\cite{neuraldsp2026qcmanual}.
+
+\emph{Spectral matching to a recording.} The Axe-Fx III Tone Match block
+computes long-term averaged spectra of a reference and of the user's preset
+and applies their smoothed difference as a filter, which can be exported as a
+cabinet impulse response~\cite{fractalndtonematch}. Its manual lists the
+conditions: a starting preset with the right amplifier and the right amount of
+distortion, no effects, an isolated and unclipped guitar track, matched
+loudness, mono analysis, and broad playing material. iZotope's Match EQ does
+the same for mixes~\cite{izotope2019matcheq}. These tools estimate only the
+linear part, after the user has fixed the nonlinear one.
+
+\emph{Presets from audio, song names or text.} Positive Grid's BIAS X
+``Music-to-Tone'' accepts a file of up to 15 minutes, full mixes included,
+finds a guitar segment and returns a full chain; the feature runs online and
+no method or accuracy is published~\cite{positivegridndbiasxhelp,positivegrid2025biasxai}.
+Positive Grid co-authored the tone-embedding amplifier model of Chen et
+al.~\cite{chen2024zeroshot}, but does not say whether BIAS X uses it. Small
+third-party apps generate presets from a song name with a language model's
+knowledge of the artist's equipment, sometimes with stem separation and coarse
+spectral features~\cite{bouharb2026gptonebuilder,aitonetechndgenerator}; none
+publishes an evaluation. The most detailed public design is a Chinese patent
+granted in 2025: separation, a tone-type classifier, a network that picks an
+amplifier and cabinet model and regresses five knobs, a fit of up to 24
+peaking filters to the difference of the spectra, tempo and key analysis for
+delay and modulation times, and retrieval from a preset database for the
+remaining effects~\cite{huanyin2025presetpatent}.
+
+\emph{Open-source tools.} NAM-EQ-Match renders the player's DI through every
+capture in a NAM library at several input gains, compares equalisation-invariant
+dynamics features (crest factor, compression, spectral flux, MFCC statistics)
+with the target, then fits a matching impulse response or tone-stack
+equaliser~\cite{sd4562026nameqmatch}. \texttt{tonematch} predicts seven
+amplifier knobs with a mel-spectrogram CNN and refines them by CMA-ES through
+a grey-box amplifier, reporting a median log-spectral error of 1.54\,dB on 24
+isolated Guitar-TECHS cases, against 3.68\,dB with every knob at
+noon~\cite{neuwirth2026tonematch}.
+ToneRunner retrieves plugin chains with a contrastive encoder and documents
+how the encoder learns the riff instead of the tone when the same dry clip is
+not shared across chains in training~\cite{nathanben2026tonerunner}.
+These projects are small and not peer reviewed, but they converge on the same
+design as the research: retrieve or predict a nonlinear core, refine by
+rendering, finish with a linear match.
+
+\begin{table}[t]
+\centering
+\caption{What products and tools take as input and return. ``Full chain'':
+amplifier, cabinet and effects with settings. $^*$Method undocumented.}
+\label{tab:products}
+\footnotesize
+\setlength{\tabcolsep}{2.5pt}
+\begin{tabular}{@{}lll@{}}
+\toprule
+System & Input & Output \\
+\midrule
+Capture products, NAM & device & capture \\
+Tone Match~\cite{fractalndtonematch} & isolated track & EQ / IR \\
+BIAS X~\cite{positivegridndbiasxhelp} & recording, mix & full chain$^*$ \\
+Song-name apps~\cite{bouharb2026gptonebuilder} & name, text & preset \\
+CN118865922B~\cite{huanyin2025presetpatent} & recording & full chain \\
+NAM-EQ-Match~\cite{sd4562026nameqmatch} & stem, DI & capture, EQ/IR \\
+\texttt{tonematch}~\cite{neuwirth2026tonematch} & recording, DI & 7 amp knobs \\
+\bottomrule
+\end{tabular}
+\end{table}

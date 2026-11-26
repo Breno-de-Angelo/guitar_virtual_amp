@@ -1,0 +1,121 @@
+% !TeX root = ../main.tex
+\section{Effect Recognition and Parameter Estimation}
+\label{sec:recognition}
+
+\subsection{Single effects on isolated notes}
+
+Stein et al.\ detected single and cascaded effects on IDMT notes with
+hand-crafted spectral, cepstral and harmonic features and support vector
+machines, reaching 99.2\% for combinations of six effects on mono guitar
+notes~\cite{stein2010aes,stein2010dafx}. Schmitt and Schuller showed that such
+features transfer poorly across conditions: from monophonic to polyphonic
+material, recall fell to chance with functionals and to 41--62\% with a
+bag-of-audio-words model~\cite{schmitt2017recognising}. They also noted that
+delay is trivial to detect on single notes and hard on phrases, where echoes
+look like repeated notes. Jürgens et al.\ added parameter regression with
+shallow networks, with mean absolute errors of 0.05--0.16 on a unit scale for
+distortion, delay and tremolo controls~\cite{jurgens2020recognizing}.
+Comunità et al.\ trained a CNN (FxNet) to identify 13 drive pedal plugins
+(81--91\% accuracy) and a class-conditioned regressor for gain and tone (MAE
+0.02--0.07)~\cite{comunita2021guitar}. Most confusions were between nearly
+identical circuits such as the TS808 and TS9, a first sign that the inverse
+problem is ill-posed at the level of device identity.
+
+\subsection{Chains and mixes}
+
+Hinrichs et al.\ estimated effect classes and parameters with the guitar
+still inside a mix with bass, keyboards and drums: 97.4\% accuracy on isolated
+notes and 90.0\% in mixes, with parameter errors below 0.016 for distortion
+and 0.05--0.1 for chains in a fixed order~\cite{hinrichs2022convolutional}.
+Guo and McFee recognised combinations of 13 SoX effects on guitar phrases,
+with micro and macro F1 of 0.876 and 0.906 on an unseen dataset without the
+clean signal~\cite{guo2023automatic}; overdrive and distortion, slapback and
+feedback delay, and the modulation effects were the usual confusions. Order is
+harder than presence: Wada et al.\ reach a set F1 of 0.987 on three-effect
+chains but a macro F1 of 0.756 on their 16 orders~\cite{wada2025hyperbolic},
+and Rossi et al.\ an exact-chain accuracy of 0.815 when order and parameters
+vary~\cite{rossi2025automatic}. Take et al.\ estimated the chain while
+recovering the dry signal by peeling effects one at a time; re-applying the
+estimated chain to the recovered dry signal improved the wet reconstruction by
+only 0.67\,dB SI-SDR, against 2.24\,dB from the true dry signal, because
+removal and estimation errors add up~\cite{take2024audio}.
+
+Okita and Katayose combined prediction and search: a network predicts the dry
+signal and the effect types, then CMA-ES or TPE searches the order and the
+parameters of a black-box chain to maximise the SI-SDR of the re-rendered wet
+signal~\cite{okita2026audio}. With three effects (chorus, distortion,
+reverb) the search raised the wet reconstruction from 18.18 to 23.07\,dB and
+lowered MR-STFT from 0.465 to 0.340. The chorus rate had to be fixed because
+its search landscape was too rugged, a warning for every LFO-driven effect.
+Table~\ref{tab:recognition} summarises these results.
+
+\begin{table}[t]
+\centering
+\caption{Effect recognition and parameter estimation on guitar, as published.
+All training data are synthetic renders.}
+\label{tab:recognition}
+\scriptsize
+\setlength{\tabcolsep}{2.5pt}
+\begin{tabular}{@{}llll@{}}
+\toprule
+Work & Input & Task & Result \\
+\midrule
+Stein~\cite{stein2010dafx} & notes & 6 cascaded effects & 99.2\% acc. \\
+Comunità~\cite{comunita2021guitar} & notes & 13 drives, gain, tone & 81--91\%, MAE 0.04 \\
+Hinrichs~\cite{hinrichs2022convolutional} & notes in mix & class, params & 90.0\%, MAE $<$0.016 \\
+Guo~\cite{guo2023automatic} & phrases & 13 effects & F1 0.876 / 0.906 \\
+Rossi~\cite{rossi2025automatic} & DI phrases & 5-effect chain & exact 0.815 \\
+Wada~\cite{wada2025hyperbolic} & phrases & ordered chain & set 0.987, order 0.756 \\
+Okita~\cite{okita2026audio} & phrases & type, search & 23.07\,dB SI-SDR \\
+StemFX~\cite{cheng2026stemfx} & sep.\ stems & FX chain & top-1 86.8\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Blind estimation of processing graphs}
+
+Outside guitar, Lee et al.\ estimate a whole processing graph, with nodes,
+connections and parameters, from a processed reference with a CNN encoder and
+a graph transformer decoder~\cite{lee2023blind}; most errors were wrong orders
+or processors hidden by a later destructive one. Their later work fits an
+over-complete differentiable console to dry tracks and the mix and prunes
+two-thirds of the processors without losing quality~\cite{lee2024searching,lee2025reverse},
+using the GRAFX library~\cite{lee2024grafx}. Colonel and Reiss recovered gain,
+pan, equalisation, delay and reverb of a mix from its raw tracks with
+differentiable processing~\cite{colonel2021reverse}. These methods need the
+dry tracks, but the idea of fitting a fixed, over-complete chain and letting
+the fit switch parts off transfers to a fixed pedal chain. StemFX is the first
+system trained to predict effect chains directly on separated stems without a
+dry reference: a band-split encoder and a transformer decoder predict
+tokenised chains drawn from 85 effects, trained on pseudo-stems of about 105k
+songs~\cite{cheng2026stemfx}. It predicts mixing effects relative to an
+original stem, not guitar rigs, and guitar sits in its ``other'' stem.
+LLM2Fx-Tools predicts executable effect chains with tool calls from dry and
+processed pairs~\cite{doh2026llm2fxtools}.
+
+\subsection{Sub-problems of a guitar chain}
+
+\emph{Modulation.} Mitcheltree et al.\ extract the LFO of phasers, flangers
+and choruses from processed audio with 1.8--4.9\% error on guitar and 3.1\% on
+unseen real guitar, then use it to model unknown effects~\cite{mitcheltree2023modulation}.
+Carson et al.\ fit differentiable flangers, choruses and phasers, and need a
+low-frequency weighting of the loss to avoid local minima in delay
+time~\cite{carson2026gradient}.
+
+\emph{Delay and reverberation.} Delay time and mix were estimated only on
+synthetic notes~\cite{jurgens2020recognizing,hinrichs2022convolutional}.
+Blind estimation of artificial reverberation parameters exists for speech with
+differentiable reverberators~\cite{lee2022differentiable}, and blind RT60
+estimation is a speech and room-acoustics topic~\cite{gamper2018blind}; we
+found nothing on the plate, spring or hall reverb of a guitar track inside a
+mix.
+
+\emph{Dynamics.} Compressor parameters can be estimated by hybrid neural
+regression with model-based inversion~\cite{sun2024neural} or gradient-free
+search in a perceptual feature space~\cite{sun2026blackbox}.
+
+\emph{The instrument.} Pickup position and plucking point can be estimated from
+the spectrum, also through amplifier chains (median errors of 2--7\,mm for the
+pickup)~\cite{mohamad2017pickup,mohamad2017estimating}. The guitar and its
+pickups are part of the tone that an effects application cannot change, only
+compensate with equalisation.

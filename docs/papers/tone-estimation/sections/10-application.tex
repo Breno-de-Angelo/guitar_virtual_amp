@@ -1,0 +1,247 @@
+% !TeX root = ../main.tex
+\section{An Approach for Guitar Virtual Amp}
+\label{sec:application}
+
+This section derives a design from the review for the application described
+in Section~\ref{sec:intro}. It is a proposal: none of it has been measured
+yet, and Section~\ref{sec:protocol} gives the protocol to measure it.
+
+\subsection{What the application already has}
+
+\begin{itemize}
+\item \emph{A guitar stem per part.} Separation with a BS-RoFormer six-stem
+model~\cite{lu2023bsroformer} (Demucs as fallback~\cite{rouard2023htdemucs}),
+and a split of the stereo guitar stem by pan position into parts that play
+different things~\cite{deangelo2026tabreview}.
+\item \emph{The notes and the grid.} Onsets, offsets, pitches and techniques
+of every guitar part, beats, bars and tempo from Beat This!~\cite{foscarin2024beatthis};
+for songs whose Guitar Pro tab the user owns, a tab aligned to the recording.
+\item \emph{An offline renderer of the real chain.} The same pedal code as the
+live path, at 48\,kHz in 256-sample blocks, already used to render training
+data through presets. The full chain of 17 pedals costs about 430\,ns per
+sample on one core, and a NAM WaveNet about 1.9\,\textmu s.
+\item \emph{Presets with song metadata.} 20 factory presets, user presets with
+\texttt{song} and \texttt{artist} fields, and a tone suggestion on the Tabs
+page that prefers a user preset tagged with the song; the current fallback
+guesses a factory preset from the track's instrument and name.
+\item \emph{Capture and cabinet players.} A NAM pedal and an impulse-response
+convolver, with TONE3000 browsing under its API terms.
+\item \emph{Data and compute.} EGDB, Guitar-TECHS, GuitarSet, GOAT, IDMT,
+EGSet12, MUSDB18 and MoisesDB on disk, a mixing script that places labelled
+guitar over backing, and DGX Spark nodes for training.
+\end{itemize}
+
+\subsection{Constraints}
+
+The chain is mono, works on 16-bit samples, and is written in Rust without
+gradients, so the estimator must treat it as a black box. Stereo effects
+cannot be reproduced. The estimate may run offline on a desktop (Python
+sidecars are acceptable, as for separation), and its output, a preset, also
+works on Android. The analysed audio must be the user's own: Spotify's
+developer policy forbids analysing its content, so the feature applies to the
+same local files and downloads as transcription. Models that ship must be
+trained on data that allow it (Section~\ref{sec:datasets}), and capture
+libraries can be searched by metadata but not bulk downloaded. Patent
+CN118865922B claims a pipeline of the same shape~\cite{huanyin2025presetpatent};
+its claims should be reviewed before distributing such a feature where it
+applies.
+
+\subsection{Proposed pipeline}
+
+Fig.~\ref{fig:pipeline} shows the pipeline. It follows the consensus of
+Sections~\ref{sec:recognition}--\ref{sec:products}: predict, refine by
+rendering the real chain, regularise with a preset prior, and finish with a
+linear match.
+
+\begin{figure}[t]
+\centering
+\begin{tikzpicture}[
+  node distance=1.8mm,
+  box/.style={draw, rounded corners=1pt, font=\scriptsize, align=center,
+              minimum height=5mm, inner sep=2pt, fill=white, text width=36mm},
+  have/.style={box, fill=gray!15},
+  arr/.style={-{Stealth[length=1.6mm]}, semithick}]
+  \node[have] (sep) {1. Separation, pan split, notes, beats};
+  \node[box, below=of sep] (seg) {2. Excerpts per part and section};
+  \node[box, below=of seg] (di) {3. Pseudo-dry signal: resynthesis\\from notes, remover, or player DI};
+  \node[box, below=of di] (init) {4. Initial chains: classifier,\\regressor, preset retrieval (top-$k$)};
+  \node[box, below=of init] (ref) {5. CMA-ES through the offline\\renderer; spectral, embedding, prior};
+  \node[box, below=of ref] (time) {6. Delay, reverb, modulation\\from notes and tempo};
+  \node[box, below=of time] (lin) {7. Linear match: EQ pedal or IR};
+  \node[have, below=of lin] (out) {8. Preset tagged with the song};
+  \draw[arr] (sep) -- (seg);
+  \draw[arr] (seg) -- (di);
+  \draw[arr] (di) -- (init);
+  \draw[arr] (init) -- (ref);
+  \draw[arr] (ref) -- (time);
+  \draw[arr] (time) -- (lin);
+  \draw[arr] (lin) -- (out);
+\end{tikzpicture}
+\caption{Proposed tone estimation pipeline. Grey boxes exist in the
+application today.}
+\label{fig:pipeline}
+\end{figure}
+
+\paragraph{Excerpts} For each guitar part, pick excerpts of 5--20\,s where the
+part is loud relative to the residual of the mix, other guitars are quiet, and
+the notes cover several registers, using the transcription to measure all
+three. Cluster excerpts by an effect embedding to find tone changes between
+sections, and estimate one preset per cluster.
+
+\paragraph{Pseudo-dry signals} Three sources, used together when available.
+(a) \emph{Resynthesis from the notes}: render the transcribed (or aligned tab)
+notes as a clean electric guitar. The result is aligned with the stem by
+construction, but its timbre is not the original guitar's; the first version
+can use the existing SoundFont synthesizer, and a learned DI renderer in the
+manner of GuitarFlow~\cite{loth2025guitarflow}, trained on DI corpora that
+allow it, would narrow the gap. This route is new as far as we found. (b)
+\emph{Removal}: a model trained to map renders through the application's own
+chains, and through EGDB-PG presets, back to their DI~\cite{lee2024distortion,yeh2026egvae}.
+(c) \emph{The player's DI}: the user plays along in practice mode, which
+requires tapping the signal before the chain. (c) has the right guitar and
+wrong timing; (a) the right timing and wrong guitar; (b) both, with removal
+errors.
+
+\paragraph{Template chain} Search over one fixed chain: noise gate,
+compressor, drive, amplifier or NAM capture, cabinet, equaliser, one
+modulation effect, delay, reverb, each with an on/off switch, about 35
+continuous parameters plus the amplifier voicing, the impulse response and the
+capture. A fixed order follows the finding that order is the hardest part to
+estimate~\cite{wada2025hyperbolic} and the over-complete-then-prune approach
+of~\cite{lee2025reverse}. Input gain is a search parameter, because drive
+depends on level~\cite{sd4562026nameqmatch}.
+
+\paragraph{Initial estimate} Train an encoder on renders of the template chain
+with random settings drawn around the factory presets, on DI that may be
+shipped (GuitarSet, Guitar-TECHS, Rossi et al.'s improvisations), with the
+renders mixed over backing tracks and then separated by the same BS-RoFormer,
+so that the encoder sees separation artefacts (the StemFX recipe~\cite{cheng2026stemfx}).
+Heads predict the gain class, the effects present and the continuous
+parameters, pre-trained on parameter loss~\cite{masuda2021ddsp}, and return
+the top $k$ candidates. AFx-Rep (Apache-2.0) is a starting point for the
+encoder~\cite{steinmetz2024stito}. Share each dry clip across many chains in
+training, or the encoder learns the riff instead of the
+tone~\cite{nathanben2026tonerunner}. Before this model exists, the nearest
+factory preset by the objective below is the initial estimate.
+
+\paragraph{Refinement} Run CMA-ES from each candidate (population 32--64,
+25--50 generations as in ST-ITO) by rendering the pseudo-dry signal through
+the offline renderer. The objective has four terms, all after loudness
+normalisation:
+\begin{itemize}
+\item an \emph{aligned spectral} term, MR-STFT and mel distance, for pseudo-dry
+signals aligned with the stem (resynthesis, removal), the metric that agrees
+best with listeners (Table~\ref{tab:metrics});
+\item an \emph{alignment-free} term: long-term spectra per pitch register,
+crest factor, compression and high-band flatness statistics, which also work
+with the player's DI~\cite{sd4562026nameqmatch};
+\item an \emph{effect-embedding} term (AFx-Rep, or a relative encoder such as
+RelFx~\cite{liu2026beyond}), with a small weight, because an embedding alone
+is an unreliable objective~\cite{long2026tape};
+\item a \emph{prior}: a Gaussian mixture over normalised settings of factory
+and user presets~\cite{yu2025improving}.
+\end{itemize}
+From the measured per-sample costs, a 20-second excerpt renders in about
+0.4\,s without a capture and 2.3\,s with one on one core, so the ST-ITO budget
+of 1,600 renders takes roughly 1.5 to 8 minutes on eight cores (an estimate,
+not a measurement). Shorter excerpts in early generations reduce it.
+
+\paragraph{Time-based effects from the notes} The transcription tells where
+notes end and where the part rests, which the literature does not exploit. Delay
+time: score candidate values tied to the tempo (quarter, dotted eighth,
+eighth) and free values by the energy that repeats at that lag after note
+offsets. Reverberation: fit the decay of the stem in rests after the last
+note and map it to the reverb pedal's settings through a table measured on the
+pedal. Modulation: the rate from the modulation spectrum of sustained notes,
+or from an LFO extractor~\cite{mitcheltree2023modulation} (MPL-2.0). These
+values initialise or fix the corresponding parameters of the search, which
+avoids the rugged landscapes of Section~\ref{sec:comparison}.
+
+\paragraph{Linear match} After the search, compute the smoothed difference
+between the long-term spectra of the stem and of the rendered chain, and
+either fit the equaliser pedal to it or write a minimum-phase impulse response
+for the cabinet slot, with a gain limit, as Tone Match
+does~\cite{fractalndtonematch}. This absorbs pickup, microphone and mix
+equalisation, and it is the step products show to be reliable once gain is
+right.
+
+\paragraph{Output} Save each estimate as a user preset with the song and artist
+set, so the existing tone suggestion offers it on the Tabs page, keep the
+other top candidates, and let the user compare the preset with the stem played
+in sync by the tab player. Record the estimate's settings and objective values
+in the tab's metadata sidecar for later evaluation.
+
+\paragraph{Captures} When the user has NAM captures on disk, add them as
+candidates for the amplifier slot, ranked by rendering the pseudo-dry signal
+through each at several input gains~\cite{sd4562026nameqmatch}. TONE3000 can be
+queried by metadata (gear type, tone type) for candidates the user then
+chooses to download; the catalogue cannot be pre-indexed. Learning a capture
+from the stem alone, by unpaired or diffusion-based
+fitting~\cite{wright2023adversarial,moliner2025unsupervised}, is a research
+direction for tones the chain cannot express, at hours of GPU time per tone.
+A neural tone model of any kind could then be converted into a \texttt{.nam}
+file by rendering NAM's standard input through it and training a capture on the
+pair, so the result plays in the existing NAM pedal (untested).
+
+\subsection{Why this design}
+
+\begin{itemize}
+\item \emph{Against direct regression only:} synthetic-to-real gaps and
+ambiguous settings; refinement by rendering gained 4.9\,dB in Okita and
+Katayose~\cite{okita2026audio}.
+\item \emph{Against embedding-only search:} ST-ITO's authors report failure on
+guitar tone, and TAPE shows the objective drifting~\cite{steinmetz2024stito,long2026tape};
+the aligned pseudo-dry signal gives a spectral term instead.
+\item \emph{Against neural tone transfer:} EG-VAE gives the best guitar tone
+similarity, but returns audio, has no released code, and cannot run in the
+real-time chain~\cite{yeh2026egvae}; it remains useful as a remover or an
+encoder if released.
+\item \emph{Against linear matching only:} spectral matching cannot set gain or
+dynamics, and its own manual requires the gain to be right
+first~\cite{fractalndtonematch}.
+\item \emph{For the application's own chain:} its parameters are what the
+player edits, its renderer is the exact forward model, and training on its
+renders gives labels in its own parameter space with licences under our
+control.
+\end{itemize}
+
+\subsection{Evaluation protocol}
+\label{sec:protocol}
+
+\begin{enumerate}
+\item \emph{In-chain synthetic.} Held-out DI (Guitar-TECHS P3, GuitarSet
+players 03--05) through random template chains, isolated and over backing
+tracks after separation. Report parameter error, MR-STFT and MFCC distances
+between the true DI rendered through the estimate and the target, and the
+embedding distance. The difference between isolated and separated inputs
+measures the cost of separation.
+\item \emph{Equipment outside the chain.} EGDB-PG renders (CC BY), Guitar-TECHS
+real amplifiers, and for research only GOAT and ToneTwist devices: render the
+true DI through the estimate and compare with the real output (audio metrics
+only).
+\item \emph{Real productions.} MoisesDB songs with isolated guitar tracks:
+compare estimates from the separated stem with estimates from the isolated
+track, and score each against the isolated track with the audio metrics.
+\item \emph{Listening.} MUSHRA with webMUSHRA on sets 1 and 2, where the same
+performance exists on both sides; tone-similarity opinion scores on set 3.
+Report how the objective metrics correlate with the ratings.
+\end{enumerate}
+Baselines: the current metadata-based suggestion; the nearest factory preset
+by the objective; that preset plus the linear match; the full pipeline; and,
+as an upper bound, the search with the true DI.
+
+\subsection{Order of work}
+
+\begin{enumerate}
+\item The benchmark (sets 1--3) and the baselines, then the template chain with
+CMA-ES on resynthesised pseudo-dry signals and the linear match. This needs
+no training and measures how far analysis by synthesis goes alone.
+\item The excerpt selection and the note-based estimates of delay, reverb and
+modulation.
+\item The learned initial estimate on separated renders, trained on the DGX
+Sparks.
+\item Pseudo-dry signals from a removal model trained on the application's
+renders, and the player's DI through a pre-chain tap.
+\item Capture candidates from the user's library; unpaired capture fitting as
+research.
+\end{enumerate}

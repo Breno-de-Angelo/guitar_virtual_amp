@@ -1,0 +1,84 @@
+% !TeX root = ../main.tex
+\section{Introduction}
+\label{sec:intro}
+
+A guitar part on a record is the product of the notes and of the equipment
+that shaped them: the guitar and its pickups, often a compressor or a drive
+pedal, an amplifier whose preamplifier, tone stack and power stage distort and
+filter the signal, a speaker cabinet recorded by a microphone, modulation,
+delay and reverberation, and the mixing and mastering applied afterwards.
+Guitarists call the combined result the \emph{tone}. A player learning a song
+wants the notes, which tablature transcription addresses~\cite{deangelo2026tabreview},
+and also the tone, which today is found by ear, by reading interviews about
+the artist's equipment, or by buying a product preset made for that song.
+
+Estimating the tone automatically is an inverse problem with several layers
+of difficulty. The processing is nonlinear (distortion), time-varying
+(modulation, compression) and long-memory (delay, reverberation). The
+mapping from settings to sound is not one-to-one: amplifier gain, a drive
+pedal and a compressor can produce similar sounds, and so can different
+orders of the same effects. In a commercial song the guitar is mixed with
+other instruments, so it must first be separated, and separation leaves
+artefacts that look like effects. The dry signal that entered the chain is
+never available, which rules out the standard way of modelling an amplifier
+from paired input and output. And the target is not to identify the original
+equipment but to approximate its sound with the equipment the player has,
+here the effects chain of a real-time application.
+
+This review is written for a concrete system. Guitar Virtual Amp is an
+open-source, real-time effects processor with a mono chain of 18 effects
+(amplifier with three voicings and a tone stack, distortion, compressor,
+noise gate, equaliser, chorus, flanger, phaser, tremolo, wah, octaver, pitch
+shifter, delay, reverb, low-pass filter, looper, an impulse-response cabinet
+and a Neural Amp Modeler capture player). It already separates the guitar from
+a song with a band-split transformer, splits it by stereo position, and
+transcribes the notes and the beats~\cite{deangelo2026tabreview}. The question
+is what to add so that it can propose a preset that sounds like the guitar in
+a recording the user owns.
+
+Fig.~\ref{fig:families} groups the relevant work into five families. Each
+family solves part of the problem under assumptions that the commercial case
+breaks, usually the availability of a dry signal, synthetic training data, or
+an isolated guitar.
+
+\begin{figure}[t]
+\centering
+\begin{tikzpicture}[
+  node distance=1.6mm and 2mm,
+  box/.style={draw, rounded corners=1pt, font=\scriptsize, align=center,
+              minimum height=5mm, inner sep=2pt, fill=white, text width=17mm},
+  wide/.style={box, text width=27mm},
+  arr/.style={-{Stealth[length=1.6mm]}, semithick}]
+  \node[box] (stem) {Guitar stem\\(no DI)};
+  \node[wide, right=6mm of stem, yshift=15mm] (rec) {(a) Recognition and\\parameter regression};
+  \node[wide, below=of rec] (abs) {(b) Analysis by synthesis\\(search over a chain)};
+  \node[wide, below=of abs] (unp) {(c) Unpaired / blind\\neural modelling};
+  \node[wide, below=of unp] (rem) {(d) Effect removal,\\then modelling};
+  \node[wide, below=of rem] (ret) {(e) Retrieval of a\\preset or capture};
+  \node[box, right=6mm of abs, yshift=-7mm] (out) {Preset, parameters\\or neural model};
+  \foreach \n in {rec,abs,unp,rem,ret} {
+    \draw[arr] (stem.east) -- (\n.west);
+    \draw[arr] (\n.east) -- (out.west);
+  }
+\end{tikzpicture}
+\caption{Families of methods that estimate a tone from processed audio. (a)
+predicts effect types and settings with a network; (b) renders candidate
+settings and compares them with the target; (c) learns a neural model of the
+device from processed audio alone; (d) recovers a dry signal and then fits a
+model on the recovered pair; (e) returns the closest item of a library.}
+\label{fig:families}
+\end{figure}
+
+We cover the task and its metrics (Section~\ref{sec:task}), datasets and
+licences (Section~\ref{sec:datasets}), effect recognition and parameter
+estimation (Section~\ref{sec:recognition}), amplifier and effect modelling
+(Section~\ref{sec:modelling}), methods that work without the dry signal
+(Section~\ref{sec:nodi}), style transfer, effect representations and the
+lessons of synthesizer sound matching (Section~\ref{sec:matching}), products
+and open-source tools (Section~\ref{sec:products}), a comparison with failure
+modes and gaps (Section~\ref{sec:comparison}), and an approach for the
+application with an evaluation protocol (Section~\ref{sec:application}).
+Numbers are quoted as published; results on different data are not directly
+comparable, and we say so where it matters. Statements about products come
+from their manuals and pages; vendors publish no accuracy figures for
+recording-based tone features.
