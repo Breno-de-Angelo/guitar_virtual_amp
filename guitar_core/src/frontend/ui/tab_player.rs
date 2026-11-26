@@ -754,6 +754,11 @@ impl TabPlayerPanel {
     /// Hands the guitar samples that arrived this frame to practice mode.
     /// Call every frame, also while another page is shown.
     pub fn feed_input(&mut self, samples: &[f32], audio_latency_secs: f32) {
+        let rate = match self.player.status().output_rate() {
+            0 => GLOBAL_CONFIG.sample_rate as u32,
+            rate => rate,
+        };
+        self.transcriber.feed_input(samples, rate);
         // Loop passes count on every page, not just while Tabs is shown.
         self.on_loop_passes();
         if !self.practice_on {

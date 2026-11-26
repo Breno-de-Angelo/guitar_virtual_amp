@@ -1,4 +1,5 @@
 pub mod analyzer;
+pub mod guitar_calibration;
 pub mod metronome;
 pub mod pedalboard;
 pub mod pedals;

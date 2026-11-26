@@ -1062,6 +1062,11 @@ impl eframe::App for AudioApp {
         self.latency_probe.feed(&fresh, &self.controls);
         self.devices.poll();
 
+        // Pages may turn the dry tap on through the settings (the guitar
+        // calibration records the guitar before the pedals).
+        if self.settings.ui.analysis_dry != self.controls.analysis_dry() {
+            self.controls.set_analysis_dry(self.settings.ui.analysis_dry);
+        }
         if self.settings.ui.language != self.applied_language {
             self.applied_language = self.settings.ui.language;
             i18n::set_language(self.applied_language.resolve());

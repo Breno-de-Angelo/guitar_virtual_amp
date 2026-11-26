@@ -65,6 +65,9 @@ pub struct Request {
     /// Estimate each guitar track's tone and save it as a user preset
     /// tagged with the song (`crate::tone`; needs separation).
     pub tone: bool,
+    /// The player's guitar ([`crate::tone::calibrate`]): tone estimates are
+    /// fitted for it when set.
+    pub guitar_colour: Option<crate::tone::GuitarColour>,
     pub guitar: bool,
     pub bass: bool,
     /// Tab repository folder.
@@ -415,6 +418,40 @@ fn transcribe_stem_uncached(
             Ok((guitar_crnn::extract_notes(&post, params), None))
         }
     }
+}
+
+/// Notes of a mono guitar recording (`samples` at `rate`), such as the
+/// player's DI for [`crate::tone::calibrate`], with the guitar model
+/// `choice` (Basic Pitch when it isn't installed). `progress` gets 0..1.
+pub fn guitar_notes(
+    samples: &[f32],
+    rate: u32,
+    choice: guitar_crnn::GuitarModel,
+    progress: &mut dyn FnMut(f32),
+    cancel: &AtomicBool,
+) -> Result<Vec<NoteEstimate>, String> {
+    let audio = Mono {
+        samples: samples.to_vec(),
+        rate,
+    };
+    let (base, share) = Stage::Guitar.span(false);
+    let mut report = |p: Progress| progress(((p.overall - base) / share).clamp(0.0, 1.0));
+    let (notes, _) = transcribe_stem(&audio, &guitar_engine(choice), Stage::Guitar, false, &mut report, cancel)?;
+    Ok(notes)
+}
+
+/// Measures the player's guitar from a DI recording of it: its notes
+/// ([`guitar_notes`]), then [`crate::tone::calibrate`]. Blocking: worker
+/// threads only.
+pub fn calibrate_guitar(
+    samples: &[f32],
+    rate: u32,
+    choice: guitar_crnn::GuitarModel,
+    progress: &mut dyn FnMut(f32),
+    cancel: &AtomicBool,
+) -> Result<crate::tone::GuitarCalibration, String> {
+    let notes = guitar_notes(samples, rate, choice, progress, cancel)?;
+    crate::tone::calibrate(samples, rate, &notes)
 }
 
 /// A pan part needs this share of the guitar stem's energy to be
@@ -1013,6 +1050,7 @@ pub fn run(
             let estimate = crate::tone::estimate_from_transcription(
                 &audio,
                 &part.notes,
+                request.guitar_colour.as_ref(),
                 &crate::tone::Options::default(),
             );
             match crate::tone::save_presets(&estimate, &request.title, &request.artist, track) {
@@ -1192,6 +1230,7 @@ mod tests {
             guitar_model: Default::default(),
             fingering: Default::default(),
             tone: false,
+            guitar_colour: None,
             guitar: true,
             bass: false,
             output_dir: dir.join("repo"),

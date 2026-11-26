@@ -429,6 +429,65 @@ fn colour_spread() {
     eprintln!("mean |colour| {flat:.1} dB, mean |difference| between two items {:.1} dB", pair / pairs as f32);
 }
 
+/// The app's calibration path (`transcribe::calibrate_guitar`: notes from
+/// the guitar model, not labels) against the colour from the labelled
+/// notes, on EGDB DI recordings. Same `GVA_TONE_MANIFEST`; `GVA_TONE_LIMIT`
+/// items (default 8).
+#[test]
+#[ignore]
+fn calibration_from_transcription() {
+    let Ok(manifest) = std::env::var("GVA_TONE_MANIFEST") else {
+        eprintln!("set GVA_TONE_MANIFEST");
+        return;
+    };
+    let limit = std::env::var("GVA_TONE_LIMIT").ok().and_then(|v| v.parse().ok()).unwrap_or(8);
+    let mut items: BTreeMap<String, PathBuf> = BTreeMap::new();
+    for line in std::fs::read_to_string(&manifest).unwrap().lines() {
+        let f: Vec<&str> = line.split('\t').collect();
+        if f.len() >= 3 && f[2].ends_with("/DI") {
+            items.insert(f[1].to_string(), PathBuf::from(f[0]));
+        }
+    }
+    let step = (items.len() / limit).max(1);
+    let model = crate::transcribe::guitar_crnn::GuitarModel::Gaps;
+    let cancel = std::sync::atomic::AtomicBool::new(false);
+    let mean_abs = |a: &super::GuitarColour, b: &super::GuitarColour| {
+        a.db.iter().zip(&b.db).map(|(x, y)| (x - y).abs()).sum::<f32>() / a.db.len() as f32
+    };
+    let (mut diffs, mut labelled) = (Vec::new(), Vec::new());
+    for (notes, wav) in items.iter().step_by(step).take(limit) {
+        let di = load_48k(wav);
+        let dry = pluck::render(&load_notes(Path::new(notes)), di.len(), RENDER_RATE);
+        let from_labels = super::colour_from_di(&di, &dry);
+        match crate::transcribe::calibrate_guitar(&di, RENDER_RATE, model, &mut |_| {}, &cancel) {
+            Ok(c) => {
+                let d = mean_abs(&c.colour, &from_labels);
+                eprintln!(
+                    "{}: {} notes found ({} labelled), |transcribed - labelled| {d:.2} dB",
+                    Path::new(notes).file_stem().unwrap().to_string_lossy(),
+                    c.notes,
+                    load_notes(Path::new(notes)).len()
+                );
+                diffs.push(d);
+            }
+            Err(e) => eprintln!("{wav:?}: {e}"),
+        }
+        labelled.push(from_labels);
+    }
+    let mut between = (0.0, 0);
+    for i in 0..labelled.len() {
+        for j in 0..i {
+            between.0 += mean_abs(&labelled[i], &labelled[j]);
+            between.1 += 1;
+        }
+    }
+    eprintln!(
+        "mean |transcribed - labelled| {:.2} dB; between two recordings (labelled) {:.2} dB",
+        diffs.iter().sum::<f32>() / diffs.len().max(1) as f32,
+        between.0 / between.1.max(1) as f32
+    );
+}
+
 /// `GVA_TONE_SAMPLES=<di.wav>:<notes.txt>,...`: single-note DI recordings
 /// for the sampler dry signal (Guitar-TECHS `allsinglenotes`).
 fn sampler_from_env() -> Option<Sampler> {

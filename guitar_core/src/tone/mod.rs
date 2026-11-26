@@ -351,15 +351,10 @@ pub fn estimate(target: &[f32], dry: &[f32], opts: &Options) -> Estimate {
     }
 }
 
-/// [`estimate`] for a transcribed guitar part: `audio` at [`RENDER_RATE`],
-/// `notes` in seconds of that audio. The note model's mean posterior stands
-/// in for the velocity.
-pub fn estimate_from_transcription(
-    audio: &[f32],
-    notes: &[crate::transcribe::basic_pitch::NoteEstimate],
-    opts: &Options,
-) -> Estimate {
-    let notes: Vec<pluck::Note> = notes
+/// Transcribed notes as the stand-in plays them: the note model's mean
+/// posterior stands in for the velocity.
+fn stand_in_notes(notes: &[NoteEstimate]) -> Vec<pluck::Note> {
+    notes
         .iter()
         .map(|n| pluck::Note {
             start: n.start,
@@ -367,8 +362,24 @@ pub fn estimate_from_transcription(
             pitch: n.pitch,
             velocity: (0.4 + 0.6 * n.amplitude).clamp(0.05, 1.0),
         })
-        .collect();
-    estimate_from_notes(audio, &notes, opts)
+        .collect()
+}
+
+/// [`estimate`] for a transcribed guitar part: `audio` at [`RENDER_RATE`],
+/// `notes` in seconds of that audio. With the player's `guitar` colour
+/// ([`calibrate`]) the stand-in sounds like their guitar, so both the
+/// search and the nearest preset are fitted for it.
+pub fn estimate_from_transcription(
+    audio: &[f32],
+    notes: &[NoteEstimate],
+    guitar: Option<&GuitarColour>,
+    opts: &Options,
+) -> Estimate {
+    let mut dry = pluck::render(&stand_in_notes(notes), audio.len(), RENDER_RATE);
+    if let Some(colour) = guitar {
+        dry = apply_colour(&dry, colour);
+    }
+    estimate(audio, &dry, opts)
 }
 
 /// Saves an estimate as two user presets for this song and track, since
@@ -410,14 +421,68 @@ pub fn save_presets(est: &Estimate, title: &str, artist: &str, track: &str) -> R
 }
 
 use crate::shared::tab::tone::{ESTIMATED_TAG, TRACK_TAG_PREFIX};
+use crate::transcribe::basic_pitch::NoteEstimate;
 
 /// The colour of a guitar relative to the stand-in dry signal: dB per band
 /// centre (Hz), the smoothed long-term spectrum of a DI recording of that
 /// guitar minus the stand-in's for the same notes.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct GuitarColour {
     pub db: Vec<f32>,
     pub hz: Vec<f32>,
+}
+
+/// The player's guitar, measured once by [`calibrate`] and kept in the
+/// settings, so tone estimates are fitted for it.
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct GuitarCalibration {
+    pub colour: GuitarColour,
+    /// Length of the recording it was measured on, in seconds.
+    pub seconds: f32,
+    /// Notes transcribed in it.
+    pub notes: usize,
+}
+
+/// Shortest recording [`calibrate`] accepts. The benchmark calibrated on
+/// three recordings of 10-60 s (median 26 s); a minute is recommended.
+pub const MIN_CALIBRATION_SECS: f64 = 15.0;
+/// Fewest notes [`calibrate`] accepts: the colour is a mean over notes.
+pub const MIN_CALIBRATION_NOTES: usize = 20;
+
+/// Measures the player's guitar from a DI recording of it (mono, at
+/// `rate`; the signal before any pedal) and its transcribed `notes`.
+pub fn calibrate(di: &[f32], rate: u32, notes: &[NoteEstimate]) -> Result<GuitarCalibration, String> {
+    use crate::shared::i18n::tr;
+    let di = crate::transcribe::resample::resample(di, rate, RENDER_RATE);
+    let seconds = di.len() as f64 / RENDER_RATE as f64;
+    if seconds < MIN_CALIBRATION_SECS {
+        return Err(crate::trf!(
+            "The recording is too short ({seconds:.0} s): play for at least {MIN_CALIBRATION_SECS:.0} s.",
+            "A gravação é curta demais ({seconds:.0} s): toque pelo menos {MIN_CALIBRATION_SECS:.0} s."
+        ));
+    }
+    if rms(&di) < 1e-4 {
+        return Err(tr("The recording is silent: is the guitar plugged in?", "A gravação está em silêncio: a guitarra está ligada?").into());
+    }
+    if notes.len() < MIN_CALIBRATION_NOTES {
+        return Err(crate::trf!(
+            "Only {} notes found: play more notes (at least {MIN_CALIBRATION_NOTES}), single notes and chords.",
+            "Só {} notas encontradas: toque mais notas (pelo menos {MIN_CALIBRATION_NOTES}), notas soltas e acordes.",
+            notes.len()
+        ));
+    }
+    let stand_in = pluck::render(&stand_in_notes(notes), di.len(), RENDER_RATE);
+    Ok(GuitarCalibration {
+        colour: colour_from_di(&di, &stand_in),
+        seconds: seconds as f32,
+        notes: notes.len(),
+    })
+}
+
+fn rms(x: &[f32]) -> f32 {
+    (x.iter().map(|v| v * v).sum::<f32>() / x.len().max(1) as f32).sqrt()
 }
 
 /// Bands a measured [`GuitarColour`] keeps (Hz): below, the difference

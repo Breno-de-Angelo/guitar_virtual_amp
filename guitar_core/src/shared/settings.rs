@@ -177,9 +177,12 @@ pub struct AppSettings {
     /// Learned fingering when its model is installed, or the Viterbi
     /// (see `transcribe::fingering_net::Fingering`).
     pub transcription_fingering: Fingering,
-    /// Also estimate each guitar track's tone and save it as a preset
-    /// (`tone::save_preset`). Off by default: experimental.
+    /// Also estimate each guitar track's tone and save it as presets
+    /// (`tone::save_presets`).
     pub transcription_tone: bool,
+    /// The player's guitar, measured from a DI recording of it
+    /// (`tone::calibrate`): tone estimates are fitted for it.
+    pub tone_guitar: Option<crate::tone::GuitarCalibration>,
 }
 
 const SETTINGS_SUBPATH: &str = "guitar_virtual_amp/settings.json";
@@ -261,6 +264,11 @@ mod tests {
             transcription_guitar_model: GuitarModel::Electric,
             transcription_fingering: Fingering::Viterbi,
             transcription_tone: true,
+            tone_guitar: Some(crate::tone::GuitarCalibration {
+                colour: crate::tone::GuitarColour { db: vec![1.5, -2.0], hz: vec![500.0, 2000.0] },
+                seconds: 62.0,
+                notes: 140,
+            }),
         };
         let json = serde_json::to_string(&settings).expect("serialize");
         let restored: AppSettings = serde_json::from_str(&json).expect("deserialize");

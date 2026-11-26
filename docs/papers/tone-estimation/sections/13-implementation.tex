@@ -95,20 +95,33 @@ plucked string (for example 7.6 against 6.3\dB{} on Marshall targets, 6 items
 \measured), so the app does not use it.
 \end{inapp}
 
-\begin{inapp}[: colour calibration, \file{tone/mod.rs} \wip{} (benchmark only)]
+\begin{inapp}[: colour calibration, \file{tone/mod.rs} \done]
 \label{sec:impl-colour}
 \code{colour_from_di(di, stand_in)} measures a guitar's colour against the
 stand-in: the centred long-term EQ of Section~\ref{sec:app-distance} between a DI
 recording and the stand-in playing its notes, kept only between 250\Hz{} and
-8\kHz{} (\code{CALIBRATION_HZ}; flat outside) and within $\pm9\dB$
+8\kHz{} (\code{CALIBRATION_HZ}; flat outside) and within $\pm$9\dB{}
 (\code{CALIBRATION_DB}). \code{mean_colour} averages several recordings;
 \code{apply_colour} filters a stand-in with the result (minimum-phase IR). Why the
 limits: across 16 EGDB recordings the measured colour varies by a standard
 deviation of 6--9\dB{} per band below 300\Hz{} (it depends on which notes were
 played) and above 9\kHz{} (pick noise and hiss the stand-in lacks), and by only
 2--4\dB{} in between \measured{} (\code{eval::colour_spread}). The benchmark uses
-it (\code{GVA_TONE_CALIBRATE}, Section~\ref{sec:results-colour}); the app does
-not yet.
+it with labelled notes (\code{GVA_TONE_CALIBRATE}, Section~\ref{sec:results-colour}).
+
+In the app, ``My guitar'' in the Transcribe form (\file{frontend/ui/guitar_calibration.rs})
+records about a minute of the player's guitar from the analysis stream, switched
+to the signal before the pedals, or takes a DI file.
+\code{transcribe::calibrate_guitar} transcribes it with the guitar model and
+calls \code{tone::calibrate}, which needs at least 15\,s and 20 notes and returns a
+\code{GuitarCalibration} kept in \code{AppSettings::tone_guitar}. The tone stage
+then filters the stand-in with it (\code{estimate_from_transcription}), so the
+search result and the nearest preset are both fitted for that guitar. The batch
+command takes \cmd{--guitar-di <wav>}. On 10 EGDB DI recordings, the colour from
+transcribed notes is 0.85\dB{} (mean absolute, per band) from the colour from
+labelled notes, against 2.48\dB{} between two recordings \measured{}
+(\code{eval::calibration_from_transcription}): transcription errors are a small
+part of the measurement's noise.
 \end{inapp}
 
 \subsection{The distance}
@@ -153,7 +166,7 @@ $o_r = \overline{\Delta_r}$ (a level offset) and a centred, capped EQ
 \]
 In words: the average number of decibels by which the render misses the target
 in each band of each active frame, \emph{after} the render has been given the
-best smooth EQ (within $\pm18\dB$) that matches the long-term spectra.
+best smooth EQ (within $\pm$18\dB) that matches the long-term spectra.
 
 \paragraph{Benchmark score} (\code{plain_distance}): the same formula without
 $e_r$ and $o_r$, and always with the 80\dB{} floor. It measures how far apart
@@ -300,6 +313,7 @@ IR wins reliably on separated stems (Section~\ref{sec:results}), so
 Each IR goes to \file{<data dir>/guitar_virtual_amp/tone_match/}; each preset has
 \code{song} and \code{artist} set and the tags \code{timbre-estimado} and
 \code{faixa:<track>}; estimating again overwrites them.
+When the player's guitar is calibrated, both are fitted for it.
 \code{Candidate::chain_with_ir} builds the saved chain:
 \begin{enumerate}
 \item a clean gain stage (a Compressor at ratio 1 whose make-up gain is the

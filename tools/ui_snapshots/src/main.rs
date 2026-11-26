@@ -132,6 +132,27 @@ fn tab_shot(dir: &Path, tab: PathBuf, name: &str, size: egui::Vec2) {
     save(&mut harness, dir, name);
 }
 
+/// The Transcribe form's "My guitar" row: closed, opened, then recording
+/// (no audio here, so it warns that there is no signal).
+fn calibration_shots(dir: &Path) {
+    let mut settings = AppSettings::default();
+    settings.transcription_tone = true;
+    let (mut harness, _tx) = harness(settings, WIDE, Some(Page::Tabs));
+    harness.run_steps(3);
+    harness.get_by_label(tr("⚡ Transcribe audio...", "⚡ Transcrever áudio...")).click();
+    harness.run_steps(3);
+    save(&mut harness, dir, "transcribe_calibration");
+    harness.get_by_label(tr("Calibrate...", "Calibrar...")).click();
+    harness.run_steps(3);
+    save(&mut harness, dir, "transcribe_calibration_open");
+    harness.get_by_label(tr("⏺ Record", "⏺ Gravar")).click();
+    for _ in 0..50 {
+        harness.step();
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    save(&mut harness, dir, "transcribe_calibration_recording");
+}
+
 /// Opens the Transcribe form, searches YouTube for `query` (needs the
 /// network and `GVA_YTDLP` or yt-dlp on PATH), then plays the first result's
 /// preview.
@@ -205,6 +226,9 @@ fn main() {
     }
     if "add_menu knob_drag shortcuts".contains(&filter) || filter.is_empty() {
         interaction_shots(&dir);
+    }
+    if "transcribe_calibration_open_recording".contains(&filter) || filter.is_empty() {
+        calibration_shots(&dir);
     }
     if let Ok(tab) = std::env::var("GVA_SNAPSHOT_TAB") {
         for (name, size) in [("tabs_loaded", WIDE), ("tabs_loaded_phone", PHONE)] {

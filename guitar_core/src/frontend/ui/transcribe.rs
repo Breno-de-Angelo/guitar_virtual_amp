@@ -19,6 +19,7 @@ use eframe::egui::{self, Color32, Key, RichText, Ui, Vec2};
 
 use crate::backend::audio_file::{AUDIO_EXTENSIONS, DecodedAudio, decode_file};
 use crate::backend::song_player::SongPlayer;
+use crate::frontend::ui::guitar_calibration::GuitarCalibrationPanel;
 use crate::frontend::ui::tone3000::remote_image;
 use crate::shared::i18n::{self, Language, tr};
 use crate::shared::settings::{AppSettings, save_settings};
@@ -133,6 +134,8 @@ pub struct TranscribePanel {
     open_request: Option<PathBuf>,
     job: Option<Job>,
     error: Option<String>,
+    /// "My guitar": the player's guitar for tone estimates.
+    calibration: GuitarCalibrationPanel,
     #[cfg(target_os = "android")]
     path_input: String,
 }
@@ -252,6 +255,12 @@ fn load_preview(
 impl TranscribePanel {
     /// `player` plays the YouTube previews (the tab player's engine, so they
     /// come out of the same output as the song).
+    /// Guitar samples since the last frame (the analysis stream, at
+    /// `rate`), for recording the player's guitar.
+    pub fn feed_input(&mut self, samples: &[f32], rate: u32) {
+        self.calibration.feed_input(samples, rate);
+    }
+
     pub fn new(player: SongPlayer) -> Self {
         Self {
             open: false,
@@ -284,6 +293,7 @@ impl TranscribePanel {
             open_request: None,
             job: None,
             error: None,
+            calibration: GuitarCalibrationPanel::default(),
             #[cfg(target_os = "android")]
             path_input: String::new(),
         }
@@ -590,6 +600,7 @@ impl TranscribePanel {
             guitar_model: settings.transcription_guitar_model,
             fingering: settings.transcription_fingering,
             tone: settings.transcription_tone && self.separate && self.separator.is_some(),
+            guitar_colour: settings.tone_guitar.as_ref().map(|g| g.colour.clone()),
             guitar: self.guitar,
             bass: self.bass,
             output_dir,
@@ -837,6 +848,9 @@ impl TranscribePanel {
                     save_settings(settings);
                 }
             });
+            if settings.transcription_tone || self.calibration.is_busy() {
+                self.calibration.ui(ui, settings);
+            }
             ui.label(
                 RichText::new(engines_summary(
                     i18n::language(),

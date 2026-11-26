@@ -17,7 +17,11 @@
 //!   --tone            also estimate each guitar track's tone (experimental):
 //!                     saved as a user preset named after the song and track,
 //!                     with a matching IR in <data dir>/guitar_virtual_amp/tone_match/
-//!                     (needs a separator; adds ~30 s per guitar track)
+//!                     (needs a separator; adds ~30 s per guitar track). Fitted
+//!                     for the guitar calibrated in the app (Transcribe form,
+//!                     "My guitar") unless --guitar-di is given
+//!   --guitar-di FILE  a DI recording of your guitar (the signal before any
+//!                     pedal, 15 s or more): the tone is fitted for that guitar
 //!   --no-bass / --no-guitar
 //!   --force           redo files already in the repository (same audio hash)
 //!   --artist A --title T   only with a single file/video; otherwise taken from
@@ -62,7 +66,8 @@ fn collect(path: &Path, out: &mut Vec<PathBuf>) {
 
 fn main() {
     // Progress stages and errors come from guitar_core in the app's language.
-    guitar_core::shared::i18n::set_language(guitar_core::shared::settings::load_settings().ui.language.resolve());
+    let settings = guitar_core::shared::settings::load_settings();
+    guitar_core::shared::i18n::set_language(settings.ui.language.resolve());
     let mut args = std::env::args().skip(1);
     let mut inputs = Vec::new();
     let (mut repo, mut separate, mut guitar, mut bass, mut force) = (None, true, true, true, false);
@@ -71,6 +76,7 @@ fn main() {
     let mut guitar_model = GuitarModel::Gaps;
     let mut fingering = Fingering::Learned;
     let mut tone = false;
+    let mut guitar_di: Option<PathBuf> = None;
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--repo" => repo = args.next().map(PathBuf::from),
@@ -79,6 +85,7 @@ fn main() {
             "--no-guitar" => guitar = false,
             "--force" => force = true,
             "--tone" => tone = true,
+            "--guitar-di" => guitar_di = args.next().map(PathBuf::from),
             "--artist" => artist = args.next(),
             "--title" => title = args.next(),
             "--youtube" => youtube_queries.extend(args.next()),
@@ -159,6 +166,32 @@ fn main() {
     if !models.complete() {
         println!("  (rode scripts/install_transcription_models.sh para os modelos melhores)");
     }
+    let guitar_colour = match (&guitar_di, tone) {
+        (Some(path), true) => {
+            let audio = guitar_core::backend::audio_file::decode_file(path).unwrap_or_else(|e| {
+                eprintln!("--guitar-di {}: {e}", path.display());
+                std::process::exit(2);
+            });
+            let cancel = AtomicBool::new(false);
+            match transcribe::calibrate_guitar(&audio.samples, audio.sample_rate, guitar_model, &mut |_| {}, &cancel) {
+                Ok(c) => {
+                    println!("Guitarra: {} ({:.0} s, {} notas)", path.display(), c.seconds, c.notes);
+                    Some(c.colour)
+                }
+                Err(e) => {
+                    eprintln!("--guitar-di {}: {e}", path.display());
+                    std::process::exit(2);
+                }
+            }
+        }
+        (None, true) => {
+            if let Some(c) = &settings.tone_guitar {
+                println!("Guitarra: a calibrada no app ({:.0} s, {} notas)", c.seconds, c.notes);
+            }
+            settings.tone_guitar.as_ref().map(|c| c.colour.clone())
+        }
+        _ => None,
+    };
     println!("Repositório: {}\n", repo.display());
 
     let (mut done, mut skipped, mut failed) = (0, 0, 0);
@@ -182,6 +215,7 @@ fn main() {
             guitar_model,
             fingering,
             tone,
+            guitar_colour: guitar_colour.clone(),
             guitar,
             bass,
             output_dir: repo.clone(),
@@ -285,6 +319,7 @@ fn main() {
                 guitar_model,
                 fingering,
                 tone,
+                guitar_colour: guitar_colour.clone(),
                 guitar,
                 bass,
                 output_dir: repo.clone(),

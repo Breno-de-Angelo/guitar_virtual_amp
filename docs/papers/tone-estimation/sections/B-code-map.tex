@@ -10,7 +10,7 @@
 \toprule
 File (under \file{guitar_core/src/}) & Role and section \\
 \midrule
-\file{tone/mod.rs} & \code{estimate}, baseline, per-voicing search, guitar colour, \code{save_presets} (\S\ref{sec:impl}) \\
+\file{tone/mod.rs} & \code{estimate}, baseline, per-voicing search, \code{calibrate} and the guitar colour, \code{save_presets} (\S\ref{sec:impl}) \\
 \file{tone/pluck.rs} & plucked-string stand-in and \code{DI_EQ} (\S\ref{sec:impl-dry}) \\
 \file{tone/sampler.rs} & sampler stand-in from real DI notes (\S\ref{sec:impl-dry}, experiments only) \\
 \file{tone/features.rs} & log-band distance with EQ allowance; \code{plain_distance} (\S\ref{sec:app-distance}) \\
@@ -18,9 +18,11 @@ File (under \file{guitar_core/src/}) & Role and section \\
 \file{tone/cmaes.rs} & separable CMA-ES (\S\ref{sec:search}) \\
 \file{tone/analysis.rs} & delay time from echoes of onsets (\S\ref{sec:impl-delay}) \\
 \file{tone/matching.rs} & minimum-phase match IR, FFT convolution, \code{Filterable} (\S\ref{sec:impl-match}) \\
-\file{tone/eval.rs} & \code{eval_tone}, \code{echo_scores}, \code{colour_spread}, \code{fit_pluck}, \code{pluck_vs_di} (\S\ref{sec:results}) \\
+\file{tone/eval.rs} & \code{eval_tone}, \code{echo_scores}, \code{colour_spread}, \code{calibration_from_transcription}, \code{fit_pluck}, \code{pluck_vs_di} (\S\ref{sec:results}) \\
 \file{backend/offline.rs} & \code{render_at}: the chain offline at a given input level \\
 \file{shared/tab/tone.rs} & tone suggestions; estimated-preset tags \\
+\file{transcribe/mod.rs} & \code{guitar_notes}, \code{calibrate_guitar}; the tone stage \\
+\file{frontend/ui/guitar_calibration.rs} & ``My guitar'' in the Transcribe form (\S\ref{sec:impl-colour}) \\
 \bottomrule
 \end{tabularx}
 \end{center}

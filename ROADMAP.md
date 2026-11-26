@@ -228,9 +228,27 @@ apps: Premium owner, 5 allow-listed users, `GET /search` capped at 10 results.
     Marshall 6.42 / Mesa 5.70 / Plexi 6.57 / chain 5.84 (+0.0 to +0.34 dB). Weight 3 was worse
     except on stems (5.96). Because neither result wins reliably on stems, the app saves both as
     presets for each track: the search result and the nearest factory preset + match IR.
-  - Next: a better dry signal (learned DI renderer or effect remover; the
-    player's DI through a pre-chain tap); modulation from the notes; a learned initial guess (Sparks);
-    listening tests on the `GVA_TONE_OUT` WAVs; real songs (MoisesDB isolated guitars as reference).
+  - Where the error comes from (`GVA_TONE_ABLATE=1`, oracle stand-ins, same 12 items, committed
+    defaults): pluck 6.20 / 5.79 / 6.45 / 5.55 / 5.92 dB (Marshall / Mesa / Plexi / chain / stem);
+    with the true DI's long-term colour 4.65 / 4.26 / 4.42 / 4.28 / 5.10, with its level envelope
+    5.66 / 4.96 / 6.27 / 5.06 / 6.00, both 4.09 / 3.59 / 3.98 / 3.65 / 5.54, true DI 3.07 / 2.44 /
+    2.66 / 1.73 / 5.33. The stand-in's colour is most of the gap. Searching that colour with the
+    chain (5 EQ points before the pedals) was 0.1-0.4 dB worse and was removed.
+  - Colour calibration (`tone::colour_from_di`, `mean_colour`, `apply_colour`; benchmark only,
+    `GVA_TONE_CALIBRATE=1`): the stand-in's colour measured on 3 other EGDB recordings of the same
+    guitar, kept within 250 Hz-8 kHz and ±9 dB: 5.95 / 5.31 / 5.92 / 4.99 / 6.00 dB, better on
+    8-11 of 12 items on clean targets, a tie on stems. Without the limits (one recording) stems got
+    worse (6.72): the colour boosted the top octave by up to 18 dB (`eval::colour_spread`: recordings
+    differ by 6-9 dB SD per band below 300 Hz and above 9 kHz, 2-4 dB in between).
+  - Built: calibration in the app ("🎸 My guitar" in the Transcribe form: record about a minute in
+    the app before the pedals, or pick a DI file; notes by the guitar model, `tone::calibrate`, saved in
+    `AppSettings::tone_guitar`, applied to the stand-in for both saved presets; CLI `--guitar-di`). On
+    10 EGDB DI recordings the colour from transcribed notes is 0.85 dB from the one from labels, against
+    2.48 dB between two recordings (`calibration_from_transcription`).
+  - Next: the benchmark with transcribed notes end to end and the calibrated preset + match; separated stems
+    (score only reliable bands/frames; transcribed notes instead of labels); dynamics (up to
+    0.8 dB); a learned DI renderer or effect remover; modulation from the notes; a learned initial
+    guess; listening tests on the `GVA_TONE_OUT` WAVs; real songs (MoisesDB isolated guitars).
 - **Tab library**: match by the title/artist inside the file, not only the file name; cache the
   index; Android folder picker (no `rfd` backend there).
 - **Spotify extras**: Liked Songs (`GET /me/tracks`, needs `user-library-read`), open the tab

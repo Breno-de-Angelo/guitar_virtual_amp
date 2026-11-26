@@ -12,7 +12,7 @@ separated stem. Per item there are five kinds of target:
 \begin{description}[style=nextline,leftmargin=1.2cm]
 \item[chain] The DI through a random template chain followed by a random
   cabinet-like EQ (a high-pass near 80\Hz, a roll-off above 3--7\kHz, six
-  smooth bumps of up to $\pm4\dB$). The true settings are known, so parameter
+  smooth bumps of up to $\pm$4\dB). The true settings are known, so parameter
   error can be measured. Random settings: a random voicing, each parameter
   uniform in 0.1--0.9, and the compressor, drive and reverb each switched off
   with probability 0.5, 0.4 and 0.5. Half of these targets also get a delay of
@@ -129,10 +129,10 @@ it decays, when it stops). \code{GVA_TONE_ABLATE=1} adds three oracle stand-ins
 that borrow one property from the true DI:
 \begin{description}[style=nextline,leftmargin=1.2cm]
 \item[+ DI colour] the pluck stand-in through the minimum-phase EQ that gives it
-  the true DI's long-term spectrum (the same centred, $\pm18\dB$ EQ as the
+  the true DI's long-term spectrum (the same centred, $\pm$18\dB{} EQ as the
   search distance, Section~\ref{sec:app-distance});
 \item[+ DI dynamics] the pluck stand-in times the ratio of the two signals'
-  broadband RMS envelopes (10\ms{} windows every 5\ms, capped at $\pm24\dB$);
+  broadband RMS envelopes (10\ms{} windows every 5\ms, capped at $\pm$24\dB);
 \item[+ both] colour, then dynamics.
 \end{description}
 They cannot be used in the app (they need the DI); they say which property is
@@ -178,14 +178,13 @@ dynamics) because separation, not the stand-in, is the larger error there.
 
 Two ways of getting the colour without the record's DI were tried.
 
-\paragraph{Blind: search it with the chain.} \code{Options::guitar_colour}
-(\code{GVA_TONE_COLOUR=1}) adds five EQ points (100\Hz{} to 8\kHz, $\pm12\dB$,
-prior standard deviation 6\dB) applied to the stand-in before the chain, searched
-by the same CMA-ES. It made things \emph{worse}: on the 31 cases run before it
+\paragraph{Blind: search it with the chain.} A trial version of the estimator
+added five EQ points (100\Hz{} to 8\kHz, $\pm$12\dB, prior standard deviation
+6\dB) applied to the stand-in before the chain, searched by the same CMA-ES. It made things \emph{worse}: on the 31 cases run before it
 was stopped, 0.1--0.4\dB{} worse than the plain search on every clean group, and
 a tie on stems \measured. With the EQ allowance after the chain, colour before
 it is only visible through the distortion, weakly; the search spends the extra
-freedom on other faults of the stand-in. It stays off.
+freedom on other faults of the stand-in. The code was removed.
 
 \paragraph{Calibrated: measure it on another recording of the guitar.} The
 benchmark question is ``this performance, on this guitar, through the preset'',
@@ -194,4 +193,70 @@ their own guitar once; its colour against the stand-in playing the same notes
 (\code{tone::colour_from_di}) is then applied to every stand-in
 (\code{tone::apply_colour}). \code{GVA_TONE_CALIBRATE=1} simulates that with
 EGDB recordings outside the 12 benchmark items.
-% CALIBRATION RESULTS
+Table~\ref{tab:tone-calibration} shows three versions, in the order they were
+tried.
+
+\begin{table}[h]
+\centering
+\caption{Search from notes with the stand-in's colour calibrated on other EGDB
+recordings (median length 26\,s), 12 items \measured. ``Full range'': the
+measured EQ as is; ``limited'': kept only between 250\Hz{} and 8\kHz, within
+$\pm$9\dB{} (the committed \code{colour_from_di}). In brackets: items better than
+the plain pluck stand-in.}
+\label{tab:tone-calibration}
+\footnotesize
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{@{}lccccc@{}}
+\toprule
+ & & \multicolumn{3}{c}{Calibrated on} & \\
+\cmidrule(lr){3-5}
+Target & Pluck & 1 rec., full range & 1 rec., limited & 3 rec., limited & DI colour (oracle) \\
+\midrule
+Random app chain + cab EQ & 5.55 & 5.33 (7) & 4.97 (10) & \textbf{4.99} (11) & 4.28 \\
+EGDB Marshall & 6.20 & 5.73 (8) & 5.66 (8) & \textbf{5.95} (8) & 4.65 \\
+EGDB Mesa & 5.79 & 5.04 (10) & 5.22 (9) & \textbf{5.31} (9) & 4.26 \\
+EGDB Plexi & 6.45 & 5.82 (9) & 6.02 (8) & \textbf{5.92} (9) & 4.42 \\
+Marshall, separated stem & 5.92 & 6.72 (4) & 6.39 (3) & \textbf{6.00} (5) & 5.10 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{itemize}
+\item \textbf{On clean targets every version helps}: 0.2--0.75\dB, on 7--11
+  items of 12. Between a sixth and a half of the oracle's gain survives when the colour comes
+  from a \emph{different} performance on the same guitar.
+\item \textbf{On separated stems the first version hurt} (5.92 to 6.72\dB; one
+  item went from 4.8 to 9.4). Its measured colour boosted the top octave by up
+  to 18\dB, where the stand-in has almost no energy and the stem has lost most
+  of it; the match IR then hit its $-$18\dB{} limit. Limiting the colour to the
+  bands where recordings agree (Section~\ref{sec:impl-colour}) and averaging
+  three recordings brought stems back to a tie (6.00\dB, 5 of 12), keeping most
+  of the gain elsewhere.
+\item \textbf{Against the baselines}, the calibrated search (``3 rec., limited'')
+  beats preset + match on every clean group: 4.99 against 6.45, 5.95 against
+  6.16, 5.31 against 5.84, 5.92 against 6.86\dB. The comparison is not quite
+  fair, since preset + match still used the uncalibrated stand-in for its match
+  IR (Section~\ref{sec:next}).
+\item Calibration changes nothing else: delays are found as often (7 of 8, no
+  false delay in 47 of 52) and the parameter error is the same (0.31).
+\end{itemize}
+
+\begin{caution}[: what this benchmark does not yet test]
+\begin{itemize}
+\item \textbf{Perfect notes}: the stand-in plays labelled notes, and the
+  calibration uses labelled notes of the calibration recordings. With
+  transcribed notes, missed and extra notes will add error \expected; for the
+  calibration alone the change is small (0.85\dB{} per band,
+  Section~\ref{sec:impl-colour}) \measured.
+\item \textbf{One guitar}: EGDB's calibration and test recordings come from the
+  same guitar and set-up; a player who changes pickups between calibration and
+  playing breaks the assumption.
+\item \textbf{Small sample}: 12 items, and differences of a few tenths of a
+  decibel are within run-to-run noise.
+\item \textbf{The score is not validated}: no listening test yet. The benchmark
+  writes WAVs (\code{GVA_TONE_OUT}) for listening.
+\item \textbf{Only simulated amps} for the gear-outside-the-chain case;
+  Guitar-TECHS miked real amplifiers can be added (\code{eval_techs.tsv}) but
+  are not in the recorded runs.
+\end{itemize}
+\end{caution}

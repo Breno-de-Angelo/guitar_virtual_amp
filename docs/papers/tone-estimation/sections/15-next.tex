@@ -10,17 +10,11 @@ right dry signal.
 
 \begin{nextsteps}
 \begin{enumerate}
-\item \textbf{Colour calibration in the app} \planned: a ``record my guitar''
-  step (about a minute of DI through the dry analysis tap or the recorder),
-  transcribed by the guitar model, measured with \code{tone::colour_from_di}
-  against the stand-in playing the transcribed notes, saved once per guitar and
-  applied to every stand-in by the tone stage. The benchmark simulates it with
-  labelled notes; with transcribed notes the measurement gets noisier
-  \expected.
-\item \textbf{Calibrate the baselines too}: ``preset + match'' was scored with
-  the uncalibrated stand-in, so its comparison with the calibrated search
-  flatters the search; the match IR of every method should use the calibrated
-  stand-in.
+\item \textbf{Colour calibration in the app} \done{} (Section~\ref{sec:impl-colour}).
+  Still to measure: the benchmark end to end with transcribed notes, and the
+  calibrated ``preset + match'' (the app already fits both saved presets with
+  the calibrated stand-in; the benchmark still scores that baseline with the
+  uncalibrated one, which flatters the search).
 \item \textbf{Separated stems}: the remaining weak spot. Calibration does not
   help there, and even the true DI loses 2.3\dB{} to separation. Candidates:
   score only bands and frames where the stem is reliable (for instance where
@@ -78,5 +72,6 @@ and one idea the literature had not used: a dry signal synthesised from the
 transcribed notes. The benchmark shows that the search is not the weak part; the
 stand-in dry signal is, mostly through its colour. Searching that colour blind
 does not work, but measuring it once on a recording of the player's own guitar
-does, on every group except separated stems. Bringing that calibration into the
-app, and improving the estimate on separated stems, are the next steps.
+does, on every group except separated stems, and the app now does it with a
+minute of the player's guitar. Improving the estimate on separated stems is the
+next step.
