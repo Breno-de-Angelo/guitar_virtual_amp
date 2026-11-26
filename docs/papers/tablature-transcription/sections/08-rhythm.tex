@@ -1,0 +1,128 @@
+% !TeX root = ../main.tex
+\section{Beats, bars and rhythm notation}
+\label{sec:rhythm}
+
+\subsection{What the stage must do}
+
+A tab needs bars, a time signature per bar and a written duration per note.
+That takes three steps: find the \term{beats} (the pulse a listener taps along
+to), find the \term{downbeats} (the first beat of each bar, which fixes the
+meter: 4 beats per bar for 4/4, 3 for 3/4), and \term{quantise} each note onto
+a grid of beat subdivisions so it can be written as a quarter, eighth,
+sixteenth or triplet.
+
+\subsection{How beat trackers work}
+
+\begin{keyidea}[: activation, then decoding]
+A tracker first computes, for every short frame, how likely a beat is there (an
+\term{activation}): classically from an onset function such as spectral flux,
+today from a neural network. It then \emph{decodes} a regular sequence of beats
+from the activation with dynamic programming (Section~\ref{sec:viterbi}), using
+the prior knowledge that beats are roughly evenly spaced.
+\end{keyidea}
+
+Ellis's tracker~\cite{ellis2007beat} picks the tempo by autocorrelation of the
+onset function and then the beat times by dynamic programming. Neural trackers
+predict beat and downbeat activations and decode them with a dynamic Bayesian
+network that assumes a fixed meter and a tempo range~\cite{bock2016joint};
+All-In-One~\cite{kim2023allinone} also tracks song sections.
+\textbf{Beat This!}~\cite{foscarin2024beatthis} drops the DBN: a transformer
+trained on diverse data (including solo instruments and time-signature changes)
+predicts beats and downbeats that are only peak-picked, and surpasses prior
+work in F1 while being weaker on continuity \reported.
+AlignBeat~\cite{ahn2025alignbeat} reports 3.6 points more downbeat CMLt than
+Beat This! \reported; Explore This!~\cite{kihlborg2026explore} predicts a finer
+\term{tatum} grid and groups it into beats and bars. A failure analysis on the
+SMC dataset~\cite{ahn2026smc} found that current trackers are ``confident but
+wrong'' on expressive music, and that the usual DBN minimum tempo of 55\,BPM
+forces double-tempo output on 21\% of its tracks \reported.
+
+\subsection{From beats to written rhythm}
+
+Quantisation and the choice of notated durations are rarely studied in the
+tablature literature; TART uses a rule-based tab generator~\cite{gupta2026tart}.
+The difficulty is that every beat can be divided in two ways that matter in
+popular music: \term{straight} (two eighths, four sixteenths) or
+\term{triplet} (three eighth-note triplets). A note 1/3 of a beat late is a
+triplet in a shuffle and a timing error in a straight rock song.
+
+\begin{inapp}[: rhythm \done]
+\begin{itemize}
+\item \textbf{Beat This!} (\file{transcribe/beat_net.rs}; ONNX files
+  \code{beat_this_final0.onnx}, or \code{beat_this_small0.onnx} when final0 is
+  missing, plus \code{beat_this_logmel.onnx}): runs on the mix at 22.05\kHz{},
+  128 log-mel bands, 50 activations per second, in 30\,s chunks. Peaks become
+  beats; \code{regularize} fills missed beats and drops doubled ones.
+\item \textbf{Bars and meter} (\code{beat_net::decode_downbeats}): a
+  \term{bar-pointer} Viterbi whose states are ``beat $k$ of a bar of $n$
+  beats'', $n$ from 2 to 7. Each meter has a cost (4/4 is favoured,
+  \code{METERS}) and changing meter costs \code{METER_CHANGE}; downbeat
+  activations are scored against their mean over the song. So a song can switch
+  meter or insert a single 2/4 bar.
+\item \textbf{Fallback} (\file{transcribe/beats.rs}) when Beat This! is not
+  installed: spectral flux, autocorrelation tempo with a 120\,BPM prior, Ellis
+  dynamic programming, downbeat phase from the low-frequency band; 4/4 only. It
+  runs on the drum stem when there is one.
+\item \textbf{Grid} (\code{beats::bar_grid}, \code{arrange::BeatGrid}): whole bars
+  around the notes, one length per bar.
+\item \textbf{Quantisation} (\file{transcribe/arrange.rs}): onsets within 35\ms{}
+  of each other form a chord; \code{choose_subdivisions} picks, for each beat,
+  sixteenths or eighth-note triplets by a Viterbi search with a prior towards
+  straight time; positions are stored in ticks (960 per beat). \code{notate}
+  writes tuplets only inside partly used triplet beats and ties long notes
+  across beats; each bar gets its own tempo in the score.
+\end{itemize}
+\end{inapp}
+
+\subsection{What we measured}
+
+\begin{table}[h]
+\centering
+\caption{Beat tracking on GuitarSet players 03--05, all 180 excerpts
+\measured{} (\code{bench_beats.py}, \code{mir_eval}).}
+\label{tab:bench-beats}
+\small
+\begin{tabular}{@{}lcc@{}}
+\toprule
+ & Accompaniment (comp) & Solo \\
+Tracker & beat F / CMLt / downbeat F & beat F / CMLt / downbeat F \\
+\midrule
+Beat This! small0 & 0.92 / 0.80 / 0.92 & 0.51 / 0.36 / 0.33 \\
+Beat This! final0 (app default) & \textbf{0.97 / 0.92 / 0.94} & \textbf{0.55} / 0.35 / \textbf{0.36} \\
+Ellis DP (librosa) & 0.54 / 0.42 / -- & 0.39 / 0.26 / -- \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{itemize}
+\item final0 is a clear gain on accompaniment (CMLt 0.80 to 0.92) for 8\,MB more
+  weights.
+\item Every tracker fails on unaccompanied solo lines (beat F about 0.5): a
+  single melody carries little beat information. In a song the tracker runs on
+  the full mix, so this matters mostly for solo-guitar recordings.
+\item In the app pipeline (\code{eval_guitarset}, players 03--05, 60 excerpts,
+  GAPS), final0 against small0: tempo right in 51 against 49 excerpts, bar lines
+  aligned in 41 against 35 (solo 11 against 6, comp 30 against 29) \measured.
+  The beat stage takes 13.5\,s against 8.3\,s on a 261\,s song.
+\end{itemize}
+
+\begin{caution}[: two sets of rhythm numbers]
+The README and an older ROADMAP table report ``tempo right in 59 of 60, bar
+lines aligned in 56--57 of 60'' on GuitarSet. Those came from an earlier run
+with a different selection of 60 excerpts (and small0); the numbers above are
+on players 03--05 only. Even small0 scores only 49 of 60 on players 03--05, so
+the selection, not the model, explains most of the gap, but nobody has checked
+which excerpts differ. Quote the players 03--05 numbers as current.
+\end{caution}
+
+\subsection{Failure modes}
+\begin{itemize}
+\item Compound meters (6/8, 12/8) are written as 2/4 or 6/4 with triplets
+  \measured.
+\item Sixteenth-note triplets and 32nd notes cannot be written (the grid has
+  only sixteenths and eighth triplets).
+\item Slow, rubato or expressive music: confident but wrong beats, double
+  tempo~\cite{ahn2026smc} \reported.
+\item Solo-guitar recordings without accompaniment: about half the beats
+  missed (Table~\ref{tab:bench-beats}).
+\end{itemize}

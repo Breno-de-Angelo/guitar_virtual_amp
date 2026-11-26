@@ -1,0 +1,71 @@
+% !TeX root = ../main.tex
+\section{End-to-end audio-to-tablature models}
+\label{sec:e2e}
+
+\subsection{The idea}
+
+An end-to-end model predicts string and fret directly from audio, so the
+fingering can use timbre (which string a note sounds like) and the constraints
+of the fretboard can shape the transcription itself.
+
+\subsection{The main models}
+
+\begin{description}[style=nextline,leftmargin=1.2cm]
+\item[Before deep learning] Barbancho et al.~\cite{barbancho2012chords}
+  transcribed chords and their fingering with an HMM over fingering
+  configurations.
+\item[TabCNN (2019)] \cite{wiggins2019tabcnn} A small CNN on a constant-Q
+  spectrogram that outputs, for each frame and each of the six strings, a
+  probability over ``silent, open, fret 1, \ldots, fret 19''. No note-level
+  decoding and no temporal model. Trained and tested on GuitarSet; the standard
+  end-to-end baseline. Cwitkowitz et al.~\cite{cwitkowitz2022inhibition} added a
+  loss that discourages note pairs unlikely on the fretboard.
+\item[FretNet (2023)] \cite{cwitkowitz2023fretnet} Predicts continuous pitch
+  contours grouped by string and fret, so bends and vibrato can be represented
+  (a semitone grid cannot). Code but no weights released.
+\item[SynthTab (2024)] \cite{zang2024synthtab} Pre-trains on DadaGP tabs
+  rendered through guitar plugins; fine-tuning then gives better results and
+  less overfitting across datasets. The main evidence that data scale, not
+  architecture, limits end-to-end models.
+\item[GOAT (2025)] \cite{loth2025goat} Preliminary tab-transcription results on
+  its electric DI and amplifier data; the first large source of electric guitar
+  paired with technique-annotated tabs.
+\item[Noise2Fret (2026)] \cite{simionato2026noise2fret} A diffusion model over a
+  continuous representation of string and fret, conditioned on spectral
+  features, with five auxiliary losses for playability (pitch-class distance,
+  positional distance, circle-of-fifths distance, string similarity, hand-span
+  feasibility). Beats its baselines on GuitarSet and GOAT \reported.
+\item[TART (2025--2026)] \cite{gupta2025tart,gupta2026tart} Presented as
+  end-to-end but actually four stages: audio to MIDI, a technique classifier,
+  audio-conditioned fingering, and a rule-based tab generator. Zero-shot on
+  GuitarSet, EGDB and noisy versions of both, it reports 81.35\% note F50,
+  71.8\% string-fret Tab F1 and 54.08\% end-to-end Tab F1 on average
+  \reported. The drop from 71.8 to 54.08 shows how errors compound across
+  stages.
+\end{description}
+
+All of these take an isolated guitar as input. None is trained or evaluated on
+guitar inside a band mix, and most are trained on GuitarSet, which is acoustic.
+
+\begin{inapp}[: not used, but benchmarked]
+The app has no end-to-end model. We ran the two TabCNN variants with released
+weights (TabCNN on GuitarSet, and TabCNN-GPFX, its tone-augmented variant from
+Pedroza et al.~\cite{pedroza2024tones}) against our modular pipeline; the
+results are in Section~\ref{sec:bench-tab}. TabCNN wins on GuitarSet solo lines
+and loses everywhere on electric guitar and mixes.
+\end{inapp}
+
+\subsection{Noise2Fret under its own protocol}
+
+We ran Noise2Fret's released checkpoints (CC BY 4.0) with its own code and
+protocol (GuitarSet player 00 held out, 100\ms{} windows): pitch F 0.924 / 0.926
+and Tab F 0.921 / 0.922 without / with the auxiliary losses \measured.
+
+\begin{caution}[: why 0.92 is not comparable]
+That protocol scores only 100\ms{} windows that \emph{contain a note onset}
+(\code{drop_empty=True}), so silent passages can never produce false notes, and
+timing is judged per window instead of with a 50\ms{} onset tolerance. The number
+cannot be compared with the note-level Tab F1 in Section~\ref{sec:bench-tab}.
+Running the model on whole recordings would need an onset detector it does not
+include; its event-based follow-up targets that.
+\end{caution}

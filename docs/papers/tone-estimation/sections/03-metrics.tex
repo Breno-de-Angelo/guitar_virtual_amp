@@ -1,0 +1,125 @@
+% !TeX root = ../main.tex
+\section{Comparing two sounds}
+\label{sec:metrics}
+
+The distance $D$ in the estimation formula decides what ``sounds alike'' means.
+It is used twice: as the \emph{objective} the search minimises, and as the
+\emph{score} a benchmark reports. They need not be the same.
+
+\subsection{Parameter metrics}
+
+If the target was made with the same chain the estimator controls, its true
+settings are known, and one can report effect-detection accuracy or F1, the
+accuracy of the predicted order, or the mean absolute error (MAE) of knob values
+on a 0--1 scale. These need ground truth and say little about the sound: because
+different settings can sound alike, a large parameter error can come with a good
+sound. Peladeau and Peeters found that training on an audio loss gives better
+reconstructions than training on parameters, even when the parameter error is
+larger~\cite{peladeau2024blind}. Parameter error should therefore be a
+diagnostic, not the main criterion.
+
+\subsection{Aligned audio metrics}
+
+These compare a render $\hat y$ with the target $y$ sample by sample or frame by
+frame, so they need the \emph{same performance} on both sides.
+
+\begin{description}[style=nextline,leftmargin=1.2cm]
+\item[Error-to-signal ratio (ESR)]
+  $\displaystyle \mathrm{ESR} = \frac{\sum_n (y[n]-\hat y[n])^2}{\sum_n y[n]^2}$,
+  usually after a pre-emphasis filter that weights high frequencies the way
+  hearing does~\cite{wright2020perceptual}. The standard loss for training amp
+  models; 0 is perfect. Very sensitive to phase.
+\item[Multi-resolution STFT distance (MR-STFT)] The difference of magnitude
+  spectrograms at several window sizes (e.g.\ 512, 1024, 2048), as a sum of a
+  spectral-convergence term and the L1 distance of log
+  magnitudes~\cite{yamamoto2020parallel,steinmetz2020auraloss}. Ignores phase;
+  the several resolutions catch both fast transients and fine pitch detail.
+\item[SI-SDR] Scale-invariant signal-to-distortion ratio: project $\hat y$ on
+  $y$ to get the best-scaled target $\alpha y$, then
+  $10\log_{10}\bigl(\|\alpha y\|^2/\|\hat y - \alpha y\|^2\bigr)$, in dB, higher
+  is better~\cite{leroux2019sdr}.
+\item[Log-band distance (the app's)] Mean absolute difference, in dB, between
+  log energies in a set of frequency bands, over frames; defined exactly in
+  Section~\ref{sec:app-distance}. Close in spirit to the log-magnitude part of
+  MR-STFT.
+\end{description}
+
+\subsection{Alignment-free metrics}
+
+These compare clips without requiring the same notes:
+\begin{itemize}
+\item \textbf{Effect embeddings}: networks trained to describe the processing
+  independently of the content, such as AFx-Rep~\cite{steinmetz2024stito} and
+  Fx-Encoder++~\cite{yeh2025fxencoder}, or general audio embeddings such as
+  CLAP~\cite{wu2023laionclap}. Two clips are compared by the cosine distance of
+  their embeddings.
+\item \textbf{Distribution distances}: the Fréchet Audio Distance
+  (FAD)~\cite{kilgour2019fad} fits a Gaussian to the embeddings of many clips of
+  each set and measures how far apart the two Gaussians are. It is biased by
+  sample size and depends on the embedding and the reference set; FAD$_\infty$
+  extrapolates the bias away~\cite{gui2024adapting}, and the kernel variant KAD
+  converges with fewer samples~\cite{chung2025kad}. A single song gives few clips,
+  so per-song evaluation suits pairwise embedding distances better than FAD.
+\end{itemize}
+
+\subsection{Listening tests}
+
+The reference is human judgement. \term{MUSHRA} (ITU-R BS.1534-3)~\cite{itu2015bs1534}
+asks listeners to rate several versions against a reference on a 0--100 scale,
+with a hidden copy of the reference and a degraded anchor as checks;
+webMUSHRA~\cite{schoeffler2018webmushra} runs it in a browser. \term{Mean opinion
+scores} (1--5) can be split into tone similarity and audio
+quality~\cite{yeh2026egvae}. As a ceiling, listeners could barely tell Kemper
+profiles from the original amplifiers ($d' = 0.34$, $N = 177$)~\cite{duvel2020confusingly}.
+
+\subsection{Which metrics agree with listeners}
+
+Two studies measured this for guitar devices (Table~\ref{tab:metrics}). In the
+ToneTwist evaluation of 40 nonlinear devices (27 screened listeners), MR-STFT
+had the strongest correlation with MUSHRA ratings among signal metrics and ESR
+one of the weakest; among FAD embeddings, VGGish and AFx-Rep did best overall
+and CLAP best on distortion; no metric was reliable for overdrive or compression
+\reported~\cite{comunita2025differentiable}. Wright, Dal Santo and Schlecht
+collected ratings for 590 emulation--reference pairs and found MFCC and deep
+embedding distances predictive, MAE and ESR poor \reported~\cite{wright2026predicting}.
+In unpaired amp modelling, ESR and listener ratings disagreed on a heavily
+distorted tone~\cite{wright2023adversarial}. No metric has been validated for
+delay, reverb or modulation on guitar.
+
+\begin{table}[h]
+\centering
+\caption{Spearman correlation of objective metrics with MUSHRA ratings on 40
+nonlinear guitar and bass devices~\cite{comunita2025differentiable}. Negative:
+lower distance goes with higher rating, so more negative is better.}
+\label{tab:metrics}
+\small
+\begin{tabular}{@{}lrlr@{}}
+\toprule
+Signal metric & $\rho$ & FAD embedding & $\rho$ \\
+\midrule
+MR-STFT & $-0.427$ & VGGish & $-0.430$ \\
+MAPE & $-0.339$ & AFx-Rep & $-0.417$ \\
+L1 & $-0.332$ & CLAP & $-0.406$ \\
+MSE & $-0.314$ & PANN & $-0.303$ \\
+ESR & $-0.311$ & & \\
+\midrule
+\multicolumn{4}{@{}l@{}}{High-distortion devices only: MR-STFT $-0.536$, FAD with CLAP $-0.613$.} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{caution}[: correlations are modest]
+The best correlation in Table~\ref{tab:metrics} is about $-0.43$: objective
+metrics explain only part of what listeners hear. A lower distance is evidence
+of a better match, not proof. Listening tests are on the app's roadmap
+(Section~\ref{sec:next}); the benchmark already writes WAV files for listening
+(\code{GVA_TONE_OUT}).
+\end{caution}
+
+\subsection{Comparability of published results}
+
+Most results use clean, isolated, plugin-rendered guitar, which is easier than
+the commercial case. Many test sets share dry recordings or plugins with the
+training set. And because settings can be non-unique, two estimates with very
+different parameters may sound alike, which parameter metrics penalise and
+listeners do not.

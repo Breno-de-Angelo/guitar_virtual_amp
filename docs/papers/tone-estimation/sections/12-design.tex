@@ -1,0 +1,136 @@
+% !TeX root = ../main.tex
+\section{The design for Guitar Virtual Amp}
+\label{sec:design}
+
+This section is the plan derived from Part~II, written before any code. Each
+step carries its status today; Section~\ref{sec:impl} describes what is built
+in detail.
+
+\subsection{What the app already had}
+
+\begin{itemize}
+\item \textbf{A guitar stem per part}: BS-RoFormer (Demucs as fallback)
+  separation~\cite{lu2023bsroformer,rouard2023htdemucs} and a split of the stereo
+  guitar stem by pan position into parts that play different
+  things~\cite{deangelo2026tabreview}.
+\item \textbf{The notes and the grid}: onsets, offsets, pitches and techniques of
+  every guitar part; beats, bars and tempo from Beat This!~\cite{foscarin2024beatthis}.
+\item \textbf{An offline renderer of the real chain}: \code{backend::offline::render_at}
+  runs the same pedal code as the live path (48\kHz, 16-bit samples, 256-sample
+  blocks) at a chosen input RMS level. The full chain of 17 classic pedals costs
+  about 430\,ns per sample on one core, a NAM WaveNet about 1.9\,\textmu s.
+\item \textbf{Presets with song metadata}: 20 factory presets, user presets with
+  \code{song} and \code{artist} fields, and a tone suggestion on the Tabs page
+  that prefers a user preset tagged with the song (otherwise it guesses a factory
+  preset from the track's instrument and name).
+\item \textbf{Capture and cabinet players}: the NAM pedal and an IR convolver.
+\end{itemize}
+
+\subsection{Constraints}
+
+\begin{itemize}
+\item The chain is mono, works on 16-bit samples and has no gradients: the
+  estimator treats it as a black box. Stereo effects cannot be reproduced.
+\item The estimate may run offline on a desktop; its output, a preset, also
+  works on Android.
+\item The analysed audio must be the user's own: Spotify's developer policy
+  forbids analysing its content, so the feature applies to the same local files
+  and downloads as transcription.
+\item Models that are distributed must be trained on data that allow it
+  (Section~\ref{sec:datasets}); capture libraries can be searched by metadata,
+  not bulk downloaded.
+\item Patent CN118865922B claims a pipeline of similar shape~\cite{huanyin2025presetpatent};
+  its claims should be reviewed before distributing the feature where the patent
+  applies.
+\end{itemize}
+
+\subsection{The planned pipeline}
+
+\begin{figure}[h]
+\centering
+\begin{tikzpicture}[
+  node distance=2.4mm,
+  box/.style={draw, rounded corners=2pt, font=\small, align=left,
+              minimum height=7mm, inner sep=3pt, fill=white, text width=125mm},
+  arr/.style={-{Stealth[length=2mm]}, semithick}]
+  \node[box, fill=appc!10] (s1) {1. Separation, pan split, notes, beats \hfill \textsf{\scriptsize built (transcription)}};
+  \node[box, below=of s1, fill=appc!10] (s2) {2. Pick an excerpt per part \hfill \textsf{\scriptsize built: loudest 12\,s}};
+  \node[box, below=of s2, fill=appc!10] (s3) {3. Stand-in dry signal from the notes \hfill \textsf{\scriptsize built: pluck; sampler in progress}};
+  \node[box, below=of s3, fill=warnc!10] (s4) {4. Starting points: factory presets; learned guess \hfill \textsf{\scriptsize presets built; learned planned}};
+  \node[box, below=of s4, fill=appc!10] (s5) {5. CMA-ES through the offline renderer \hfill \textsf{\scriptsize built}};
+  \node[box, below=of s5, fill=warnc!10] (s6) {6. Delay, reverb, modulation from notes and tempo \hfill \textsf{\scriptsize delay in progress}};
+  \node[box, below=of s6, fill=appc!10] (s7) {7. Linear match: minimum-phase IR in a Cabinet \hfill \textsf{\scriptsize built}};
+  \node[box, below=of s7, fill=warnc!10] (s8) {8. Save as a preset tagged with the song \hfill \textsf{\scriptsize in progress}};
+  \foreach \a/\b in {s1/s2,s2/s3,s3/s4,s4/s5,s5/s6,s6/s7,s7/s8} \draw[arr] (\a) -- (\b);
+\end{tikzpicture}
+\caption{The planned tone-estimation pipeline and the status of each step.
+Green: built and committed; orange: partly built or in progress.}
+\label{fig:pipeline}
+\end{figure}
+
+The plan, step by step (Figure~\ref{fig:pipeline}):
+\begin{enumerate}
+\item \textbf{Separation and transcription} come from the tablature pipeline.
+\item \textbf{Excerpts}: for each part, pick 5--20\,s where the part is loud
+  relative to the rest of the mix, other guitars are quiet and the notes cover
+  several registers; cluster excerpts by an effect embedding to find tone changes
+  between sections and estimate one preset per cluster. \emph{Built so far}: the
+  loudest 12\,s window.
+\item \textbf{Stand-in dry signal}, from (a) a resynthesis of the transcribed
+  notes, (b) an effect-removal model trained on the app's own renders, or (c) the
+  player's own DI recorded while playing along in practice mode. (c) has the right
+  guitar and the wrong timing; (a) the right timing and the wrong guitar; (b)
+  both, with removal errors. \emph{Built}: (a).
+\item \textbf{Starting points}: the closest factory preset, then a network
+  trained on renders of the template chain, mixed over backing tracks and
+  separated by the same BS-RoFormer so it sees separation artefacts (the StemFX
+  recipe~\cite{cheng2026stemfx}), sharing each dry clip across many chains so it
+  learns the tone rather than the riff~\cite{nathanben2026tonerunner}. AFx-Rep
+  (Apache-2.0)~\cite{steinmetz2024stito} is a starting point for its encoder.
+\item \textbf{Refinement} by CMA-ES. The plan lists four terms for the
+  objective: an aligned spectral term, an alignment-free term (long-term spectra
+  per register, crest factor, compression statistics), a small-weight
+  effect-embedding term, and a prior over factory and user
+  presets~\cite{yu2025improving}. \emph{Built}: the aligned spectral term, with an
+  EQ allowance.
+\item \textbf{Time-based effects from the notes}: delay time from echoes of
+  onsets (or candidate values tied to the tempo), reverb decay from rests after a
+  note ends, modulation rate from sustained notes or an LFO
+  extractor~\cite{mitcheltree2023modulation}. Measured values fix or initialise
+  the search, which avoids rugged landscapes. \emph{In progress}: delay.
+\item \textbf{Linear match}: the smoothed difference between the long-term
+  spectra of the stem and of the rendered chain, as a minimum-phase IR in a
+  Cabinet pedal with a gain limit, as Tone Match does~\cite{fractalndtonematch}.
+\item \textbf{Output}: a user preset with song and artist set, so the existing
+  tone suggestion offers it; other candidates kept; settings recorded for later
+  evaluation.
+\end{enumerate}
+\textbf{Captures} (later): NAM files on the user's disk as candidates for the amp
+slot, ranked by rendering the dry signal through each at several input
+gains~\cite{sd4562026nameqmatch}; TONE3000 queried by metadata for candidates the
+user then chooses to download. Learning a capture from the stem alone by unpaired
+or diffusion-based fitting~\cite{wright2023adversarial,moliner2025unsupervised}
+is research, at hours of GPU time per tone.
+
+\subsection{Why this design}
+
+\begin{itemize}
+\item \textbf{Against prediction only}: synthetic-to-real gaps and ambiguous
+  settings; refinement by rendering gained 4.9\dB{} SI-SDR in Okita and
+  Katayose~\cite{okita2026audio}.
+\item \textbf{Against an embedding-only search}: ST-ITO's authors report failure
+  on guitar tone, and TAPE shows the objective drifting~\cite{steinmetz2024stito,long2026tape};
+  a dry signal aligned with the target allows a spectral objective instead.
+\item \textbf{Against neural tone transfer}: EG-VAE gives the best guitar tone
+  similarity but returns audio, has no released code, and cannot run in the
+  real-time chain~\cite{yeh2026egvae}.
+\item \textbf{Against linear matching only}: a filter cannot set gain or
+  dynamics, and Tone Match's own manual requires the gain to be right
+  first~\cite{fractalndtonematch}.
+\item \textbf{For the app's own chain}: its parameters are what the player
+  edits, its renderer is the exact forward model, and training on its renders
+  gives labels in its own parameter space with licences under our control.
+\item \textbf{For a dry signal made from the notes}: the transcription already
+  exists, and it gives the one thing the other stand-ins lack, alignment with the
+  target. No published work does this.
+\end{itemize}

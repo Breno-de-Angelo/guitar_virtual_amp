@@ -1,0 +1,88 @@
+% !TeX root = ../main.tex
+\section{Playing techniques}
+\label{sec:techniques}
+
+\subsection{What the stage must do}
+
+Mark, per note, how it is played: bend (and how far, in quarter tones) and
+release, vibrato, slide into or out of the note, hammer-on and pull-off (a note
+sounded by the fretting hand without picking), palm mute, natural and
+artificial harmonics, dead (muted) notes. Some of these change the fingering:
+a slide or a hammer-on stays on one string, an open string cannot be bent.
+
+\subsection{How techniques are detected}
+
+\begin{keyidea}[: read the pitch contour]
+Most techniques are visible in the fine pitch contour of a single note
+(Section~\ref{sec:audio}): a bend is a smooth rise and maybe a fall back, vibrato
+a periodic wobble, a slide a run of semitone steps, a hammer-on a pitch jump
+\emph{without} a new pick attack. Rules on the contour and the attack can
+therefore detect them on clean single-note lines.
+\end{keyidea}
+
+Chen et al.~\cite{chen2015technique} introduced rule-based detection of bends,
+vibrato, slides and hammer-ons on real electric guitar recordings.
+TENT~\cite{su2019tent} built technique recognition into note tracking for
+monophonic solos, with a 14.7\% higher note F-score than an earlier method
+\reported. TART~\cite{gupta2026tart} classifies techniques per note with a small
+network (an MLP). GOAT~\cite{loth2025goat} and IDMT-SMT-Guitar~\cite{kehling2014idmt}
+provide labels. Almost all evaluation is on clean, monophonic material: distortion
+blurs the contour and compression hides the pick attack, so techniques on
+amplified rhythm parts are largely untested.
+
+\begin{inapp}[: rules on Basic Pitch's contour \done]
+\file{transcribe/techniques.rs}; \code{GVA_TECHNIQUES=0} turns it off.
+\begin{itemize}
+\item \textbf{Contour}: Basic Pitch's third output, 264 bins at three per
+  semitone (MIDI pitch $p$ peaks at bin $3(p-21)+1$, measured). With the CRNN
+  engine, Basic Pitch is run again on the guitar audio just for this contour.
+\item \textbf{Single-note passages only}; chords are skipped.
+\item \textbf{Split bends merged}: the note model often reports a bend as two
+  notes; a glide of at least 30\ms{} that does not step through semitones joins
+  them back into one bent note.
+\item \textbf{Bend and release} inside a note; \textbf{vibrato} at 3.5--9\Hz,
+  at least 0.25 semitone deep, at least 2 cycles.
+\item \textbf{Slides}: stepped glides, downward glides or glides of more than
+  3 semitones, with a gap of up to 120\ms{} between the notes.
+\item \textbf{Hammer-on / pull-off}: a pitch jump within 40\ms{} with no
+  high-frequency pick burst (\code{PICK_ATTACK}).
+\item \textbf{Output}: \code{arrange} keeps techniques per pitch; the tab gets
+  \code{bend}, \code{bend_value} (quarter tones) and \code{bend_release} on the
+  struck note, \code{slide} and \code{hammer} on the last tied piece, vibrato
+  on all pieces. The GP5 export writes bends and shift slides, and the importer
+  reads bends back.
+\item Thresholds can be swept with \code{GVA_BEND_RISE}, \code{GVA_BEND_START},
+  \code{GVA_BEND_GLIDE}.
+\end{itemize}
+\end{inapp}
+
+\subsection{What we measured}
+
+\begin{itemize}
+\item On GuitarSet the rules change nothing measurable (F1 0.83 with or without
+  them; 0.76 either way on the crunch render): the 60 excerpts contain only 19
+  annotated glides \measured.
+\item On real technique labels (IDMT, Guitar-TECHS, GOAT, via
+  \code{eval_manifest} with a 5th column in the notes file) \measured:
+  vibrato is found on about 20--40\% of labelled vibrato notes, bends on
+  35--56\%, slides on about 30\% (often marked as legato instead), and false
+  alarms on plain notes are 0--4\%.
+\end{itemize}
+
+So the rules are cautious: they rarely invent a technique, and they miss most.
+
+\subsection{Failure modes}
+\begin{itemize}
+\item No palm mute, harmonics, dead notes or tapping (not implemented).
+\item Chords are skipped by design.
+\item Under distortion the contour gets noisy and compressed attacks hide the
+  pick burst, so bends, vibrato and hammer-ons are missed exactly where they are
+  most common \expected.
+\end{itemize}
+
+\begin{nextsteps}
+Tune the hammer-on attack threshold and the bend rules on GOAT and
+Guitar-TECHS; then a learned per-note classifier (task T3 in
+Section~\ref{sec:next}) for palm mute, harmonics and dead notes, keeping the
+rules for any class where the model is worse.
+\end{nextsteps}

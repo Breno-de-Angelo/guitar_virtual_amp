@@ -1,87 +1,72 @@
 % !TeX root = main.tex
-\documentclass[conference]{IEEEtran}
+\documentclass[11pt]{article}
+\input{../common/preamble}
 
-\usepackage[utf8]{inputenc}
-\usepackage[T1]{fontenc}
-\usepackage{lmodern}
-\usepackage{microtype}
-\usepackage{graphicx}
-\usepackage{tikz}
-\usetikzlibrary{positioning,arrows.meta,fit,backgrounds}
-\usepackage{booktabs}
-\usepackage{makecell}
-\usepackage{multirow}
-\usepackage{amsmath,amssymb}
-\usepackage[table]{xcolor}
-\usepackage{cite}
-\usepackage[hidelinks]{hyperref}
+\fancyhead[L]{\small Tone estimation notes}
+\fancyhead[R]{\small\nouppercase{\leftmark}}
 
-% Draft-only marker for claims that still need checking.
-\newif\ifdraft\drafttrue
-\newcommand{\TODO}[1]{\ifdraft\textcolor{red}{[TODO: #1]}\fi}
-
-\title{Estimating the Electric Guitar Tone of a Commercial Recording:\\
-A Review of Effect Recognition, Amplifier Modelling and Tone Matching}
-
-\author{
-  \IEEEauthorblockN{Breno de Angelo}
-  \IEEEauthorblockA{
-    UFES \\
-    Email: breno.angelo@lcad.inf.ufes.br
-  }
-}
+\title{Estimating the Guitar Tone of a Recording\\[4pt]
+\large State of the art, how it works, and what Guitar Virtual Amp does}
+\author{Breno de Angelo\\\small Guitar Virtual Amp project notes}
+\date{Snapshot of 25 November 2026}
 
 \begin{document}
 \maketitle
 
 \begin{abstract}
-Guitarists who learn a song also want its sound: the amplifier and its gain,
-the cabinet, the equalisation and the effects. Reproducing that tone from a
-commercial recording means estimating a signal chain from audio in which the
-guitar is mixed with other instruments, the dry signal is unknown, and the
-original equipment differs from the one available to the player. This review
-surveys the work that bears on the problem: recognition of guitar effects and
-regression of their parameters, black-box and grey-box modelling of amplifiers
-and effects, modelling without paired dry and processed audio, effect removal,
-audio-effect style transfer with inference-time optimisation, effect
-representations, and the analogous problem of synthesizer sound matching. We
-also describe what commercial products and open-source tools do. Recognising
-which effects are present is close to solved on synthetic guitar data (set F1
-of 0.987 on three-effect chains), and knob values of a known plugin can be
-regressed with a mean absolute error of 0.02--0.05 on a unit scale. Searching
-the parameters by re-rendering the chain beats prediction alone (wet
-reconstruction from 18.2 to 23.1\,dB SI-SDR). Amplifiers can be learned from
-unpaired audio, with listening scores of 77--84 when the dry input comes from
-another guitar. No published method, however, estimates an interpretable
-amplifier, cabinet and effects chain from a separated stem of a commercial
-song, and the one measurement on separated stems shows effect retrieval
-halving against isolated stems. We discuss datasets and their licences, the
-metrics that agree with listeners, and the known failure modes, and we derive
-an approach for an open-source real-time effects application: separate the
-guitar, build a pseudo-dry signal from the transcribed notes or from an effect
-remover, fit the application's own chain to the stem by gradient-free search
-from a learned initial guess, and finish with a linear matching filter.
+\noindent
+A guitarist learning a song wants its notes and its sound: the amplifier and how
+hard it is driven, the cabinet, the effects. This document explains how a
+computer can estimate that sound (the \emph{tone}) from a recording and turn it
+into settings of Guitar Virtual Amp's own pedals, what the research literature
+has achieved, and what the app does today. As in the companion document on
+tablature, every term is defined before use, numbers are labelled
+\measured{}, \reported{} or \expected{}, and parts of the app \done{}, \wip{} or
+\planned. The short version: recognising which effects are present works on
+synthetic, isolated guitar, and searching a chain's settings by rendering it
+(\emph{analysis by synthesis}) beats predicting them; but no published method
+estimates an editable amplifier, cabinet and effects chain from a guitar
+separated out of a commercial song. The app now has a first version of exactly
+that: a gradient-free search (CMA-ES) over its own compressor, distortion, amp,
+delay and reverb, driven by a stand-in dry signal synthesised from the
+transcribed notes, followed by a matching filter. On 12 EGDB test items it beats
+the best factory preset on every target group, but most of the remaining error
+comes from the stand-in dry signal, not from the search.
 \end{abstract}
 
-\begin{IEEEkeywords}
-guitar tone, audio effects, parameter estimation, amplifier modelling,
-style transfer, inference-time optimisation, source separation,
-music information retrieval
-\end{IEEEkeywords}
+\tableofcontents
+\clearpage
 
-\input{sections/01-introduction}
-\input{sections/02-task-and-evaluation}
-\input{sections/03-datasets}
-\input{sections/04-recognition}
-\input{sections/05-modelling}
-\input{sections/06-without-di}
-\input{sections/07-matching}
-\input{sections/08-products}
-\input{sections/09-comparison}
-\input{sections/10-application}
-\input{sections/11-conclusion}
+\input{sections/00-about}
 
-\bibliographystyle{IEEEtran}
+\part{Background}
+\input{sections/01-problem}
+\input{sections/02-dsp}
+\input{sections/03-metrics}
+\input{sections/04-search}
+
+\part{The literature}
+\input{sections/05-datasets}
+\input{sections/06-recognition}
+\input{sections/07-modelling}
+\input{sections/08-without-di}
+\input{sections/09-matching}
+\input{sections/10-products}
+\input{sections/11-comparison}
+
+\part{Guitar Virtual Amp}
+\input{sections/12-design}
+\input{sections/13-implementation}
+\input{sections/14-results}
+\input{sections/15-next}
+
+\appendix
+\part*{Appendices}
+\addcontentsline{toc}{part}{Appendices}
+\input{sections/A-glossary}
+\input{sections/B-code-map}
+
+\bibliographystyle{plainnat}
 \bibliography{references}
 
 \end{document}

@@ -1,0 +1,122 @@
+% !TeX root = ../main.tex
+\section{The app's pipeline end to end}
+\label{sec:app}
+
+This section puts the stages of Part~II together as they run in the app.
+Figure~\ref{fig:app-pipeline} is the data flow; Table~\ref{tab:app-components}
+lists each component, its file and what happens when an optional part is
+missing.
+
+\begin{figure}[h]
+\centering
+\begin{tikzpicture}[
+  node distance=3.5mm,
+  box/.style={draw, rounded corners=2pt, font=\small, align=center,
+              minimum height=8mm, text width=40mm, inner sep=3pt, fill=white},
+  opt/.style={box, dashed},
+  arr/.style={-{Stealth[length=2mm]}, semithick}]
+  \node[box] (in) {Audio file or YouTube\\(\code{yt-dlp})};
+  \node[box, below=of in] (dec) {Decode + SHA-256};
+  \node[opt, below=of dec] (sep) {Separation\\BS-RoFormer / Demucs};
+  \node[opt, right=12mm of sep] (beat) {Beats, bars, meter\\Beat This! / DSP};
+  \node[box, below=of sep] (pan) {Pan split\\(left / centre / right)};
+  \node[box, below=of pan] (notes) {Guitar notes per part\\GAPS / v2 / Basic Pitch};
+  \node[box, below=of notes] (tech) {Techniques\\(Basic Pitch contour)};
+  \node[box, left=12mm of notes] (bass) {Bass notes\\Basic Pitch};
+  \node[box, below=of tech] (arr) {Arrange: quantise,\\fingering, tuning, notation};
+  \node[box, below=of arr] (out) {GP5 tab + \code{.gvtab.json}\\in the tab repository};
+  \node[opt, right=12mm of out] (tone) {Tone estimate per guitar\\(in progress, optional)};
+  \draw[arr] (in) -- (dec);
+  \draw[arr] (dec) -- (sep);
+  \draw[arr] (dec.east) -| (beat.north);
+  \draw[arr] (sep) -- (pan);
+  \draw[arr] (pan) -- (notes);
+  \draw[arr] (notes) -- (tech);
+  \draw[arr] (tech) -- (arr);
+  \draw[arr] (sep.west) -| (bass.north);
+  \draw[arr] (bass.south) |- (arr.west);
+  \draw[arr] (beat.south) |- (arr.east);
+  \draw[arr] (arr) -- (out);
+  \draw[arr] (out) -- (tone);
+\end{tikzpicture}
+\caption{Data flow of \code{transcribe::run} (\file{transcribe/mod.rs}). Dashed
+boxes are optional: the pipeline still runs without them, with the fallbacks of
+Table~\ref{tab:app-components}.}
+\label{fig:app-pipeline}
+\end{figure}
+
+\begin{table}[h]
+\centering
+\caption{Components of the transcription pipeline.}
+\label{tab:app-components}
+\small
+\begin{tabularx}{\textwidth}{@{}>{\raggedright}p{2.2cm}>{\raggedright}p{3.6cm}>{\raggedright}p{3.6cm}X@{}}
+\toprule
+Stage & Default & File & Without the optional part \\
+\midrule
+Source & file (mp3, flac, ogg, wav, m4a) or YouTube & \file{transcribe/youtube.rs} & -- \\
+Separation & BS-RoFormer SW (MSST, Python) & \file{transcribe/separation.rs} & Demucs \code{htdemucs_6s}; else the full mix, one guitar track \\
+Guitar parts & pan split & \file{transcribe/stereo.rs} & one guitar track (mono input or no separation) \\
+Beats and bars & Beat This! final0 (small0) & \file{transcribe/beat_net.rs} & DSP tracker, 4/4 only (\file{beats.rs}) \\
+Guitar notes & GAPS CRNN; v2 if chosen & \file{transcribe/guitar_crnn.rs} & Basic Pitch \\
+Bass notes & Basic Pitch & \file{transcribe/basic_pitch.rs} & -- \\
+Techniques & contour rules & \file{transcribe/techniques.rs} & -- \\
+Fingering & learned tagger (6 strings) & \file{transcribe/fingering_net.rs} & Viterbi (\file{arrange.rs}) \\
+Notation & quantise, tuplets, ties, tuning & \file{transcribe/arrange.rs} & -- \\
+Output & GP5 + sidecar & \file{shared/tab/export.rs}, \file{repository.rs} & -- \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\subsection{Entry points}
+
+\begin{itemize}
+\item \textbf{Tabs page}, button ``Transcrever áudio'', and the Spotify page
+  for a track without a tab (\file{frontend/ui/transcribe.rs}). The form lets
+  the user pick a file or search YouTube, and choose the guitar model and the
+  fingering engine.
+\item \textbf{Batch CLI}, which skips audio already in the repository (also
+  \code{--youtube}):
+\begin{verbatim}
+cargo run --release -p guitar_desktop --bin transcribe -- <paths>
+\end{verbatim}
+\item \textbf{YouTube} (\file{transcribe/youtube.rs}): wraps the external
+  \code{yt-dlp}; searches without an API key, ranks results by title words,
+  ``Artist -- Topic'' channels, penalties for live/cover/karaoke and closeness
+  to the Spotify duration; downloads audio into a private cache, never into
+  the repository. Video IDs are validated before reaching the command line.
+\end{itemize}
+
+\subsection{What a transcription produces}
+
+The result goes to the local tab repository
+(\file{<data dir>/guitar_virtual_amp/tab_repository/}):
+\begin{itemize}
+\item \file{Artist - Title.gp5}, a Guitar Pro 5 file written through the
+  \code{guitarpro} crate (opens in Guitar Pro, TuxGuitar, MuseScore). Tempos are
+  rounded per bar, as GP5 requires.
+\item \file{Artist - Title.gvtab.json}, the \term{sidecar} (\code{TabMetadata}):
+  the source audio's SHA-256 (to skip or replace repeats), the engines used
+  (separator, note model, beat model, fingering), the YouTube ID when there is
+  one, and the time in the audio of every bar (\code{bar_audio_secs}). The tab
+  player uses the bar times (\code{TabMetadata::sync_map}) to play the original
+  recording in exact sync, whatever the GP5 tempo rounding.
+\end{itemize}
+
+\subsection{Cost}
+
+On the laptop (RTX 4070, 8\,GB): a 4.4-minute song takes about 70\,s and
+2.4\,GB of RAM \measured; BS-RoFormer separation alone is 34\,s on a 261\,s
+song. The CRNN windows are the memory peak (about 600\,MB each in tract, so at
+most 4 at a time). The tract crates are built with \cmd{opt-level = 3} even in
+debug builds, otherwise transcription takes minutes.
+
+\begin{inapp}[: work in progress at the time of writing \wip]
+Uncommitted changes in the working tree add an optional last stage: with
+``Estimar o timbre (experimental)'' checked in the Transcribe form (setting
+\code{AppSettings::transcription_tone}), each guitar part's audio and notes go
+to \code{tone::estimate_from_transcription}, and the estimated chain is saved as
+a user preset tagged with the song and the track (\code{tone::save_preset}), so
+the Tabs page can suggest it. It needs separation. The method is the subject of
+the companion document \file{docs/papers/tone-estimation/}.
+\end{inapp}

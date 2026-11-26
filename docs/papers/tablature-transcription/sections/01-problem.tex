@@ -1,0 +1,193 @@
+% !TeX root = ../main.tex
+\section{The problem}
+\label{sec:problem}
+
+\subsection{What a tablature is}
+
+A \term{tablature} (tab) is guitar notation that says \emph{where} to play each
+note, not only \emph{which} note. It has one horizontal line per string, drawn
+with the highest-pitched string (string 1, the thin high E) at the top. A number
+on a line is the fret to press on that string; 0 means the open string. Numbers
+stacked vertically are played together (a chord). Above or below the lines, a
+tab also gives the rhythm (how long each note lasts, where the bars are) and
+technique marks: \emph{b} for a bend, \emph{/} or \emph{\textbackslash} for a
+slide, \emph{h} and \emph{p} for hammer-on and pull-off, \emph{\textasciitilde}
+for vibrato, \emph{PM} for palm mute. Figure~\ref{fig:tab} shows a short example.
+
+\begin{figure}[h]
+\centering
+\begin{tikzpicture}[x=0.9cm,y=0.42cm,font=\small]
+  % strings
+  \foreach \s/\n in {1/e,2/B,3/G,4/D,5/A,6/E} {
+    \draw[gray] (0,-\s) -- (13,-\s);
+    \node[anchor=east,font=\scriptsize] at (-0.1,-\s) {\n};
+  }
+  \draw (0,-1) -- (0,-6); \draw (6.5,-1) -- (6.5,-6); \draw (13,-1) -- (13,-6);
+  % bar 1: a power chord twice, then a single note line
+  \foreach \x in {0.8,2.0} {
+    \node[fill=white,inner sep=1pt] at (\x,-6) {3};
+    \node[fill=white,inner sep=1pt] at (\x,-5) {5};
+    \node[fill=white,inner sep=1pt] at (\x,-4) {5};
+  }
+  \node[fill=white,inner sep=1pt] at (3.3,-3) {5};
+  \node[fill=white,inner sep=1pt] at (4.2,-3) {7};
+  \node[font=\scriptsize] at (3.75,-2.3) {h};
+  \node[fill=white,inner sep=1pt] at (5.4,-2) {8};
+  \node[font=\scriptsize] at (5.4,-0.2) {b (full)};
+  \draw[->,>=Stealth] (5.55,-1.6) to[bend left=30] (5.9,-0.6);
+  % bar 2
+  \node[fill=white,inner sep=1pt] at (7.5,-1) {5};
+  \node[fill=white,inner sep=1pt] at (8.8,-1) {7};
+  \node[font=\scriptsize] at (8.15,-0.3) {/};
+  \node[fill=white,inner sep=1pt] at (10.2,-1) {7};
+  \node[font=\scriptsize] at (10.6,-0.3) {\textasciitilde\textasciitilde\textasciitilde};
+  \node[fill=white,inner sep=1pt] at (12,-6) {0};
+  \node[font=\scriptsize] at (12,-7) {PM};
+  % rhythm hints
+  \foreach \x in {0.8,2.0,3.3,4.2,5.4,7.5,8.8,10.2,12} \draw (\x,-7.8) -- (\x,-8.8);
+  \node[font=\scriptsize,anchor=west] at (0,-9.6) {rhythm stems and beams go here; bar lines split the time into measures};
+\end{tikzpicture}
+\caption{A two-bar tablature. Bar 1: a power chord (frets 3--5--5 on strings
+6--5--4) struck twice, a hammer-on from fret 5 to 7 on string 3, then fret 8 on
+string 2 bent up a whole tone. Bar 2: a slide from fret 5 to 7 on string 1, a
+held note with vibrato, and a palm-muted open low E.}
+\label{fig:tab}
+\end{figure}
+
+A complete tablature of one guitar part therefore contains four kinds of
+information:
+\begin{enumerate}
+\item \textbf{Notes}: when each note starts (\term{onset}), when it stops
+  (\term{offset}) and its pitch.
+\item \textbf{Fingering}: a string and fret for each note, given a tuning
+  (standard E A D G B E, drop D, a half step down, 7 strings, \ldots) and maybe
+  a capo.
+\item \textbf{Rhythm notation}: beats, bars, time signatures (4/4, 6/8, \ldots)
+  and a written duration for each note (quarter, eighth, triplet, \ldots).
+\item \textbf{Techniques}: bends (and how far), releases, slides, hammer-ons
+  and pull-offs, vibrato, palm mutes, harmonics, dead notes.
+\end{enumerate}
+When a song has several guitars, each part must also become its own track.
+
+\subsection{Why it is hard}
+
+\paragraph{One pitch, several places.} On a guitar the same pitch can be played
+on several strings. The E above middle C (MIDI pitch 64) is the open first
+string, the 5th fret of string 2, the 9th fret of string 3, the 14th of string 4
+and the 19th of string 5: five positions on a 22-fret guitar
+(Figure~\ref{fig:positions}). The audio says the pitch; the tab needs the
+position. Guitarists choose positions so the hand moves little and chords are
+playable, and they have habits, so ``the'' correct tab is partly a matter of
+convention. This is the \term{fingering} or \term{string-fret assignment}
+problem (Section~\ref{sec:fingering}).
+
+\begin{figure}[h]
+\centering
+\begin{tikzpicture}[x=0.55cm,y=0.42cm,font=\scriptsize]
+  \foreach \s in {1,...,6} \draw[gray] (0,-\s) -- (22,-\s);
+  \foreach \f in {0,...,22} \draw[gray!50] (\f,-1) -- (\f,-6);
+  \draw[very thick] (0,-1) -- (0,-6);
+  \foreach \f in {3,5,7,9,15,17,19,21} \fill[gray!40] (\f-0.5,-3.5) circle (2pt);
+  \fill[gray!40] (11.5,-2.5) circle (2pt); \fill[gray!40] (11.5,-4.5) circle (2pt);
+  \foreach \s/\f in {1/0,2/5,3/9,4/14,5/19} {
+    \fill[keyc] ({max(\f-0.5,-0.4)},-\s) circle (5pt);
+    \node[text=white,font=\tiny\bfseries] at ({max(\f-0.5,-0.4)},-\s) {\f};
+  }
+  \foreach \s/\n in {1/1 (e),2/2 (B),3/3 (G),4/4 (D),5/5 (A),6/6 (E)}
+    \node[anchor=east] at (-0.6,-\s) {string \n};
+  \foreach \f in {0,5,10,15,20} \node at (\f,-6.9) {\f};
+\end{tikzpicture}
+\caption{The five places to play E4 (MIDI 64) on a 22-fret guitar in standard
+tuning. Numbers are frets.}
+\label{fig:positions}
+\end{figure}
+
+\paragraph{Polyphony.} A strummed chord puts up to six notes within a few tens
+of milliseconds, and their harmonics overlap. Detecting which pitches are
+present is much harder than for a single melody.
+
+\paragraph{Distortion.} Electric guitar is almost always played through an
+amplifier and effects. Distortion adds many harmonics and also
+\term{intermodulation} products (sums and differences of the frequencies being
+played). A note detector can then report notes that are not there, typically an
+octave or a fifth away from the real ones (Section~\ref{sec:audio-harmonics}).
+
+\paragraph{The mix.} In a commercial song the guitar shares the recording with
+drums, bass, keyboards and voice, often with a second guitar playing the same
+or a different part. The guitar must be isolated before (or while) its notes
+are found (Section~\ref{sec:separation}).
+
+\paragraph{Scarce labels.} To train or test a system we need recordings where
+every note's onset, pitch and string is known. That requires special hardware
+(a \term{hexaphonic pickup}, which records each string separately) or hours of
+expert annotation. The public datasets are small and mostly solo guitar
+(Section~\ref{sec:datasets}). No public dataset pairs commercial band
+recordings with reference tabs.
+
+\subsection{Two ways to build a system}
+
+\begin{keyidea}[: modular versus end-to-end]
+A \textbf{modular pipeline} splits the task into sub-problems (separation,
+notes, rhythm, fingering, techniques) and solves each with its own model or
+algorithm. Each part can be tested and replaced on its own, and it can start
+from a full mix. Errors accumulate from stage to stage. An \textbf{end-to-end
+model} predicts strings and frets directly from audio with one network. It can
+use the timbre of each string, but all published ones need an isolated guitar.
+\end{keyidea}
+
+Figure~\ref{fig:families} contrasts the two. A third line of work, large
+multi-instrument \term{sequence-to-sequence} transcribers (MT3, YourMT3+,
+MuScriptor, Section~\ref{sec:notes-seq2seq}), does not output tablature but is a
+strong candidate for the note stage of a modular pipeline, because it is
+trained on full mixes.
+
+\begin{figure}[h]
+\centering
+\begin{tikzpicture}[
+  node distance=4mm,
+  box/.style={draw, rounded corners=2pt, font=\small, align=center,
+              minimum height=8mm, inner sep=3pt, fill=white},
+  arr/.style={-{Stealth[length=2mm]}, semithick}]
+  \node[box] (mix) {Song\\(mix)};
+  \node[box, right=of mix] (sep) {Source\\separation};
+  \node[box, right=of sep] (amt) {Note\\transcription};
+  \node[box, right=of amt] (fing) {String and\\fret};
+  \node[box, right=of fing] (tab) {Tab};
+  \node[box, above=of amt] (beat) {Beats and bars};
+  \node[box, below=of amt] (tech) {Techniques};
+  \draw[arr] (mix) -- (sep);
+  \draw[arr] (sep) -- (amt);
+  \draw[arr] (amt) -- (fing);
+  \draw[arr] (fing) -- (tab);
+  \draw[arr] (mix.north) |- (beat.west);
+  \draw[arr] (beat.east) -| (tab.north);
+  \draw[arr] (sep.south) |- (tech.west);
+  \draw[arr] (tech.east) -| (tab.south);
+  \begin{scope}[on background layer]
+    \node[draw, dashed, rounded corners, fit=(mix)(tab)(beat)(tech),
+          inner sep=3mm, label={[font=\small]above left:Modular pipeline}] {};
+  \end{scope}
+  \node[box, below=20mm of mix] (mix2) {Solo\\guitar};
+  \node[box, right=8mm of mix2, minimum width=60mm] (e2e)
+       {One network: audio $\to$ fret on each string};
+  \node[box, right=8mm of e2e] (tab2) {Tab};
+  \draw[arr] (mix2) -- (e2e);
+  \draw[arr] (e2e) -- (tab2);
+  \begin{scope}[on background layer]
+    \node[draw, dashed, rounded corners, fit=(mix2)(tab2), inner sep=3mm,
+          label={[font=\small]below left:End-to-end model}] {};
+  \end{scope}
+\end{tikzpicture}
+\caption{The two families of tablature transcription systems. Modular
+pipelines can start from a full mix; every published end-to-end model starts
+from an isolated guitar recording.}
+\label{fig:families}
+\end{figure}
+
+\begin{inapp}[: which family]
+The app is a modular pipeline (\file{transcribe/mod.rs}, function
+\code{transcribe::run}). Section~\ref{sec:app} shows it end to end; Part~II
+explains each stage. The reason for this choice is measured, not assumed: on
+electric guitar and on mixes the modular pipeline beats the end-to-end models
+we could run (Section~\ref{sec:bench-tab}).
+\end{inapp}

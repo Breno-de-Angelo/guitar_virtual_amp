@@ -1,0 +1,236 @@
+% !TeX root = ../main.tex
+\section{Our benchmarks}
+\label{sec:benchmark}
+
+Published numbers use different test sets and metrics
+(Section~\ref{sec:eval}), so the project runs its own benchmarks. Stage-level
+results were already given in Part~II; this section explains the test sets and
+protocols and gives the results that involve several stages.
+
+\subsection{Test sets and what each one tests}
+
+\begin{table}[h]
+\centering
+\caption{The benchmark matrix. Training sets keep their test parts out.}
+\label{tab:testsets}
+\small
+\begin{tabularx}{\textwidth}{@{}>{\raggedright}p{3.4cm}>{\raggedright}p{4.2cm}>{\raggedright}p{2.6cm}X@{}}
+\toprule
+Set & Audio & Labels & Tests \\
+\midrule
+GuitarSet players 03--05 & solo acoustic, mic & notes + strings & clean baseline, fingering \\
+GuitarSet $\times$ presets (\code{GVA_EVAL_TONE}) & same, through the app's chains & same & robustness to tone \\
+EGDB test & electric DI, Marshall, Mesa, Plexi sims, 5 real clips & notes + strings & amp tones, fingering on electric \\
+EGSet12 & real electric into a miked amp (12) & notes + strings & real electric \\
+Guitar-TECHS P3 + techniques & electric DI and miked amp & MIDI notes, techniques & real electric, techniques \\
+IDMT-SMT-Guitar & DI notes and licks & notes + style & techniques \\
+GOAT test & DI + 5 amp renders (7 items per tone) & GP tabs with techniques & Tab F1, techniques \\
+Band mixes (\code{make_mixes.py}) & labelled guitar over MUSDB18 drums, bass, vocals & notes & separation, full mix \\
+MoisesDB (\code{prepare_moisesdb.py}) & 222 real songs, 60\,s each & none (isolated guitars) & separation on real productions \\
+GP SoundFont renders (\code{eval_transcription}) & the user's Guitar Pro files, synthesised & tabs & whole pipeline, several tracks \\
+Real songs (\code{align_tabs.py}) & commercial recordings & the user's tabs, aligned & the actual use case (not collected yet) \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\subsection{Protocols}
+
+\paragraph{Stage benchmarks (Python).} \code{scripts/train/bench_*.py} run one
+model per stage on up to 12 items per group (spread evenly; GOAT has 7 per tone,
+EGDB real 5), on a DGX Spark (NVIDIA GB10 GPU). Metrics come from
+\code{mir_eval}, means per item. Guitar-TECHS and GOAT labels are shifted per
+recording to remove a constant offset. Fingering is scored by running the app's
+own Viterbi or tagger through \cmd{cargo run --example fingering}, so the Python
+and Rust numbers use the same code.
+
+\paragraph{End-to-end benchmarks (Rust).} Ignored tests in
+\file{transcribe/eval.rs} run \code{transcribe::run} (the real app pipeline) and
+score the finished tab: \code{eval_guitarset}, \code{eval_transcription},
+\code{eval_fingering}, \code{eval_real}, \code{eval_guitar_pairs},
+\code{eval_manifest}. Commands are in Appendix~\ref{app:code}.
+
+\begin{caution}[: known biases of these benchmarks]
+\begin{itemize}
+\item The band mixes put a guitar part over an \emph{unrelated} song (different
+  key and tempo). Models that use musical context (sequence-to-sequence
+  transcribers) may be penalised.
+\item Both TabCNN models were trained on GuitarSet, probably including players
+  03--05, so their GuitarSet numbers may be optimistic.
+\item MuScriptor's training set is private; overlap with our test sets cannot be
+  ruled out.
+\item v2 saw other clips and players of EGDB, Guitar-TECHS and GuitarSet (never
+  GOAT, EGSet12 or MUSDB18 audio). EGDB DI/Plexi/real was its validation set,
+  so its EGDB scores are slightly optimistic.
+\item The Viterbi's weights were fitted on GuitarSet 00--02 and 10 human tabs,
+  and its string prior comes from GuitarSet 00--02, so string agreement on
+  those is optimistic.
+\end{itemize}
+\end{caution}
+
+\subsection{Tablature: modular against end-to-end}
+\label{sec:bench-tab}
+
+\begin{table}[h]
+\centering
+\caption{Tab F1 (F50 note match on the same string) \measured{}
+(\code{bench_tab.py}). Modular rows place the transcribed notes with the
+Viterbi. The last row gives the Viterbi's string accuracy on the true notes.
+EGDB amps: mean of three amp sims; mix columns: EGDB clips in band mixes.
+$^{*}$String accuracy, not Tab F1.}
+\label{tab:bench-tab}
+\footnotesize
+\setlength{\tabcolsep}{3pt}
+\begin{tabular}{@{}lccccccc@{}}
+\toprule
+Method & EGDB DI & EGDB amps & EGSet12 & GS comp & GS solo & Raw mix & BS-RoF.\ stem \\
+\midrule
+GAPS + Viterbi & 0.52 & 0.44 & 0.57 & 0.71 & 0.55 & 0.36 & 0.47 \\
+v2 + Viterbi & \textbf{0.60} & \textbf{0.55} & 0.57 & 0.73 & 0.53 & 0.33 & \textbf{0.59} \\
+Basic Pitch + Viterbi & 0.45 & 0.43 & 0.40 & 0.46 & 0.42 & 0.28 & 0.45 \\
+YourMT3+ + Viterbi & 0.59 & 0.48 & 0.30 & \textbf{0.76} & 0.54 & \textbf{0.43} & 0.46 \\
+MuScriptor large + Viterbi & 0.53 & 0.53 & \textbf{0.63} & 0.64 & 0.50 & 0.37 & 0.54 \\
+\midrule
+TabCNN (end-to-end) & 0.40 & 0.32 & 0.31 & 0.71 & 0.76 & 0.18 & 0.34 \\
+TabCNN-GPFX (end-to-end) & 0.43 & 0.37 & 0.40 & 0.74 & \textbf{0.81} & 0.20 & 0.37 \\
+\midrule
+Viterbi on true notes$^{*}$ & \multicolumn{2}{c}{0.74} & 0.69 & 0.80 & 0.56 & -- & -- \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Reading Table~\ref{tab:bench-tab}:
+\begin{itemize}
+\item \textbf{The modular pipeline wins on electric guitar and mixes} (EGDB amps
+  0.55 against 0.37; separated mix 0.59 against 0.37). TabCNN's weak point is
+  note detection on electric guitar (its F50 is 0.36--0.50 on EGDB), not string
+  choice.
+\item \textbf{TabCNN wins on GuitarSet solo lines} (0.81 against 0.53). The
+  cause is the Viterbi: given the true notes it puts only 56\% of solo notes on
+  the player's string. This was the measurement that made learned fingering the
+  priority; with the tagger, v2's Tab F1 on GuitarSet solo rises to 0.63 and on
+  BS-RoFormer stems to 0.65 (Section~\ref{sec:fingering}).
+\item \textbf{MuScriptor large gives the best tab on EGSet12} (0.63 against 0.57
+  at equal F50): fewer stray notes inside chords, so the fingering stage gets
+  cleaner chord shapes.
+\end{itemize}
+
+\subsection{Real electric guitar: EGSet12}
+
+\begin{table}[h]
+\centering
+\caption{EGSet12, 12 real solo electric performances (Telecaster into a miked
+amp, 380\,s), none used in training \measured.}
+\label{tab:egset12}
+\small
+\begin{tabular}{@{}lccc@{}}
+\toprule
+Method & F50 & Onset-offset F1 & Tab F1 \\
+\midrule
+GAPS (+ Viterbi) & \textbf{0.89} & 0.41 & 0.57 \\
+v2 (+ Viterbi) & 0.88 & \textbf{0.57} & 0.57 \\
+MuScriptor large (+ Viterbi) & \textbf{0.89} & 0.56 & \textbf{0.63} \\
+Basic Pitch (+ Viterbi) & 0.76 & 0.56 & 0.40 \\
+YourMT3+, guitar classes (+ Viterbi) & 0.54 & 0.45 & 0.30 \\
+TabCNN / TabCNN-GPFX & 0.48 / 0.56 & -- & 0.31 / 0.40 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+TabCNN-GPFX's paper reports 0.585 \emph{frame-level} tab F1 on EGSet12
+\reported; at note level it reaches 0.40 here, a reminder that frame and note
+metrics differ.
+
+\subsection{Real mixes: MoisesDB}
+\label{sec:bench-moises}
+
+MoisesDB songs come with isolated guitar tracks but no note labels. The
+benchmark (\code{bench_moisesdb.py}) cuts the 60\,s with the most guitar from
+each of the 222 songs with guitar (113 with distorted guitar, 66 clean
+electric, 43 acoustic only), transcribes the mix or a separated stem, and scores
+the notes against notes transcribed from the isolated guitars.
+
+\begin{keyidea}[: a benchmark without labels]
+If a model's notes on the separated stem agree with its own notes on the clean
+isolated guitar, the mix and the separator cost it little. Two references are
+used: \term{self} (the same model's notes on the isolated guitars: what the mix
+costs that model) and \term{consensus} (notes on which several models agree).
+This ranks \emph{separators} and mix robustness well. It does not rank note
+models, because each model scores best against a reference that includes
+itself.
+\end{keyidea}
+
+\begin{table}[h]
+\centering
+\caption{MoisesDB, all 222 songs, F50 against the consensus of v2 and GAPS on
+the isolated guitars (``self'' reference in brackets) \measured.}
+\label{tab:moises}
+\small
+\begin{tabular}{@{}lcc@{}}
+\toprule
+Input & GAPS & v2 \\
+\midrule
+Raw mix & 0.42 (0.45) & 0.41 (0.45) \\
+\code{htdemucs_6s} stem & 0.58 (0.63) & 0.58 (0.65) \\
+BS-RoFormer SW stem & \textbf{0.71 (0.76)} & \textbf{0.70 (0.78)} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+On the 24 songs MuScriptor large ran on (it is too slow for all 222), it loses
+less on the raw mix than the CRNNs (self reference 0.54 against 0.43--0.45) but
+still scores only 0.42 there, against 0.71 for v2 on the BS-RoFormer stem; on
+the stem it is no better than the CRNNs \measured. The question left open by the
+synthetic mixes is settled: keep separator + CRNN. By guitar kind, v2 on the
+BS-RoFormer stem scores 0.56 on distorted, 0.75 on clean electric and 0.83 on
+acoustic guitar.
+
+\subsection{The app end to end}
+\label{sec:bench-app}
+
+\begin{itemize}
+\item \textbf{GuitarSet players 03--05} (\code{eval_guitarset}, final-tab F1
+  median): GAPS 0.84 clean, 0.76 ``Blues Crunch'', 0.43 ``Metal High Gain''; v2
+  0.86, 0.81, 0.69 (Section~\ref{sec:notes}). String/fret agreement with the
+  tagger: 78\% (GAPS, clean), 76\% (v2, metal).
+\item \textbf{History} on an earlier 60-excerpt GuitarSet selection (\file{ROADMAP.md}):
+  final-tab F1 0.70 with the first pipeline, 0.73 with Basic Pitch and the new
+  rhythm stage, 0.83 with the guitar CRNN. Guitar Pro SoundFont renders of
+  isolated guitar: 0.82 $\to$ 0.85; full mixes without separation: 0.52 $\to$
+  0.68.
+\item \textbf{Two guitars in one stereo mix} (\code{eval_guitar_pairs}): lead
+  part 0.85--0.88 with the pan split against 0.40--0.43 as one merged track
+  (Section~\ref{sec:separation}).
+\item \textbf{Viterbi fingering, first cost function $\to$ fitted costs and
+  string prior} (true notes, share on the human's string): GuitarSet players
+  03--05 65.9\% $\to$ 75.4\%; 10 human Guitar Pro tabs 58.5\% $\to$ 65.4\%
+  (optimistic: the weights were fitted on those tabs).
+\end{itemize}
+
+\subsection{Toward a real-song benchmark}
+\label{sec:bench-real}
+
+The goal is 30--50 commercial recordings the owner has, each with a Guitar Pro
+tab of the same song, aligned to the audio and hand-checked.
+\code{scripts/train/align_tabs.py} \done{} aligns a tab to a recording with
+\code{synctoolbox} (multi-resolution DTW on chroma and onset features computed
+from the tab's notes; the best transposition within $\pm2$ semitones is
+applied), writes per-track notes in recording time, and a hand-check copy of the
+tab with a sidecar so the Tabs page plays the recording in sync.
+\code{guitar_core/examples/tab_sync_check.rs} checks such a copy through the
+app's own loader. Only pairs marked \code{checked} go into \code{eval_real.tsv}.
+
+Validation on recordings with known note times \measured{}
+(\code{validate_tab_align.py}): note F1 at 50\ms{} between the aligned tab and
+the labels is 0.92 on EGSet12 (median onset error 12\ms) and 0.80 on the GOAT
+test split (18\ms); with per-bar tempo drift plus an intro added, 0.84 and 0.73.
+The tab's own timing on these click-tracked sets gives 0.95 and 0.92, the
+ceiling. Rejection rules (\code{cost_ratio} $>0.70$ or \code{stall} $>0.10$)
+kept 121 of 128 correct pairs and rejected all 168 wrong-tab pairs and all 28
+tabs with 15--25\% of their bars removed, with a thin margin.
+
+\begin{caution}[: status]
+No real song pairs have been collected or checked yet, and \code{eval_real} is
+written but unmeasured. Until then, every number in this document is on solo
+guitar, synthetic mixes or label-free real mixes. The use case itself is not
+yet measured.
+\end{caution}

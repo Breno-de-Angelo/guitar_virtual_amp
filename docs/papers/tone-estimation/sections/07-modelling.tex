@@ -1,0 +1,100 @@
+% !TeX root = ../main.tex
+\section{Amplifier and effect modelling}
+\label{sec:modelling}
+
+Modelling is the \emph{forward} problem: given the dry signal, produce the
+processed one. It matters here for two reasons: a model can be the output of a
+tone estimator (a capture loaded into a player), and a model with few,
+interpretable parameters makes the inverse problem easier to search.
+
+\subsection{Black-box models from paired data}
+
+\begin{keyidea}[: capture = learn the device from dry/wet pairs]
+Record a few minutes of dry guitar, play it through the real amplifier, record
+the output, and train a network to map one to the other with an ESR loss. The
+network then imitates that amplifier at that setting. This is what Neural Amp
+Modeler, Kemper profiling, TONEX and Neural Capture do.
+\end{keyidea}
+
+Feed-forward WaveNets~\cite{damskagg2019deep,damskagg2019realtime} and recurrent
+networks~\cite{wright2019realtime} model amplifiers and pedals from a few minutes
+of paired audio. Wright et al.\ report test ESR of 0.2--0.3\% and MUSHRA scores
+of 90--98 on two tube amplifiers, faster than real time on a CPU
+\reported~\cite{wright2020realtime}; a perceptual pre-emphasis improves the
+result at no cost~\cite{wright2020perceptual}. Temporal convolutional networks
+model compressors~\cite{steinmetz2022efficient}; time-varying feature modulation
+extends their memory for fuzz and compression~\cite{comunita2023modelling}. The
+largest comparison (40 devices; LSTM, TCN, GCN and S4 models) ranks state-space
+models with time-varying modulation best and finds LSTMs unreliable across
+devices~\cite{comunita2025differentiable}. Vanhatalo et al.\ review the
+field~\cite{vanhatalo2022review}.
+
+Neural Amp Modeler (NAM) has become the open format for captures: an MIT-licensed
+trainer, core and plugin~\cite{atkinsonndnam}, a JSON \file{.nam} file with
+WaveNet (``A1'', and the slimmable ``A2''~\cite{atkinson2025slimmable,atkinson2026a2})
+and LSTM architectures, and optional metadata (gear type, tone type, gain). The
+metadata are ready-made weak labels for a capture library. Any capture is one
+setting of one device, made with the device present.
+
+\begin{inapp}[: NAM in the app]
+The NAM Model pedal runs \file{.nam} files through the pure-Rust \code{nam-rs}
+runtime; a standard WaveNet runs at about 11 times real time on one x86 core
+and does not resample, so models must match the 48\kHz{} host rate. The tone
+estimator does not use NAM captures yet (Section~\ref{sec:design}).
+\end{inapp}
+
+\subsection{Knobs and many devices in one model}
+
+A model can take the knobs as inputs. Juvela et al.\ recorded 4.5\,h of an
+amplifier with a robot turning its knobs and trained a conditioned LSTM that
+listeners could not tell from a circuit simulation~\cite{juvela2023endtoend}.
+PANAMA chooses which settings to record by the disagreement of an ensemble, and
+with 75 settings matches per-setting NAM captures in a listening
+test~\cite{grotschla2025parametric}. Hypernetwork conditioning beats
+concatenation for recurrent models~\cite{yeh2024hyper}.
+
+One model can also cover many devices. Chen et al.\ condition a GCN on a tone
+embedding from a contrastively trained encoder, so a wet reference clip selects
+the tone; on unseen amplifiers the loss is about twice the seen-amplifier loss,
+and a case study missed an EQ the model did not
+represent~\cite{chen2024zeroshot,chen2024demo}. Open-Amp trains a TCN with a
+394-entry device embedding on renders through crowd-sourced captures; a new
+analog pedal is added by fitting only its embedding~\cite{wright2025openamp}.
+Embedding-only enrolment is a small search space, a candidate target for a
+wet-only loss (the paper used paired data).
+
+\subsection{Grey-box and differentiable signal processing}
+
+\term{Grey-box} models keep the structure of the circuit and learn only its
+values. The classic block structure is \term{Wiener--Hammerstein}: a linear
+filter, a static (memoryless) nonlinearity, another linear
+filter~\cite{eichas2017block,eichas2018graybox}, later made
+differentiable~\cite{kuznetsov2020differentiable,colonel2022waveshapers}.
+Esqueda et al.\ learn the component values of Fender, Marshall and Vox tone
+stacks from audio~\cite{esqueda2021differentiable}. Miklánek et al.\ put a
+white-box tone stack between a recurrent preamp and power stage; trained on
+4--12 minutes covering one to three tone-stack settings, it scored 87--95 MUSHRA
+on unseen settings where a black-box network trained on the same data scored
+18--47 \reported~\cite{miklanek2023neural}. The DDSP guitar amplifier of Yeh et
+al.\ (preamp, tone stack, push--pull power amp, output transformer) needs about
+1\,350 operations per sample and beats a recurrent model of the same
+cost~\cite{yeh2025ddsp}. Grey-box compressors~\cite{wright2022greybox},
+phasers~\cite{carson2023differentiable} and modulation
+effects~\cite{carson2026gradient} follow the same idea. Grey-box models are not
+yet as accurate as neural networks for distortion and fuzz, though competitive
+for compressors~\cite{comunita2025differentiable}.
+
+Libraries make these models reusable: DDSP~\cite{engel2020ddsp}, dasp-pytorch
+and DeepAFx-ST~\cite{steinmetz2022style}, GRAFX~\cite{lee2024grafx},
+NablAFx~\cite{comunita2025nablafx}, DiffVox~\cite{yu2025diffvox}; Hayes et al.\
+review differentiable signal processing~\cite{hayes2024review}. DiffVox fits a
+differentiable EQ, compressor, delay and reverb to each of 435 vocal tracks and
+studies the distribution of the fitted presets, a recipe that would turn guitar
+stems into a prior over settings.
+
+\begin{keyidea}[: why this matters for estimation]
+The app's amplifier is itself grey-box-like: gain, a voicing, a three-band tone
+stack. That matters less for modelling quality than for estimation: a few
+interpretable parameters are what a search can explore and what a player can
+adjust afterwards.
+\end{keyidea}

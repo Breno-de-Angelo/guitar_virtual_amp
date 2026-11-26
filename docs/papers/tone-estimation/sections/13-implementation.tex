@@ -1,0 +1,259 @@
+% !TeX root = ../main.tex
+\section{What is implemented}
+\label{sec:impl}
+
+All code is in \file{guitar_core/src/tone/}. It is blocking and CPU-heavy, so it
+runs on worker threads only. This section follows the data through it, with the
+constants the code uses, so that a change in the code can be checked against
+this description.
+
+\subsection{Overview}
+
+\begin{inapp}[: entry points]
+\begin{itemize}
+\item \code{tone::estimate(target, dry, &Options)} \done: \code{target} and
+  \code{dry} are 48\kHz{} mono and aligned. Returns an \code{Estimate}: the best
+  search result (\code{best}), the closest factory preset (\code{preset}), the
+  template settings, the excerpt used, the measured echo (\wip) and the number
+  of renders.
+\item \code{tone::estimate_from_notes(target, notes, &Options)} \done: renders the
+  stand-in dry signal from notes with the plucked-string model, then calls
+  \code{estimate}.
+\item \code{tone::estimate_from_transcription(audio, notes, &Options)} \wip: the
+  same, from the transcriber's notes (the model's mean posterior stands in for
+  velocity: $v = 0.4 + 0.6\,a$, clamped to $[0.05, 1]$).
+\item \code{tone::save_preset(estimate, title, artist, track)} \wip: writes the
+  match IR and a user preset (Section~\ref{sec:impl-save}).
+\end{itemize}
+\code{Options} defaults: excerpt 12\,s, population 16, 30 generations, all CPU
+threads, seed 1, spectral floor 80\dB.
+\end{inapp}
+
+The algorithm, in order:
+\begin{enumerate}
+\item Cut the 12\,s window of the target with the most energy (energy summed in
+  0.1\,s blocks; \code{loudest_window}), and the same window of the dry signal.
+\item Analyse the target once (\code{features::Target}).
+\item Measure the delay time, if there is an echo (\code{analysis::echo_delay},
+  \wip).
+\item Score every factory preset at input RMS 0.1 (presets with a Looper or a
+  Pitch Shifter are excluded); keep the closest as the baseline.
+\item For each amp voicing (Clean, Crunch, Lead), run separable CMA-ES over the
+  template chain from a neutral start; keep the best of the three.
+\item Return the best chain and the EQ it still needs, which becomes the match
+  IR.
+\end{enumerate}
+
+\subsection{The stand-in dry signal}
+\label{sec:impl-dry}
+
+\begin{keyidea}[: Karplus--Strong]
+A plucked string can be simulated with a delay line whose length is one period
+of the note, filled with a short noise burst and fed back through a gentle
+low-pass filter: each pass around the loop the burst repeats (giving the pitch)
+and loses some treble (giving the natural decay)~\cite{karplus1983digital}. The
+\emph{extended} version~\cite{jaffe1983extensions} adds a fractional delay for
+exact tuning, a decay-time control and a pluck-position comb filter.
+\end{keyidea}
+
+\begin{inapp}[: the plucked-string model, \file{tone/pluck.rs} \done]
+For each note (start, end, MIDI pitch, velocity):
+\begin{itemize}
+\item \textbf{Delay line} of $f_s/f_0 - 0.5$ samples (the two-point loss filter
+  adds half a sample), with linear interpolation for the fractional part.
+\item \textbf{Excitation}: white noise through a one-pole low-pass (coefficient
+  \code{brightness}, plus \code{velocity_brightness} times the velocity), minus a
+  copy delayed by \code{pluck_position} times the period (the comb notches a pick
+  at that point along the string creates), scaled by velocity$^{1.5}$.
+\item \textbf{Loop}: two-point average (high-frequency loss) times a gain $g$
+  chosen so the note decays by 60\dB{} in $T_{60}$:
+  $g = 10^{-3/(f_0 T_{60})}$. While the note is held,
+  $T_{60} = T_{\mathrm{lowE}}\cdot(f_{E2}/f_0)^{0.7}$ with $T_{\mathrm{lowE}}$ = \code{low_e_t60}, clamped to
+  $[0.4\,\text{s}, T_{\mathrm{lowE}}]$ (higher notes ring shorter); after the note
+  ends, $T_{60}$ = \code{release_secs}.
+\item \textbf{Post}: a DC blocker, then the fixed filter \code{DI_EQ}: the
+  measured long-term spectrum of real DI minus this model's, as a minimum-phase
+  IR.
+\end{itemize}
+Settings were fitted by CMA-ES (\code{eval::fit_pluck}) on 14 Guitar-TECHS DI
+recordings, minimising the EQ-forgiven distance to the real DI of the same
+notes: \code{pluck_position} 0.48, \code{release_secs} 0.45, \code{low_e_t60} 16\,s,
+\code{brightness} 0.008, \code{velocity_brightness} 0. The distance fell from
+13.05 to 9.90\dB{} on the fitting set \measured. Refit only on Guitar-TECHS,
+never on EGDB (the benchmark).
+\end{inapp}
+
+\begin{inapp}[: the sampler, \file{tone/sampler.rs} \wip]
+An alternative stand-in built from real recordings: Guitar-TECHS
+``allsinglenotes'' DI (every pitch of a guitar, plucked and held; CC BY 4.0).
+Each transcribed note gets the recorded note of the nearest pitch, re-pitched by
+resampling if needed, scaled by the velocity ratio (clamped to 0.2--4), started
+10\ms{} early so the attack is whole, and faded out over 60\ms{} after the note's
+end. It has a real pickup's attack and decay, from another guitar. Selected in
+the benchmark with \code{GVA_TONE_SAMPLES}; not yet measured.
+\end{inapp}
+
+\subsection{The distance}
+\label{sec:app-distance}
+
+\file{tone/features.rs} \done. Both signals are first scaled to RMS 1.
+
+\paragraph{Log-band spectrogram.} At each of two resolutions $r$ the signal is cut
+into Hann-windowed frames, transformed, and the power is summed in triangular
+bands spaced evenly on a log-frequency axis up to 16\kHz:
+\begin{center}
+\small
+\begin{tabular}{@{}lccc@{}}
+\toprule
+Resolution & FFT size / hop (at 48\kHz) & Lowest band edge & Bands \\
+\midrule
+coarse time, fine frequency & 2048 / 512 (43\ms{} / 11\ms) & 60\Hz & 40 \\
+fine time, coarse frequency & 512 / 128 (11\ms{} / 2.7\ms) & 250\Hz & 20 \\
+\bottomrule
+\end{tabular}
+\end{center}
+Band energies in dB are floored at 80\dB{} below the loudest band (the search
+may use a higher floor, \code{Options::floor_db}, \wip). Call the target's value
+$T_r(t,b)$ and the render's $R_r(t,b)$ for frame $t$ and band $b$.
+
+\paragraph{Active frames.} Only frames of the target within 45\dB{} of its
+loudest frame count (set $\mathcal{A}_r$); silence is ignored.
+
+\paragraph{EQ allowance.} The long-term spectra are the means over active frames,
+$\bar T_r(b)$ and $\bar R_r(b)$. Their difference
+$\Delta_r(b) = \bar T_r(b) - \bar R_r(b)$ is split into its mean
+$o_r = \overline{\Delta_r}$ (a level offset) and a centred, capped EQ
+\[
+  e_r(b) = \operatorname{clip}\bigl(\Delta_r(b) - o_r,\ -18, +18\bigr)\ \text{dB}.
+\]
+\paragraph{Search distance.}
+\[
+  D = \frac{1}{2}\sum_{r=1}^{2} \frac{1}{|\mathcal{A}_r|\,B_r}
+      \sum_{t\in\mathcal{A}_r}\sum_{b=1}^{B_r}
+      \bigl|\,T_r(t,b) - \bigl(R_r(t,b) + e_r(b) + o_r\bigr)\bigr|.
+\]
+In words: the average number of decibels by which the render misses the target
+in each band of each active frame, \emph{after} the render has been given the
+best smooth EQ (within $\pm18\dB$) that matches the long-term spectra.
+
+\paragraph{Benchmark score} (\code{plain_distance}): the same formula without
+$e_r$ and $o_r$, and always with the 80\dB{} floor. It measures how far apart
+the two signals sound, colour included.
+
+\begin{keyidea}[: why forgive an EQ during the search]
+The stand-in dry signal has the right notes but the wrong guitar, and the target
+went through a cabinet, a microphone and a mix EQ that the template chain does
+not model. Both are mostly \emph{linear} differences, which a filter fixes
+afterwards (Section~\ref{sec:dsp}). Forgiving them lets the search spend its
+effort on what only it can fix: input level, compression, drive, amp gain and
+time-based effects. Distortion is \emph{not} forgiven: clipping changes the
+spectrum frame by frame, not by a fixed EQ (a unit test checks this:
+\code{distortion_is_not_forgiven}).
+\end{keyidea}
+
+\subsection{The template chain}
+
+\file{tone/template.rs}. The search moves a vector $x\in[0,1]^n$; each
+coordinate maps to a pedal parameter, linearly or on a log scale
+(Table~\ref{tab:template}). Order: compressor $\to$ distortion $\to$ amp $\to$
+delay $\to$ reverb. A pedal whose amount (compressor amount, drive mix, delay
+mix, reverb mix) is below 0.04 is left out of the chain, so the search can
+switch pedals off.
+
+\begin{table}[h]
+\centering
+\caption{Searched parameters. The first ten are in the committed version
+\done; the two delay parameters are in the working tree \wip.}
+\label{tab:template}
+\small
+\begin{tabular}{@{}rllll@{}}
+\toprule
+\# & Parameter & Range & Scale & Maps to \\
+\midrule
+0 & input level (RMS) & 0.01--0.4 & log & level the dry signal is played at \\
+1 & compressor amount & 0--1 & lin & ratio $1 + 7\cdot$amount (up to 8:1) \\
+2 & compressor threshold & 0.02--0.5 & log & threshold \\
+3 & drive mix & 0--1 & lin & Distortion mix \\
+4 & drive & 0.5--10 & log & Distortion drive \\
+5 & drive tone & 0.15--1 & lin & Distortion tone \\
+6 & amp gain & 0.5--5 & log & Amp gain (voicing searched separately) \\
+7 & reverb mix & 0--0.5 & lin & Reverb mix \\
+8 & reverb room & 0--0.95 & lin & Reverb room size \\
+9 & reverb damping & 0--0.95 & lin & Reverb damping \\
+10 & delay mix & 0--0.5 & lin & Delay mix (time measured, not searched) \\
+11 & delay feedback & 0--0.7 & lin & Delay feedback \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Fixed values: compressor attack 10\ms, release 150\ms, make-up gain 1;
+distortion level 1, bias 0; amp tone stack flat (bass, mid, treble 0), because
+it acts after the clipping and is therefore linear and left to the match IR;
+delay with one tap and damping 0.3. The neutral start is input RMS 0.1,
+compressor amount 0.2, drive mix 0.3, reverb mix 0.15, delay mix and feedback 0.3,
+everything else 0.5.
+
+\subsection{The search}
+
+\file{tone/cmaes.rs} implements separable CMA-ES~\cite{ros2008sepcmaes}
+(Section~\ref{sec:search}) with a deterministic random generator (SplitMix64), so
+the same seed gives the same result. Candidates outside the unit cube are
+evaluated at the nearest point inside, plus a penalty of 10 times the squared
+distance to the cube. Each generation's candidates are rendered in parallel.
+Settings: population 16, 30 generations, initial step size 0.3, seed
+incremented per voicing. The amp voicing is discrete, so there is one search per
+voicing.
+
+\subsection{Measuring the delay time}
+\label{sec:impl-delay}
+
+\file{tone/analysis.rs} \wip.
+\begin{keyidea}[: echoes repeat onsets]
+A delay repeats every onset of the target after the delay time. The stand-in dry
+signal has the same notes without echoes. So a time lag at which the target's
+onset pattern correlates with itself much more than the dry signal's does is the
+delay time; rhythmic repetition in the playing shows up in both and cancels.
+\end{keyidea}
+Both signals are turned into an onset envelope (positive spectral flux of the log
+magnitude, 1024-point FFT, one value every 5\ms). For each lag from 60\ms{} to
+1.2\,s the code computes the normalised autocorrelation of the target envelope
+minus that of the dry envelope (the \emph{excess}). If the largest excess is
+below 0.12 there is no echo and no delay pedal. Otherwise it takes the
+\emph{shortest} lag whose excess reaches 70\% of the best (a feedback delay also
+correlates at two and three times its time), refined to the local maximum. The
+benchmark counts a delay time within 5\% of the truth as right.
+
+\subsection{The match filter}
+\label{sec:impl-match}
+
+\file{tone/matching.rs} \done. The EQ $e(b)$ of the finer-frequency resolution
+(40 bands) is turned into an impulse response:
+\begin{enumerate}
+\item Interpolate the EQ on a log-frequency axis at every bin of an 8192-point
+  FFT (flat beyond the outer bands).
+\item Take the natural log of the magnitude and its inverse FFT: the real
+  cepstrum.
+\item Fold it: keep coefficient 0 and $N/2$, double the causal half, zero the
+  rest. This is the cepstrum of the minimum-phase filter with the same
+  magnitude~\cite{oppenheim2010dtsp}.
+\item FFT, complex exponential, inverse FFT: the minimum-phase IR. Keep the
+  first 2048 samples (43\ms) and fade the last quarter with a half-cosine so the
+  cut does not ring.
+\end{enumerate}
+The IR is written as a WAV file and loaded by a Cabinet pedal (mix 1) appended at
+the end of the chain (\code{Candidate::chain_with_ir}).
+
+\subsection{Saving the result and the UI}
+\label{sec:impl-save}
+
+\wip{} (working tree, not committed at the time of writing).
+\code{save_preset} writes the IR to \file{<data dir>/guitar_virtual_amp/tone_match/}
+and a user preset named ``\emph{title} -- \emph{track} (timbre estimado)'' with
+\code{song} and \code{artist} set and the tags \code{timbre-estimado} and
+\code{faixa:<track>}; estimating again overwrites it.
+\code{shared::tab::tone::preset_fits_track} keeps a preset tagged for one track
+from being suggested for another. In the Transcribe form, ``Estimar o timbre
+(experimental)'' (\code{AppSettings::transcription_tone}, off by default, needs
+separation) adds a last stage to \code{transcribe::run} that estimates each
+guitar part from its own audio (its pan region of the stem) and notes; the form
+says it takes about 30\,s per guitar.

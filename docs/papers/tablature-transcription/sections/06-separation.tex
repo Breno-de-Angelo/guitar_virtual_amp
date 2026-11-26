@@ -1,0 +1,139 @@
+% !TeX root = ../main.tex
+\section{Source separation}
+\label{sec:separation}
+
+\subsection{What the stage must do}
+
+Input: the stereo song. Output: a \term{stem} per instrument, here at least
+guitar, bass and drums. The guitar stem feeds the note model; the drum stem can
+help the beat tracker; the bass stem gets its own transcription.
+
+\subsection{How separators work}
+
+\begin{keyidea}[: masking]
+Most separators compute the mix's spectrogram and predict, for each
+time-frequency bin, which fraction of the energy belongs to the target
+instrument (a \term{mask} between 0 and 1). Multiplying the mix spectrogram by
+the mask and inverting the STFT gives the stem. The network learns masks from
+songs whose individual stems are known (MUSDB18, MoisesDB and private sets).
+\end{keyidea}
+
+Two families matter here.
+\begin{itemize}
+\item \textbf{Hybrid Transformer Demucs} (HT Demucs)~\cite{rouard2023htdemucs}
+  processes the waveform and the spectrogram in two U-Net branches joined by a
+  transformer. It reports 9.20\dB{} SDR on MUSDB18 with extra training data
+  \reported. Its six-source variant \code{htdemucs_6s} adds guitar and piano
+  stems and is the most widely available open guitar separator (MIT licence).
+\item \textbf{Band-split models} cut the complex spectrogram into frequency
+  bands and model each band and the relations between bands with transformers.
+  BS-RoFormer~\cite{lu2023bsroformer} won the music track of the Sound Demixing
+  Challenge 2023 with 9.80\dB{} SDR on MUSDB18HQ without extra data
+  \reported; Mel-RoFormer~\cite{wang2023melroformer} uses overlapping mel bands
+  instead. The MSST framework~\cite{solovyev2026msst} trains and runs these
+  models, and community checkpoints with a guitar stem are distributed through
+  it.
+\end{itemize}
+A third idea, \textbf{query-based separation}
+(Banquet~\cite{watcharasupat2024banquet}), uses one decoder that is told which
+instrument to extract. With 24.9\,M parameters it beat \code{htdemucs_6s} on
+guitar and piano on MoisesDB \reported{} and can target narrow classes such as
+clean acoustic guitar.
+
+\subsection{Two limitations for tablature}
+
+\paragraph{One stem for all guitars.} Separators return one guitar stem, so a
+rhythm guitar and a lead guitar, or two double-tracked rhythm guitars, come out
+together. Their notes then mix in one transcription.
+
+\paragraph{Artefacts.} Separated stems contain \term{bleed} (traces of
+keyboards, synth pads or vocals) and smeared attacks. Note models are trained on
+clean, isolated guitar, so separation artefacts are inputs they have never
+seen. They become false or missed onsets.
+
+\subsection{Splitting guitars by stereo position}
+\label{sec:pan-split}
+
+Spatial cues can undo part of the first limitation. \term{ADRess} (azimuth
+discrimination and resynthesis)~\cite{barry2004adress} assigns each
+time-frequency bin of a stereo signal to a position between hard left and hard
+right from the ratio of its left and right magnitudes. Keeping only the bins
+near one position extracts what was panned there.
+
+\begin{inapp}[: separation and pan split \done]
+\begin{itemize}
+\item \textbf{Separator} (\file{transcribe/separation.rs}): BS-RoFormer SW (a
+  community six-stem checkpoint, run through MSST by the script
+  \code{separate_msst.py} in its own Python environment, installed by
+  \code{scripts/install_bs_roformer.sh}) when installed; otherwise Demucs
+  \code{htdemucs_6s} (\code{scripts/install_demucs.sh}).
+  \code{GVA_SEPARATOR=demucs|bs-roformer} forces one. Both retry on the CPU if
+  the GPU runs out of memory. The Rust side decodes and resamples the song to
+  44.1\kHz{} stereo for BS-RoFormer. On a 261\,s song on the laptop GPU (RTX
+  4070, 8\,GB): BS-RoFormer 34\,s and about 3.5\,GB of GPU memory, Demucs 10\,s
+  \measured. Without a separator the app transcribes the full mix.
+\item \textbf{Pan split} (\file{transcribe/stereo.rs}): the stereo guitar stem
+  is split into left, centre and right parts with soft masks on a 2048/512 STFT
+  (centre: $|\text{pan}| < 0.2$; sides: $|\text{pan}| > 0.5$). A part with at
+  least 12\% of the stem's energy is transcribed on its own. If its notes agree
+  with a louder part (note F1 $\geq 0.5$, allowing an echo lag of up to
+  0.8\,s), it is the same guitar (one guitar panned halfway, a double-tracked
+  part or a stereo delay) and is dropped; so are parts with fewer than a tenth
+  of the most notes. The remaining parts become tracks, the most chord-heavy
+  first (``Guitarra base'', ``Guitarra solo''). \code{GVA_SPLIT_GUITARS=0} turns
+  it off.
+\end{itemize}
+\end{inapp}
+
+\subsection{What we measured}
+
+Separators are scored here by what matters downstream: the F50 of a note
+transcription of their guitar stem (Section~\ref{sec:eval}).
+
+\begin{table}[h]
+\centering
+\caption{F50 of guitar notes in 41 synthetic band mixes (labelled guitar over
+MUSDB18 drums, bass and vocals), transcribed from the raw mix or from a
+separated stem \measured{} (\code{bench_separation.py}). The same guitar parts
+without backing score 0.82 with the v2 model.}
+\label{tab:sep-synth}
+\small
+\begin{tabular}{@{}lccc@{}}
+\toprule
+Note model & Raw mix & \code{htdemucs_6s} stem & BS-RoFormer stem \\
+\midrule
+GAPS CRNN & 0.51 & 0.72 & \textbf{0.81} \\
+v2 CRNN (electric fine-tune) & 0.50 & 0.74 & \textbf{0.81} \\
+Basic Pitch & 0.36 & 0.58 & 0.64 \\
+YourMT3+ & 0.51 & 0.45 & 0.52 \\
+MuScriptor large & 0.44 & 0.64 & 0.75 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+On real songs (MoisesDB, 222 songs, no human note labels; protocol in
+Section~\ref{sec:bench-moises}), the v2 CRNN goes from 0.41 F50 on the raw mix
+to 0.58 on the \code{htdemucs_6s} stem and 0.70 on the BS-RoFormer stem
+\measured. Separation is the largest single gain in the pipeline, and the gap
+between the two separators is larger on real songs (0.12) than on our synthetic
+mixes (0.07).
+
+For the pan split \measured{} (\code{eval_guitar_pairs}, GuitarSet accompaniment
+and solo mixed into one stereo file, 11 mixes per layout): with rhythm hard left
+and lead hard right the app outputs two tracks in 10 of 11 mixes and lead-part
+F1 rises from 0.40 (one merged track) to 0.85; with rhythm left and lead centre,
+11 of 11 and 0.43 to 0.88. A single guitar panned halfway or with a 300\ms{}
+stereo echo stays one track in 11 of 11, with unchanged F1.
+
+\subsection{Failure modes}
+\begin{itemize}
+\item Two guitars in the same position of the stereo image stay one track
+  (known, by construction).
+\item Keyboards and synth pads can leak into the guitar stem \expected.
+\item BS-RoFormer SW is about 3.4 times slower than Demucs on the laptop GPU and
+  needs about 4\,GB of free GPU memory \measured. When the GPU is full it falls
+  back to the CPU, which is slower.
+\item The BS-RoFormer SW checkpoint has no stated licence (it comes from a
+  mirror of a deleted account): it is downloaded for local use only and must
+  not be bundled.
+\end{itemize}

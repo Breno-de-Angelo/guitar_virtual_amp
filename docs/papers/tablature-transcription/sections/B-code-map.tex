@@ -1,0 +1,66 @@
+% !TeX root = ../main.tex
+\section{Code map and how to reproduce the numbers}
+\label{app:code}
+
+\subsection{Source files}
+
+\begin{center}
+\small
+\begin{tabularx}{\textwidth}{@{}>{\raggedright}p{6.2cm}X@{}}
+\toprule
+File (under \file{guitar_core/src/} unless noted) & Role and section \\
+\midrule
+\file{transcribe/mod.rs} & \code{transcribe::run}, stages, progress, sidecar (\S\ref{sec:app}) \\
+\file{transcribe/separation.rs} & finds and runs BS-RoFormer or Demucs (\S\ref{sec:separation}) \\
+\file{transcribe/stereo.rs} & pan split into guitar parts (\S\ref{sec:pan-split}) \\
+\file{transcribe/guitar_crnn.rs} & GAPS / v2 CRNN, windows, post-processing (\S\ref{sec:notes}) \\
+\file{transcribe/basic_pitch.rs} & Basic Pitch notes and contour (\S\ref{sec:notes}) \\
+\file{transcribe/beat_net.rs}, \file{transcribe/beats.rs} & Beat This!, bar-pointer decoding, DSP fallback (\S\ref{sec:rhythm}) \\
+\file{transcribe/arrange.rs} & quantisation, Viterbi fingering, tuning, notation (\S\ref{sec:rhythm}, \S\ref{sec:fingering}) \\
+\file{transcribe/fingering_net.rs} & learned fingering tagger (\S\ref{sec:fingering}) \\
+\file{transcribe/techniques.rs} & technique rules (\S\ref{sec:techniques}) \\
+\file{transcribe/youtube.rs} & yt-dlp search and download (\S\ref{sec:app}) \\
+\file{transcribe/eval.rs} & Rust end-to-end benchmarks (\S\ref{sec:benchmark}) \\
+\file{shared/tab/export.rs}, \file{shared/tab/repository.rs} & GP5 export, tab repository and sidecars \\
+\file{frontend/ui/transcribe.rs} & the Transcribe form \\
+\file{guitar_desktop/src/transcribe.rs} & batch CLI \\
+\file{scripts/train/} (repository root) & data preparation, fine-tuning, Python benchmarks, tab alignment \\
+\file{scripts/train/fingering/} & fingering tagger training \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\subsection{Commands}
+
+All Rust benchmarks are ignored tests; run them at workspace level and in
+release mode:
+\begin{verbatim}
+cargo test --release --workspace --exclude guitar_android <name> \
+    -- --ignored --nocapture
+\end{verbatim}
+\begin{center}
+\small
+\begin{tabularx}{\textwidth}{@{}>{\raggedright}p{3.4cm}X@{}}
+\toprule
+Test & Inputs (environment variables) \\
+\midrule
+\code{eval_guitarset} & GuitarSet path; \code{GVA_EVAL_PLAYERS=03,04,05}; \cmd{GVA_EVAL_TONE="Metal High Gain"}; \code{GVA_EVAL_GUITAR_MODEL=electric}; \code{GVA_EVAL_FINGERING=learned} \\
+\code{eval_transcription} & Guitar Pro files rendered with a SoundFont \\
+\code{eval_fingering} & true notes; \code{GVA_FIT_FINGERING=1} refits the Viterbi weights \\
+\code{eval_guitar_pairs} & two GuitarSet guitars per stereo mix; \code{GVA_SEPARATOR}; compare with \code{GVA_SPLIT_GUITARS=0} \\
+\code{eval_manifest} & \code{GVA_EVAL_MANIFEST=<tsv>} from \code{prepare_data.py} / \code{make_mixes.py} \\
+\code{eval_real} & \code{GVA_EVAL_REAL}: GP8 files with audio, or \code{eval_real.tsv} from \code{align_tabs.py} \\
+\bottomrule
+\end{tabularx}
+\end{center}
+\code{GVA_EVAL_CACHE=<dir>} caches each stem's notes so that benchmarks of the
+later stages skip the models. The Python stage benchmarks
+(\code{bench_notes.py}, \code{bench_separation.py}, \code{bench_beats.py},
+\code{bench_tab.py}, \code{bench_moisesdb.py}) and the training steps are
+documented with full command lines in \file{scripts/train/README.md}.
+
+\begin{caution}[: rule for anyone changing thresholds]
+Run the relevant benchmarks before and after the change, on the same items,
+and keep a change only if it wins on the sets it targets without losing on the
+others. Never fit anything on GuitarSet players 03--05.
+\end{caution}

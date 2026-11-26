@@ -1,0 +1,95 @@
+% !TeX root = ../main.tex
+\section{Audio primer}
+\label{sec:audio}
+
+This section introduces the signal-processing ideas used everywhere else. It
+assumes nothing beyond high-school mathematics.
+
+\subsection{Samples, frames and the spectrogram}
+
+A digital recording is a list of numbers, the \term{samples}, measured at a
+fixed \term{sample rate}. The app's audio engine runs at 48\,000 samples per
+second (48\kHz); the models resample to what they were trained on (16\kHz for
+the guitar CRNN, 22.05\kHz for Basic Pitch and Beat This!, 44.1\kHz stereo for
+BS-RoFormer).
+
+Pitch is easier to see in frequency than in time. The \term{short-time Fourier
+transform} (STFT) cuts the signal into overlapping \term{frames} of $N$ samples
+(the \term{window}, e.g.\ 2048), moves forward by a \term{hop} of $H$ samples
+(e.g.\ 512) between frames, and computes the spectrum of each frame: how much
+energy there is at each frequency. Stacking these spectra side by side gives a
+\term{spectrogram}, an image with time on the horizontal axis, frequency on the
+vertical axis and energy as brightness. Most transcription models take a
+spectrogram as input.
+
+\begin{worked}[: resolution]
+At 16\kHz, a hop of 160 samples gives $16000/160 = 100$ frames per second, so
+time is resolved in steps of 10\ms. A window of $N$ samples resolves frequency
+in steps of $f_s/N$: with $N=2048$ at 16\kHz that is 7.8\Hz, less than a
+semitone even at the lowest guitar note (E2 = 82.4\Hz; the next semitone, F2, is
+87.3\Hz). Longer windows give finer frequency but blur time. This trade-off is
+why some systems compute two resolutions.
+\end{worked}
+
+Three frequency axes are common:
+\begin{itemize}
+\item \textbf{Linear} (the plain STFT): equal spacing in Hz.
+\item \textbf{Mel}: spacing that follows human pitch perception, roughly linear
+  below 1\kHz and logarithmic above. Beat This! uses 128 mel bands.
+\item \textbf{Constant-Q transform} (CQT): bins spaced by a fixed musical
+  interval (for example a third of a semitone), so every octave has the same
+  number of bins. Natural for music; TabCNN and Basic Pitch use CQT-like inputs.
+\end{itemize}
+Energies are almost always compressed with a logarithm (decibels), because
+loudness perception is roughly logarithmic and it keeps quiet notes visible.
+
+\subsection{Pitch, MIDI numbers and harmonics}
+\label{sec:audio-harmonics}
+
+Musical pitch is labelled here with \term{MIDI numbers}: A4 = 440\Hz{} is 69,
+and each semitone adds one. The frequency of MIDI pitch $p$ is
+\[
+  f(p) = 440 \cdot 2^{(p-69)/12}\ \text{Hz}.
+\]
+Standard guitar tuning is 40 (E2), 45, 50, 55, 59, 64 (E4) from string 6 to
+string 1; each fret adds one semitone.
+
+A plucked string does not vibrate at one frequency. It produces a
+\term{fundamental} $f_0$ plus \term{harmonics} at $2f_0, 3f_0, 4f_0,\ldots$ The
+2nd harmonic is one octave up, the 3rd an octave and a fifth, the 4th two
+octaves. Every note detector must decide whether energy at $2f_0$ is a harmonic
+of a note at $f_0$ or a separate note an octave higher. Getting this wrong
+produces an \term{octave error}.
+
+\begin{keyidea}[: why distortion causes octave-low errors]
+A distortion circuit clips the waveform. Clipping a sum of two notes at
+frequencies $f_1$ and $f_2$ creates energy at $f_2 - f_1$, $2f_1 - f_2$ and
+similar combinations (\term{intermodulation}). For a power chord (a root and the
+fifth above it, ratio 3:2) the difference tone $f_2 - f_1 = f_1/2$ is one
+octave \emph{below} the root. A model trained on clean guitar sees a strong
+partial an octave below and reports a note there. This is the main failure we
+measure on the ``Metal High Gain'' preset (Section~\ref{sec:bench-app}): most
+octave errors are an octave low.
+\end{keyidea}
+
+\subsection{Onsets and the pitch contour}
+
+An \term{onset} is the moment a note starts: a burst of broadband energy from
+the pick, followed by the harmonic tone. Onset detectors look for sudden rises
+in energy across frequencies (\term{spectral flux}: the sum of positive
+frame-to-frame increases of the spectrum). A \term{pitch contour} is the
+fundamental frequency over time at fine resolution (a fraction of a semitone).
+A bend appears in it as a smooth rise of one or two semitones, vibrato as a
+periodic wobble of a quarter to half a semitone at 4--8\Hz, a slide as a
+staircase of semitone steps. Section~\ref{sec:techniques} builds technique
+detection on this.
+
+\subsection{Stereo and panning}
+
+A stereo recording has a left and a right channel. Mixing engineers
+\term{pan} each instrument: a guitar panned hard left is only in the left
+channel, one in the centre is equal in both. Rock and metal records often place
+two rhythm guitars hard left and hard right and a lead guitar in the centre. The
+ratio of left to right energy in a time-frequency bin therefore tells roughly
+where in the stereo image the sound came from. The app uses this to split
+guitars that a separator returns as one stem (Section~\ref{sec:pan-split}).

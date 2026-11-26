@@ -1,22 +1,24 @@
-# Roadmap: Guitar Virtual Amp → Full Pedal Effects Platform
+# Roadmap: Guitar Virtual Amp
 
-Goal: turn this repo into a low-latency, cross-platform (desktop + Android, eventually iOS)
-guitar effects processor with a large pedal/preset library and, eventually, a social layer
-for sharing presets tied to songs/artists. This document breaks that goal into phases and
-tasks sized for delegating to parallel coding agents.
+Guitar Virtual Amp is a personal open-source project (GPL-3.0). The goal is a low-latency
+guitar effects processor for desktop and Android with a large pedal and preset library, a tab
+player and automatic tablature. There is no product launch, hosted service or account system
+planned (see "Out of scope"). This document breaks the remaining work into phases and tasks
+sized for delegating to parallel coding agents.
 
 Status snapshot as of 2026-11-25 (see CLAUDE.md for full architecture):
 - Since the July snapshot below: an 18th pedal (NAM captures, with TONE3000 browsing and
   downloads), the Guitar Pro tab player with synth and backing track, practice mode, tone
   suggestions, the Spotify page, and automatic tablature from audio files or YouTube (Phase 7).
   The app now talks to the network: TONE3000, Spotify and yt-dlp, each from worker threads only.
-  There is still no backend service and no account system of our own.
+  There is no backend service or account system of our own, and none is planned.
 - Transcription research (models, datasets, benchmarks, DGX Spark training) is tracked in
   `docs/transcription_roadmap.md` and `docs/papers/tablature-transcription/`. Estimating a
   recording's guitar tone (amp, cab, effects) is reviewed in `docs/papers/tone-estimation/`.
 - CI installs `libasound2-dev` (it had never built on the runner without it) and is clippy-clean;
   `cargo fmt --check` is still off.
-- Phases 4 (UI redesign), 5 (social) and 6 (launch) have not started.
+- Phase 4 (UI redesign) has not started. The former Phases 5 (social preset sharing) and 6
+  (launch readiness) were dropped when the project became a personal open-source project.
 
 July 2026 snapshot:
 - Mono, sample-at-a-time `i16` pipeline (plus an opt-in `MultiChannelPedalChain` path for
@@ -34,7 +36,7 @@ July 2026 snapshot:
 - Full serde support on `PedalDescription`/params, a `Preset` file format
   (`shared/preset.rs`) with save/load/list/delete/rename, a 20-entry factory preset pack
   (`guitar_core/assets/presets/factory/`), optional `song`/`artist` metadata on presets
-  (the seam Phase 5's social layer will build on), and import/export via `rfd` native
+  (used by the tab player's tone suggestions), and import/export via `rfd` native
   dialogs (desktop) / manual path entry (Android, where `rfd` has no backend).
 - CI (`.github/workflows/ci.yml`) runs build/test/clippy/fmt. Android targets both
   `armv7-linux-androideabi` and `aarch64-linux-android`.
@@ -58,11 +60,6 @@ July 2026 snapshot:
   (`backend::capture::resolve_stream_config`), rebuilding both streams in the background and
   persisting the choice via `AppSettings::buffer_frames`.
 
-Because of this, "vast preset library" and "social sharing" are not incremental features —
-they require a backend service and client networking layer that don't exist yet. The
-roadmap sequences foundation → content → distribution → platform so agents can work in
-parallel without blocking on each other.
-
 ---
 
 ## How to use this file with agents
@@ -85,9 +82,7 @@ The current layout (`frontend/gui.rs`) is a single fixed `SidePanel` + `CentralP
 carrying every control at once, with the oscilloscope and FFT plots alone consuming
 roughly half the vertical space — workable on a wide desktop window, cramped to the point
 of unusable on a phone-sized Android screen. This phase is a deliberate UX/visual reset
-before Phase 5 adds a whole new social-platform surface (browse/share/profile pages) on
-top of it: better to fix the foundation once than build three more pages on the current
-layout and redo them all later.
+so the Android build is usable on a phone.
 
 ### 4.1 [S] Style guide / design system
 - Produce a short design doc (`docs/style-guide.md` or similar) fixing: color palette
@@ -138,67 +133,17 @@ dominates the screen by default.
 
 ---
 
-## Phase 5 — Social Platform (Preset Sharing)
+## Out of scope (personal open-source project)
 
-This phase requires a real backend service and is the largest scope increase in the
-project. Backend and client work can proceed in parallel once the API contract (5.1) is fixed.
-
-### 5.1 [S] API contract design
-- Decide and document (new `docs/api.md` or similar): auth model (email/password vs.
-  OAuth), preset upload/download endpoints, search/browse by song/artist/genre/tags
-  (the `Preset.song`/`Preset.artist`/`Preset.tags` fields already exist for this), rating/
-  like counts, comments. This single design doc unblocks 5.2 and 5.3 to run in parallel
-  against a shared contract.
-- This is a genuine product decision (hosting cost, moderation policy for user-uploaded
-  content, whether accounts are required to browse vs. only to upload) — flag to the user
-  for a go/no-go and scope call before agents build against it.
-
-### 5.2 [P, depends on 5.1] Backend service
-- New top-level crate or separate repo/service (recommend `axum` + `sqlx`/Postgres, kept
-  outside the `guitar_core` workspace since it has nothing to do with real-time audio).
-  Implements the 5.1 contract: accounts, preset CRUD, search, ratings/comments.
-- Needs basic content moderation (reporting, rate limiting on uploads) before any public
-  launch — flag as a hard requirement, not a nice-to-have, given user-generated content.
-
-### 5.3 [P, depends on 5.1] Client networking layer
-- New module in `guitar_core` (e.g. `guitar_core/src/backend/api_client.rs`) using a
-  minimal HTTP client (`ureq` or `reqwest` — prefer `ureq` for smaller dependency
-  footprint on Android). Wraps the 5.1 endpoints; UI work (5.4) builds on this.
-- Must run network calls off the UI thread (same background-thread pattern already used
-  for device switching in `capture.rs`) so browsing/searching never blocks the egui frame
-  loop or, worse, the audio callback.
-
-### 5.4 [S, depends on 5.3] Browse/share UI
-- New `guitar_core/src/frontend/ui/community.rs` — browse presets by song/artist/tag,
-  preview/load one into the live chain, upload the current chain as a shared preset
-  (reusing the existing `song`/`artist` metadata), like/rate. Should land as a new page in
-  the Phase 4 navigation shell rather than bolted onto the old single-screen layout.
-
-### 5.5 [P] Account/profile UI
-- Sign up/login/logout, view your uploaded presets. Can be built in parallel with 5.4
-  against the same 5.3 client layer.
-
----
-
-## Phase 6 — Launch Readiness
-
-Final phase; mostly sequential since it's packaging/release engineering, not feature work.
-
-- **6.1 [P] Desktop packaging** — installers/bundles for Windows (`.msi`/`.exe` via
-  `cargo-wix` or similar), macOS (`.app` + notarization), Linux (AppImage or distro packages).
-- **6.2 [P] Google Play listing + signing pipeline** — production keystore (distinct from
-  the checked-in debug keystore in `guitar_android/Cargo.toml` — **do not ship the debug
-  key to production**), Play Console listing, permissions review (RECORD_AUDIO is already
-  declared).
-- **6.3 [P] Crash reporting / telemetry (opt-in)** — minimal crash reporter
-  (e.g. `sentry` crate) gated behind explicit user opt-in, given this handles live audio
-  from a personal instrument/mic.
-- **6.4 [S] iOS feasibility spike** — eframe/egui iOS support is not first-class; this
-  needs a dedicated research spike (not a build task) to decide whether iOS ships via
-  egui's experimental iOS backend, a from-scratch SwiftUI shell calling into `guitar_core`
-  via FFI, or is deferred. Flag to the user as a decision point before committing agent
-  time to a full iOS port.
-- **6.5 [P] Docs & marketing site** — landing page, pedal/preset showcase, download links.
+The former Phases 5 and 6 assumed a public product launch. They were dropped when the project
+became a personal open-source project; don't plan or dispatch work for them:
+- **Social preset sharing** (old Phase 5): backend service, accounts, community browse/upload
+  pages, ratings, comments and moderation. Presets are shared as files through the existing
+  import/export.
+- **Launch readiness** (old Phase 6): installers and notarization, a Google Play listing,
+  crash reporting/telemetry, a marketing site and an iOS port. The app is built from source
+  (see README). If APKs are ever published, sign them with a key kept outside the repo, never
+  the debug keystore checked into `guitar_android/Cargo.toml`.
 
 ---
 
@@ -362,9 +307,9 @@ apps: Premium owner, 5 allow-listed users, `GET /search` capped at 10 results.
   35-56%, slides ~30% (often marked as legato), false alarms on plain notes 0-4%.
 - YouTube as audio source (built: `transcribe/youtube.rs`): search or link, ranked
   preselection (duration from Spotify), download with yt-dlp into a private cache, then the
-  same pipeline. YouTube's ToS forbid downloading without permission, and Google Play bans
-  apps that download from YouTube: keep it out of the Android build/store listing, and
-  revisit before any public release.
+  same pipeline. YouTube's ToS forbid downloading without permission from YouTube and the
+  rights holders: it is for personal use, and the README tells users to download only content
+  they have the right to.
 
 ### Future work on transcription
 - **YouTube**: batch from a Spotify playlist (search + transcribe every track missing a
@@ -382,18 +327,18 @@ apps: Premium owner, 5 allow-listed users, `GET /search` capped at 10 results.
 - **Several guitar tracks**: guitars in the same spot of the mix stay one track (needs a
   separator for multiple guitars); BS-RoFormer SW (MSST) is now the preferred separator
   (checkpoint license unknown: local use only; find a licensed RoFormer guitar checkpoint before
-  shipping one);
+  distributing one);
   **drums** (onset classification on the drum stem) and **vocal melody** tracks.
 - **Fingering**: a learned tagger (`transcribe/fingering_net.rs`, a local model file) is now the
   default for 6-string guitars when installed: true-note string accuracy GuitarSet solo 0.55 ->
   0.62, EGDB 0.68 -> 0.81; final-tab string/fret on GuitarSet 03-05 68% -> 78% (GAPS notes).
   It is trained on EGDB, so it can't ship until EGDB's authors allow it or it is retrained
-  without EGDB. Shipped builds still use the Viterbi, whose string prior and weights come from
+  without EGDB. Builds without the model file use the Viterbi, whose string prior and weights come from
   GuitarSet + 10 tabs. Next: more players (DadaGP pre-training, research access on request),
   then audio conditioning (TART's AudioFret reports +4.8 points from timbre); MIDI-to-Tab and
   Fretting-Transformer have no released weights.
 - **Electric-guitar model**: it is already a local user option (`guitar_electric_crnn.onnx`;
-  Metal High Gain final-tab F1 0.69 vs 0.43 for GAPS). Ship it (EGDB license, or retrain without EGDB on Guitar-TECHS +
+  Metal High Gain final-tab F1 0.69 vs 0.43 for GAPS). Make it a regular download (EGDB license, or retrain without EGDB on Guitar-TECHS +
   GuitarSet renders), add NAM-capture renders, and train on band mixes (Demucs guitar stems of
   labelled mixes) to fix the band-mix regression on Guitar-TECHS. A GOAT-trained research
   model can't ship (non-commercial).
@@ -409,8 +354,5 @@ apps: Premium owner, 5 allow-listed users, `GET /search` capped at 10 results.
 1. Phase 3 is done (see status snapshot above).
 2. Phase 4 starts with the 4.1 style-guide sign-off (a design decision, flag to the user),
    then 4.2–4.6 can run in parallel against it.
-3. Phase 5 is a deliberate go/no-go checkpoint with the user (backend hosting, moderation,
-   accounts are real product/cost decisions) — don't auto-dispatch 5.2+ without that
-   conversation. Sequence it after Phase 4 so there's a UI worth adding social pages to.
-4. Phase 6 starts once there's a build worth shipping; 6.4 (iOS) is a research spike to
-   schedule early since it may change client architecture decisions retroactively.
+3. Phase 7 items are independent of Phase 4 and can be picked up at any time; check the
+   Spotify Developer Policy section before extending the Spotify page.

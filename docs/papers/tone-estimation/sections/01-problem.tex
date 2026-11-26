@@ -1,0 +1,112 @@
+% !TeX root = ../main.tex
+\section{The problem}
+\label{sec:problem}
+
+\subsection{What a ``tone'' is}
+
+A recorded guitar part is the product of the notes and of the equipment that
+shaped them (Figure~\ref{fig:rig}): the guitar and its pickups; often a
+compressor or a drive pedal; an amplifier, whose \term{preamp} distorts, whose
+\term{tone stack} (bass, middle, treble knobs) filters and whose \term{power
+amp} adds more distortion; a speaker \term{cabinet} recorded by a microphone;
+modulation (chorus, phaser, flanger), delay and reverb; and the mixing and
+mastering of the whole song. Guitarists call the combined result the
+\term{tone}.
+
+\begin{figure}[h]
+\centering
+\resizebox{\textwidth}{!}{%
+\begin{tikzpicture}[
+  node distance=3mm,
+  box/.style={draw, rounded corners=2pt, font=\small, align=center,
+              minimum height=9mm, inner sep=3pt, fill=white},
+  arr/.style={-{Stealth[length=2mm]}, semithick}]
+  \node[box] (g) {Guitar,\\pickups};
+  \node[box, right=of g] (p) {Pedals\\(comp., drive)};
+  \node[box, right=of p] (a) {Amp: preamp,\\tone stack, power};
+  \node[box, right=of a] (c) {Cabinet\\+ mic};
+  \node[box, right=of c] (t) {Modulation,\\delay, reverb};
+  \node[box, right=of t] (m) {Mix and\\master};
+  \foreach \x/\y in {g/p,p/a,a/c,c/t,t/m} \draw[arr] (\x) -- (\y);
+  \draw[decorate,decoration={brace,amplitude=4pt,mirror}] ([yshift=-2mm]g.south west) -- node[below=4pt,font=\scriptsize]{the app cannot change these, only compensate} ([yshift=-2mm]g.south east);
+  \draw[decorate,decoration={brace,amplitude=4pt}] ([yshift=2mm]p.north west) -- node[above=4pt,font=\scriptsize]{what the app's pedals can reproduce} ([yshift=2mm]t.north east);
+  \draw[decorate,decoration={brace,amplitude=4pt,mirror}] ([yshift=-2mm]m.south west) -- node[below=4pt,font=\scriptsize,align=center]{absorbed by the\\final EQ, partly} ([yshift=-2mm]m.south east);
+\end{tikzpicture}}
+\caption{A guitar signal chain. The \emph{dry} signal (DI) is the output of
+the first box; a recording is the output of the last.}
+\label{fig:rig}
+\end{figure}
+
+A player who learns a song wants this sound, and today finds it by ear, by
+reading interviews about the artist's gear, or by buying a preset made for the
+song. The goal here is to propose, automatically, a preset of Guitar Virtual
+Amp's pedals that sounds like the guitar in a recording the user owns.
+
+\subsection{An inverse problem}
+
+\begin{keyidea}[: forward and inverse]
+The \textbf{forward} problem is easy: given a dry signal $x$ and settings
+$\theta$ of a chain $f$, compute the sound $y = f(x;\theta)$. The app does this
+in real time. The \textbf{inverse} problem is hard: given only a recording
+$y^\star$, find settings $\hat\theta$ such that $f(x;\hat\theta)$ sounds like
+$y^\star$. We do not even know $x$, the dry signal that went into the original
+chain.
+\end{keyidea}
+
+Formally, the estimate is
+\[
+  \hat\theta = \arg\min_{\theta}\ D\bigl(f(\tilde x;\theta),\ y^\star\bigr),
+\]
+where $D$ measures how different two sounds are (Section~\ref{sec:metrics}),
+$\tilde x$ is the best dry signal we can get, and the minimisation is done by a
+search (Section~\ref{sec:search}). Every part of this formula is a design
+choice, and the literature differs on each.
+
+\subsection{What makes it hard}
+
+\begin{itemize}
+\item \textbf{Nonlinear, time-varying, long memory.} Distortion is nonlinear,
+  compression and modulation change over time, delay and reverb remember the
+  past for seconds (Section~\ref{sec:dsp}).
+\item \textbf{Many settings sound alike.} Amp gain, a drive pedal and a
+  compressor can all add sustain and grit; different orders of the same
+  effects can sound similar. The inverse problem has no unique answer, so
+  ``recover the original settings'' is the wrong goal; ``sound alike'' is the
+  right one.
+\item \textbf{No dry signal.} Amplifier capture (how Kemper or Neural Amp
+  Modeler work) needs the dry input and the processed output of the same
+  performance, sample by sample. A song gives only the output.
+\item \textbf{The mix.} The guitar must first be separated from drums, bass,
+  keys and voice; separation leaves artefacts that look like effects, and
+  bus compression and mastering act after the guitarist's chain.
+\item \textbf{Different gear.} The target is not the original equipment but its
+  sound on the equipment the player has: here, a mono chain of the app's 18
+  pedals.
+\end{itemize}
+
+\subsection{Three settings, by what is available}
+
+Methods differ most in what they require:
+\begin{description}[style=nextline,leftmargin=1.2cm]
+\item[Paired] The dry signal (direct input, \term{DI}) and the processed signal
+  of the same performance, aligned sample by sample. This is how amplifiers are
+  captured.
+\item[Unpaired] A processed recording plus dry guitar from \emph{another}
+  performance, maybe on another guitar.
+\item[Wet only] Only the processed recording.
+\end{description}
+A song is wet only, and separated from a mix. The player's own guitar can
+supply unpaired dry audio. The app adds a fourth option that the literature does
+not use: a dry signal \emph{synthesised from the transcribed notes}, which is
+aligned with the target but has the wrong guitar timbre
+(Section~\ref{sec:impl-dry}).
+
+\subsection{What the output should be}
+
+A tone estimate can be (i) an \term{interpretable chain}: effect types with
+parameter values that a player can load and adjust; (ii) a \term{neural model}
+of the processing, such as an amplifier capture, which reproduces a sound but
+exposes few controls; or (iii) only \term{processed audio}, from tone-transfer
+models that re-render a recording in another tone. Only (i) and (ii) can be
+used in a real-time effects app, and only (i) can be edited. The app aims for
+(i): a preset of its own pedals.

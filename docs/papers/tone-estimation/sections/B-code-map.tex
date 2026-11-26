@@ -1,0 +1,56 @@
+% !TeX root = ../main.tex
+\section{Code map and how to reproduce the numbers}
+\label{app:code}
+
+\subsection{Source files}
+
+\begin{center}
+\small
+\begin{tabularx}{\textwidth}{@{}>{\raggedright}p{5.4cm}X@{}}
+\toprule
+File (under \file{guitar_core/src/}) & Role and section \\
+\midrule
+\file{tone/mod.rs} & \code{estimate}, baseline, per-voicing search, \code{save_preset} (\S\ref{sec:impl}) \\
+\file{tone/pluck.rs} & plucked-string stand-in and \code{DI_EQ} (\S\ref{sec:impl-dry}) \\
+\file{tone/sampler.rs} & sampler stand-in from real DI notes (\S\ref{sec:impl-dry}, \wip) \\
+\file{tone/features.rs} & log-band distance with EQ allowance; \code{plain_distance} (\S\ref{sec:app-distance}) \\
+\file{tone/template.rs} & template chain and parameter ranges (Table~\ref{tab:template}) \\
+\file{tone/cmaes.rs} & separable CMA-ES (\S\ref{sec:search}) \\
+\file{tone/analysis.rs} & delay time from echoes of onsets (\S\ref{sec:impl-delay}, \wip) \\
+\file{tone/matching.rs} & minimum-phase match IR, FFT convolution (\S\ref{sec:impl-match}) \\
+\file{tone/eval.rs} & \code{eval_tone}, \code{fit_pluck}, \code{pluck_vs_di} (\S\ref{sec:results}) \\
+\file{backend/offline.rs} & \code{render_at}: the chain offline at a given input level \\
+\file{shared/tab/tone.rs} & tone suggestions; estimated-preset tags (\wip) \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\subsection{Commands}
+
+\begin{verbatim}
+GVA_TONE_MANIFEST=~/.cache/gva_test/prepared/eval_egdb.tsv \
+  cargo test --release --workspace --exclude guitar_android eval_tone \
+  -- --ignored --nocapture
+\end{verbatim}
+
+\begin{center}
+\small
+\begin{tabularx}{\textwidth}{@{}>{\raggedright}p{4.2cm}X@{}}
+\toprule
+Variable & Effect \\
+\midrule
+\code{GVA_TONE_LIMIT} & number of items (default 8; the recorded run used 12) \\
+\code{GVA_TONE_GENS} & CMA-ES generations (default 30) \\
+\code{GVA_TONE_SECS} & excerpt length in seconds (default 12) \\
+\code{GVA_TONE_ORACLE=0} & skip the true-DI search \\
+\code{GVA_TONE_OUT=<dir>} & write WAVs (target, estimate, preset) for listening \\
+\code{GVA_TONE_STEMS=<tsv>} & separated-stem targets (\wip) \\
+\code{GVA_TONE_SAMPLES=<di:notes,...>} & sampler stand-in (\wip) \\
+\code{GVA_TONE_FLOOR} & search floor in dB (\wip) \\
+\code{GVA_TONE_PLUCK=0} & skip the pluck stand-in (\wip) \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\code{pluck_vs_di} and \code{fit_pluck} take
+\cmd{GVA_PLUCK_ITEMS=<di.wav>:<notes.txt>,...} (Guitar-TECHS DI only, never EGDB).

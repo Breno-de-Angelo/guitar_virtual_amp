@@ -1,0 +1,57 @@
+% !TeX root = ../main.tex
+\section{Glossary}
+\label{app:glossary}
+
+\begin{description}[style=unboxed,leftmargin=0cm,itemsep=3pt]
+\item[ADRess] Azimuth discrimination and resynthesis: separating sounds by their
+  left/right position in a stereo mix (\S\ref{sec:pan-split}).
+\item[Autoregressive] A decoder that writes one token at a time, each depending
+  on the previous ones; slow on CPU.
+\item[Bar-pointer model] A Viterbi/HMM whose state is ``beat $k$ of a bar of $n$
+  beats''; used to decode downbeats and meter.
+\item[Bleed] Traces of other instruments left in a separated stem.
+\item[CMLt] Beat-tracking continuity metric: only runs of consecutive correct
+  beats count.
+\item[Comp / solo] GuitarSet's two versions of each excerpt: accompaniment
+  (chords) and melody.
+\item[CQT] Constant-Q transform: a spectrogram with bins at fixed musical
+  intervals.
+\item[CRNN] Convolutional network followed by a recurrent layer.
+\item[DBN] Dynamic Bayesian network; in beat tracking, the decoder that imposes
+  tempo and meter.
+\item[DI] Direct input: the clean guitar signal before any amplifier.
+\item[Downbeat] First beat of a bar.
+\item[F50] Note F1 with a 50\ms{} onset tolerance and the right pitch.
+\item[Final-tab F1] Our note F1 at 80\ms{} on the finished, quantised tab.
+\item[Fine-tuning] Continuing to train an existing model on new data.
+\item[GP5] Guitar Pro 5 file format, the app's tab output.
+\item[Held out] Not used in training or for choosing settings.
+\item[Hexaphonic pickup] A pickup with one output per string; gives string
+  labels.
+\item[Intermodulation] Sum and difference frequencies created by distortion.
+\item[Mask] Per time-frequency-bin share of energy assigned to a source.
+\item[mir\_eval] The standard Python library of music-information-retrieval
+  metrics.
+\item[MSST] Music-Source-Separation-Training, the framework that runs
+  BS-RoFormer.
+\item[ONNX / tract] A file format for neural networks / the Rust library the app
+  runs them with.
+\item[Onset, offset] Start and end of a note.
+\item[Pan] Position of a sound between the left and right channels.
+\item[Posteriorgram] A model's per-frame, per-pitch probabilities.
+\item[Pseudo-label] A label produced by a model (the \term{teacher}) instead of
+  a human.
+\item[Quantisation] Snapping note times onto a grid of beat subdivisions.
+\item[SDR] Signal-to-distortion ratio, the usual separation metric, in dB.
+\item[Sidecar] The \code{.gvtab.json} file next to a transcribed tab (audio
+  hash, engines, bar times).
+\item[Stem] One instrument's audio, as produced by a separator or a multitrack.
+\item[String accuracy] Share of correct notes placed on the reference string.
+\item[Tab F1] Note F1 that also requires the reference string.
+\item[Tagger] A model that labels each input item (here: scores the six strings
+  per note) instead of generating a sequence.
+\item[Tatum] The smallest regular time grid in a piece.
+\item[Viterbi] Dynamic-programming search for the cheapest sequence of choices
+  (\S\ref{sec:viterbi}).
+\item[Zero-shot] Tested on data of a kind never seen in training.
+\end{description}

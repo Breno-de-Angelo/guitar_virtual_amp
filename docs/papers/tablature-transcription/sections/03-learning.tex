@@ -1,0 +1,120 @@
+% !TeX root = ../main.tex
+\section{Machine learning and decoding primer}
+\label{sec:learning}
+
+\subsection{Supervised learning in one page}
+
+A \term{model} is a function with many adjustable numbers (\term{parameters} or
+\term{weights}). \term{Training} adjusts them so that, on example inputs, the
+model's outputs approach known correct answers (\term{labels}), by minimising a
+\term{loss} that measures the disagreement. For transcription, the input is a
+spectrogram and the labels say, for each frame and pitch, whether a note starts
+or sounds there.
+
+Data is split three ways. The \term{training set} is what the model learns
+from. The \term{validation set} is used to make choices during development
+(when to stop training, which settings to keep). The \term{test set} is used
+only to report the final number; if any choice is made by looking at it, the
+number becomes optimistic. A test set is \term{held out} when no part of it, nor
+the same performers, appears in training. A result is \term{zero-shot} when the
+model is tested on a dataset it never saw at all, which is the situation of a
+user's song.
+
+\begin{caution}[: overfitting and leakage]
+A model that scores far better on its training players than on new ones has
+\term{overfit}: it memorised instead of generalising. Our fingering tagger
+scores 0.95 string accuracy on its training players and 0.57--0.69 on new
+ones (Section~\ref{sec:fingering-app}). \term{Leakage} is subtler: if test
+recordings share performers, songs or rendered tones with the training data,
+the test score is inflated. The rule in this project is that GuitarSet players
+03--05 are never used to fit anything, so they stay a clean test of fingering.
+\end{caution}
+
+\term{Fine-tuning} starts from a model already trained on one dataset and
+continues training on another, so a small new dataset is enough. Our electric
+guitar model is the GAPS classical-guitar model fine-tuned on electric guitar.
+\term{Data augmentation} creates extra training examples by transforming the
+ones we have; here, playing clean DI recordings through many amplifier
+settings so the model sees the same notes in many tones.
+
+\subsection{Network families mentioned in this document}
+
+\begin{description}[style=nextline,leftmargin=1.2cm]
+\item[CNN (convolutional neural network)] Slides small learned filters over the
+  spectrogram image; good at local patterns such as a note's harmonic stack.
+\item[RNN / GRU / LSTM (recurrent networks)] Read a sequence one step at a time
+  and carry a memory; good at how notes evolve over frames.
+\item[CRNN] A CNN followed by a recurrent layer. The GAPS guitar model (Kong et
+  al.'s architecture) is a CRNN.
+\item[Transformer] Relates every position of a sequence to every other one
+  through \term{attention}~\cite{vaswani2017attention}. Used by BS-RoFormer,
+  Beat This!, MT3-style transcribers and our fingering tagger.
+\item[Encoder-decoder / sequence-to-sequence] An encoder reads the input; a
+  decoder writes an output sequence one \term{token} at a time, each token
+  conditioned on the ones before (\term{autoregressive} decoding). MT3,
+  YourMT3+ and MuScriptor write notes as tokens such as ``time 1.23 s'',
+  ``instrument: distorted guitar'', ``note on 52''. Decoding one token at a time
+  is slow on a CPU.
+\item[Diffusion model] Learns to turn random noise into a sample step by step;
+  Noise2Fret uses one to generate tablature.
+\end{description}
+
+\subsection{From network output to notes}
+
+Most note models output a \term{posteriorgram}: for each frame and each of the
+88 piano pitches, a number between 0 and 1 that the model believes is the
+probability of an onset (or of a sounding note) there. Turning it into a list of
+notes requires \term{post-processing}: find peaks above a threshold in the
+onset map, follow the note while the frame map stays above another threshold,
+drop notes that are too short. These thresholds are not learned and change
+results noticeably; in the app they live next to each model
+(\file{transcribe/guitar_crnn.rs}, \file{transcribe/basic_pitch.rs}).
+
+\begin{inapp}[: how models run]
+All neural models used inside the app are exported to ONNX (a standard file
+format for networks) and run in pure Rust with the \code{tract-onnx} crate
+(version 0.23), on the CPU. Basic Pitch is compiled into the binary; the guitar
+CRNN and Beat This! are optional downloads; the fingering tagger and the
+electric CRNN are local files the user copies in. Source separators are the
+exception: they run as external Python programs (MSST or Demucs) in their own
+virtual environments, on the GPU when PyTorch finds one.
+\end{inapp}
+
+\subsection{Dynamic programming and the Viterbi algorithm}
+\label{sec:viterbi}
+
+Several stages must pick the best \emph{sequence} of choices: a string for each
+note, a subdivision for each beat, a bar length for each bar. Choosing each
+item on its own ignores how consecutive choices fit together (moving the hand
+from fret 2 to fret 14 between two fast notes is bad even if each position is
+fine alone). Trying every sequence is impossible: 20 notes with 3 positions each
+give $3^{20} \approx 3.5$ billion sequences.
+
+\begin{keyidea}[: Viterbi decoding]
+Define a cost for each choice on its own (\term{local cost}) and a cost for each
+pair of consecutive choices (\term{transition cost}). The best sequence ending in
+choice $j$ at step $t$ is the best sequence ending in some choice $i$ at step
+$t-1$, plus the transition $i\to j$, plus the local cost of $j$. So we only need
+to keep, for each choice at each step, the cost of the best path that reaches it
+and a pointer to where it came from. At the end we follow the pointers back.
+The work is (steps)~$\times$~(choices)$^2$ instead of
+(choices)$^{\text{steps}}$~\cite{viterbi1967error}.
+\end{keyidea}
+
+\begin{worked}[: two notes, three positions]
+Note 1 can be played at fret 0, 5 or 10; note 2 at fret 2, 7 or 12. Local cost:
+0.1 per fret (prefer low positions). Transition cost: 0.3 per fret of hand
+movement. Best costs after note 1: $\{0, 0.5, 1.0\}$. For note 2 at fret 7:
+from fret 0 costs $0 + 0.3\cdot 7 + 0.7 = 2.8$; from fret 5 costs $0.5 + 0.3\cdot
+2 + 0.7 = 1.8$; from fret 10 costs $1.0 + 0.9 + 0.7 = 2.6$. Keep 1.8 with a
+pointer to fret 5. Doing the same for frets 2 and 12 and taking the cheapest
+end gives fret 0 then fret 2 (total $0 + 0.6 + 0.2 = 0.8$). If note 1 had been
+forced high, the transition cost would have pulled note 2 high too: that is
+the hand-position memory the method provides.
+\end{worked}
+
+A \term{hidden Markov model} (HMM) is the probabilistic version of the same
+idea: costs are negative log-probabilities. A \term{dynamic Bayesian network}
+(DBN) generalises it to several hidden variables (for beats: tempo and position
+in the bar). Our fingering, our beat subdivision choice and our bar decoding are
+all Viterbi searches with hand-set costs.

@@ -1,0 +1,86 @@
+% !TeX root = ../main.tex
+\section*{How to read this document}
+\addcontentsline{toc}{section}{How to read this document}
+
+\paragraph{Purpose.} Coding agents work on the transcription pipeline of Guitar
+Virtual Amp, run benchmarks and change models. This document is the place where
+their work is explained in one coherent story: what problem each piece solves,
+what the literature knows about it, what the app does, how well it works, and
+what is planned. It replaces an earlier review written in conference-paper
+style. It is deliberately longer and more explicit than a paper.
+
+\paragraph{Structure.}
+\begin{itemize}
+\item \textbf{Part I, Background} (Sections~\ref{sec:problem}--\ref{sec:eval})
+  defines the task and teaches the minimum of audio processing, machine
+  learning and evaluation needed to follow the rest. Skip it if you know these.
+\item \textbf{Part II, The pipeline} (Sections~\ref{sec:datasets}--\ref{sec:e2e})
+  walks through the stages in the order audio flows through them. Each section
+  follows the same template: \emph{what the stage must do}, \emph{how methods
+  work}, \emph{state of the art}, an ``In Guitar Virtual Amp'' box, and
+  \emph{failure modes}.
+\item \textbf{Part III, Our system} (Sections~\ref{sec:app}--\ref{sec:assessment})
+  shows the whole app pipeline, all our benchmark results with their protocol,
+  and an assessment: where we stand against the state of the art, which
+  decisions were taken and why, and what the agents are working on next.
+\item \textbf{Appendices}: a glossary and a map from source files to sections,
+  with the commands that reproduce each benchmark.
+\end{itemize}
+
+\paragraph{Labels.} The coloured boxes have fixed meanings:
+\begin{keyidea}[]
+The intuition behind a method, before its details.
+\end{keyidea}
+\begin{inapp}[]
+What the app does, with file names under \file{guitar_core/src/} unless another
+path is given, and the status of each part.
+\end{inapp}
+\begin{caution}[]
+A pitfall: a number that is easy to misread, a comparison that is not fair, a
+known gap.
+\end{caution}
+Inline tags say where a claim comes from: \measured{} means we ran it in this
+repository (the script is named), \reported{} means a paper states it (with a
+citation), and \expected{} means it is a hypothesis that no one has measured
+yet. For parts of the app: \done{} exists in the code, \wip{} is being worked
+on, \planned{} is only in the roadmap.
+
+\paragraph{Related files.} \file{ROADMAP.md} (project status),
+\file{docs/transcription_roadmap.md} (the detailed research log, from which most
+of the measured numbers here are taken), \file{CLAUDE.md} (architecture notes for
+agents), \file{scripts/train/README.md} (training and Python benchmarks). The
+companion document on estimating a recording's guitar tone is
+\file{docs/papers/tone-estimation/}.
+
+\paragraph{Snapshot.} Numbers and code descriptions are as of 25 November 2026
+(commit \code{25afb6d} plus the uncommitted work described where relevant).
+When the code changes, the ``In Guitar Virtual Amp'' boxes and Part~III are the
+parts to update.
+
+\subsection*{The whole story in one table}
+\addcontentsline{toc}{subsection}{The whole story in one table}
+
+Table~\ref{tab:summary} summarises the rest of the document: for each stage,
+the best published approach, what the app uses, our best measured number and
+the main remaining gap. Every entry is explained later.
+
+\begin{table}[h]
+\centering
+\caption{Stage-by-stage summary. F50 = note F1 with a 50\ms{} onset window
+(Section~\ref{sec:eval}). ``v2'' = our electric-guitar fine-tune of the GAPS
+model. All numbers in the last two columns are \measured{} unless marked.}
+\label{tab:summary}
+\small
+\begin{tabularx}{\textwidth}{@{}>{\raggedright}p{2.0cm}>{\raggedright}p{3.1cm}>{\raggedright}p{3.0cm}>{\raggedright}p{3.4cm}X@{}}
+\toprule
+Stage & Best published & App uses & Our best number & Main gap \\
+\midrule
+Separation (\S\ref{sec:separation}) & Band-split transformers (BS-RoFormer) & BS-RoFormer SW, else Demucs \code{htdemucs_6s} & Real songs: F50 0.41 (mix) $\to$ 0.70 (stem) & All guitars in one stem \\
+Note transcription (\S\ref{sec:notes}) & Guitar CRNNs (GAPS); MuScriptor on mixes & GAPS CRNN; v2 as local option & EGSet12 (real amp) 0.89; GOAT amp renders 0.71 & Distorted guitar in real mixes: 0.56 \\
+Rhythm (\S\ref{sec:rhythm}) & Beat This! & Beat This! final0 + bar Viterbi & Beat F 0.97 (accompaniment), 0.55 (solo) & Solo lines; compound meters \\
+Fingering (\S\ref{sec:fingering}) & Learned seq2seq, audio-conditioned (TART) & Learned tagger (local), else Viterbi & String accuracy, true notes: 0.62 solo, 0.81 EGDB & Few players in training data \\
+Techniques (\S\ref{sec:techniques}) & Learned per-note classifier (TART) & Rules on the pitch contour & Bends found 35--56\%, vibrato 20--40\% & No palm mute, harmonics; distortion \\
+Whole tab (\S\ref{sec:benchmark}) & TART: 54\% Tab F1, solo guitar \reported{} & All of the above & Tab F1 0.65 on separated mixes (tagger) & No real-song benchmark yet \\
+\bottomrule
+\end{tabularx}
+\end{table}

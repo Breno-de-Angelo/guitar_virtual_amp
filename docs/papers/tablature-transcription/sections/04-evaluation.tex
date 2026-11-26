@@ -1,0 +1,108 @@
+% !TeX root = ../main.tex
+\section{How results are measured}
+\label{sec:eval}
+
+Numbers are only comparable when they use the same metric, tolerance and test
+set. This section defines every metric used later and lists which of them each
+of our benchmarks reports.
+
+\subsection{Precision, recall and F1 for notes}
+
+Compare a list of predicted notes with a list of reference (correct) notes. A
+prediction \term{matches} a reference note when the pitches are equal (within
+half a semitone) and the onsets are within a tolerance $\tau$. Each reference
+note can be matched at most once (a one-to-one matching). Then
+\[
+  \text{precision} = \frac{\text{matched}}{\text{predicted}},\qquad
+  \text{recall} = \frac{\text{matched}}{\text{reference}},\qquad
+  F_1 = \frac{2\cdot\text{precision}\cdot\text{recall}}{\text{precision}+\text{recall}}.
+\]
+Precision drops when the system invents notes; recall drops when it misses
+notes. F1 is high only when both are high.
+
+\begin{worked}[: F1]
+A bar has 10 reference notes. The system outputs 12 notes, 8 of which match.
+Precision $= 8/12 = 0.67$, recall $= 8/10 = 0.80$,
+$F_1 = 2\cdot0.67\cdot0.80/(0.67+0.80) = 0.73$.
+\end{worked}
+
+Variants used in this document:
+\begin{description}[style=nextline,leftmargin=1.2cm]
+\item[F50 (onset F1)] $\tau = 50\ms$, the \code{mir_eval}
+  convention~\cite{raffel2014mireval,hawthorne2018onsets}. Computed on the raw
+  notes of a model, before any rhythm quantisation. This is what papers report
+  and what our Python stage benchmarks use.
+\item[Onset-offset F1] Also requires the predicted offset to be within
+  $\max(50\ms, 0.2\,d)$ of the reference offset ($d$: the reference duration).
+  Measures note lengths.
+\item[Final-tab F1 (ours)] $\tau = 80\ms$, computed by the Rust benchmarks on the
+  notes of the finished tab, \emph{after} the notes were snapped to the rhythm
+  grid. Quantisation moves onsets by up to half a grid step, hence the wider
+  tolerance. Reported as the \emph{median} over items.
+\item[Tab F1] A note match that is also on the same string (and hence fret) as
+  the reference. Measures the whole pipeline.
+\item[String accuracy] Given the \emph{correct} notes, the share placed on the
+  reference string. Measures the fingering stage alone.
+\item[Octave errors] The share of reference notes that were found only one or two
+  octaves away. Diagnoses distortion problems.
+\end{description}
+
+\subsection{Rhythm metrics}
+
+Beat trackers are scored with a beat \term{F-measure} (a predicted beat is
+correct within 70\ms{} of a reference beat) and continuity metrics such as
+\term{CMLt}, which counts only runs of consecutive correct beats, so a tracker
+that keeps losing the beat scores low even if many beats are individually
+right~\cite{foscarin2024beatthis}. Downbeat (first beat of each bar)
+F-measure is computed the same way. Our final-tab benchmarks also count songs
+whose tempo is right and whose bar lines fall on the reference bar lines.
+
+\subsection{Separation metrics}
+
+Separators are usually scored by the \term{signal-to-distortion ratio} (SDR),
+in decibels: the energy of the reference stem divided by the energy of the
+error, so higher is better and 3\dB{} more means half the error
+energy~\cite{vincent2006bss}. SDR rewards a stem that \emph{sounds} close to the
+reference; it does not say whether the stem is easy to transcribe. We therefore
+score separators by the F50 of a transcription of their stem.
+
+\subsection{Which number is which}
+
+Table~\ref{tab:which-number} lists where each kind of number in this document
+comes from.
+
+\begin{table}[h]
+\centering
+\caption{Metrics produced by each benchmark in the repository.}
+\label{tab:which-number}
+\small
+\begin{tabularx}{\textwidth}{@{}>{\raggedright}p{4.6cm}>{\raggedright}p{3.6cm}X@{}}
+\toprule
+Benchmark (code) & Metric & Notes \\
+\midrule
+\code{scripts/train/bench_notes.py}, \code{bench_separation.py}, \code{bench_tab.py}, \code{bench_beats.py} & F50, onset-offset F1, Tab F1, beat F / CMLt & Python, \code{mir_eval}; raw model notes; mean per item; up to 12 items per group \\
+\code{bench_moisesdb.py} & F50 against notes of the isolated guitars & No human labels: ranks separators, not note models (Section~\ref{sec:bench-moises}) \\
+\code{eval_guitarset} and other ignored tests in \file{transcribe/eval.rs} & Final-tab F1 (80\ms), string/fret agreement, tempo and bar lines & Rust, the real app pipeline end to end; median per item \\
+\code{eval_fingering}, \code{examples/fingering.rs} & String accuracy on true notes & Fingering alone \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\begin{caution}[: comparing numbers]
+\begin{itemize}
+\item An F50 of 0.80 and a final-tab F1 of 0.80 are not the same thing: one is
+  on raw notes with a 50\ms{} window, the other on the finished tab with an
+  80\ms{} window.
+\item Mean and median differ when a few items fail badly; Python benchmarks
+  report means, Rust benchmarks medians.
+\item Labels carry timing offsets. Guitar-TECHS labels (from a MIDI pickup) are
+  25--40\ms{} late, IDMT labels about 30\ms{} early, GOAT up to $\pm40\ms$
+  \measured{} (\code{align_labels.py}). With a 50\ms{} tolerance this alone can
+  move F1 a lot, so our benchmarks shift each recording's labels by its median
+  offset first.
+\item Many published results are on the dataset the model was trained on
+  (different files, same players or studio). The use case is zero-shot.
+\item Agreement with one human tab is a lower bound on quality: several
+  fingerings of the same passage can be equally good.
+\end{itemize}
+\end{caution}

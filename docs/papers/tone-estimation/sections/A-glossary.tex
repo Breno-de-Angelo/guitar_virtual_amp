@@ -1,0 +1,49 @@
+% !TeX root = ../main.tex
+\section{Glossary}
+\label{app:glossary}
+
+\begin{description}[style=unboxed,leftmargin=0cm,itemsep=3pt]
+\item[Analysis by synthesis] Estimating settings by rendering candidates through
+  the forward model and comparing them with the target.
+\item[Cabinet IR] The impulse response of a speaker cabinet and microphone,
+  applied by convolution.
+\item[Capture] A neural model of one device at one setting, learned from
+  dry/wet pairs (NAM, Kemper, TONEX).
+\item[Cepstrum] Inverse Fourier transform of the log magnitude spectrum; used to
+  build minimum-phase filters.
+\item[CMA-ES] Covariance Matrix Adaptation Evolution Strategy, a gradient-free
+  optimiser (\S\ref{sec:search}); \emph{separable}: diagonal covariance only.
+\item[Convolution] Applying an impulse response to a signal.
+\item[DDSP] Differentiable digital signal processing: DSP blocks written so that
+  gradients flow through them.
+\item[DI] Direct input: the dry guitar signal before any processing.
+\item[Dry / wet] Unprocessed / processed signal.
+\item[EQ allowance] The smooth, capped EQ the app's search distance forgives
+  (\S\ref{sec:app-distance}).
+\item[ESR] Error-to-signal ratio, the usual training loss of amp models.
+\item[FAD] Fréchet Audio Distance between the embedding distributions of two
+  sets of clips.
+\item[Forward / inverse problem] Settings $\to$ sound / sound $\to$ settings.
+\item[Grey-box model] A model with the circuit's structure and learned values.
+\item[Impulse response (IR)] The output of an LTI system for a single click;
+  describes the system completely.
+\item[LFO] Low-frequency oscillator driving a modulation effect.
+\item[Long-term average spectrum] A signal's spectrum averaged over a long
+  stretch; differences between two of them give a matching EQ.
+\item[LTI] Linear and time-invariant.
+\item[Minimum phase] Of all filters with a given magnitude response, the one
+  with the least delay.
+\item[MR-STFT] Multi-resolution STFT distance.
+\item[MUSHRA] A standard listening-test method with hidden reference and anchor.
+\item[NAM] Neural Amp Modeler, the open capture format the app's NAM pedal plays.
+\item[Pseudo-DI / stand-in dry signal] A dry signal not recorded with the target
+  but made for it (here: from the notes).
+\item[RMS] Root mean square, a measure of level.
+\item[SI-SDR] Scale-invariant signal-to-distortion ratio, in dB.
+\item[Stem] One instrument's audio separated from a mix.
+\item[Template chain] The fixed pedal chain the app's search fits
+  (Table~\ref{tab:template}).
+\item[Tone stack] The bass/middle/treble filter of an amplifier.
+\item[Unpaired / wet only] Dry audio from another performance is available /
+  no dry audio at all.
+\end{description}

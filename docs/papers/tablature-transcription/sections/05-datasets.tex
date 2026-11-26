@@ -1,0 +1,102 @@
+% !TeX root = ../main.tex
+\section{Datasets}
+\label{sec:datasets}
+
+\subsection{What makes a dataset useful here}
+
+For transcribing a guitar part from a commercial song, four properties decide
+how useful a dataset is: (i) whether the audio is \emph{electric} guitar with
+realistic amplification, (ii) whether labels include the \emph{string} (not just
+the pitch) and the \emph{techniques}, (iii) whether the guitar appears inside a
+\emph{mix}, and (iv) the \emph{licence}, which decides whether a model trained
+on it can be distributed. No public dataset has all four.
+
+A recurring term is \term{DI} (direct input): the clean signal straight from the
+guitar's pickup, before any amplifier. A DI recording can be played through any
+number of amplifier simulations afterwards (\term{re-amping} or
+\term{rendering}), which turns one labelled performance into many labelled
+tones. This is how EGDB, GOAT and our own training data multiply their size.
+
+\subsection{The datasets}
+
+\paragraph{Audio with string labels.}
+GuitarSet~\cite{xi2018guitarset} records acoustic guitar with a hexaphonic
+pickup: per-string notes and pitch contours for 360 excerpts by six players
+(00--05), each excerpt played as accompaniment (``comp'') and as a melody
+(``solo''). It is the standard benchmark, and its small size makes overfitting a
+recurring concern~\cite{zang2024synthtab}.
+EGDB~\cite{chen2022egdb} provides 240 tablatures played on electric guitar with
+onset, pitch and string labels, as DI and through five amplifier simulations,
+plus a few real recordings; EGDB-PG~\cite{chen2025egdbpg} re-renders it through
+many amplifier-cabinet configurations.
+GOAT~\cite{loth2025goat} has 5.9\,h of DI electric guitar with Guitar Pro tabs
+that include techniques, and 29.5\,h of amplifier renders.
+EGSet12~\cite{pedroza2024tones} has 12 real performances through a miked
+amplifier with string labels.
+IDMT-SMT-Guitar~\cite{kehling2014idmt} has isolated notes and licks labelled
+with expression styles (bend, slide, vibrato, harmonics, dead notes).
+
+\paragraph{Audio with note labels only.}
+GAPS~\cite{riley2024gaps} aligns published classical guitar scores to 14\,h of
+recordings by more than 200 performers: the largest real guitar set with note
+labels. Guitar-TECHS~\cite{pedroza2025guitartechs} records electric guitar at
+once as DI, miked amplifier and room microphones, with MIDI labels from a
+hexaphonic MIDI pickup, covering techniques, chords, scales and musical
+excerpts.
+
+\paragraph{Symbolic and synthetic.}
+DadaGP~\cite{sarmento2021dadagp} is 26\,181 Guitar Pro songs (no audio), the
+main resource for learning fingering from human tabs; it is available for
+research on request. SynthTab~\cite{zang2024synthtab} renders DadaGP through
+commercial guitar plugins. GuitarFlow~\cite{loth2025guitarflow} renders tabs
+with a sampler and then transforms the result toward realistic electric guitar.
+
+\paragraph{Mixes.}
+MUSDB18~\cite{rafii2017musdb18} (150 songs) and
+MoisesDB~\cite{pereira2023moisesdb} (240 songs, with guitar sub-stems split into
+acoustic, clean electric and distorted electric) are separation datasets: real
+multitrack songs, no note labels. MuScriptor~\cite{rouard2026muscriptor} built a
+private set of 170\,000 real recordings (over 11\,000\,h) with notes aligned by
+audio-to-score synchronisation~\cite{muller2021sync}.
+
+\begin{table}[h]
+\centering
+\caption{Datasets and how this project uses them. Licences as recorded in
+\file{scripts/train/README.md} and \file{docs/transcription_roadmap.md}; NC =
+non-commercial, ND = no derivatives.}
+\label{tab:datasets}
+\small
+\begin{tabularx}{\textwidth}{@{}>{\raggedright}p{2.3cm}>{\raggedright}p{3.0cm}ccc>{\raggedright}p{2.0cm}X@{}}
+\toprule
+Dataset & Audio & String & Tech. & Mix & Licence & Our use \\
+\midrule
+GuitarSet & acoustic, mic + hexaphonic & yes & contours & no & CC BY 4.0 & Players 00--02 train; 03--05 test (never fitted on) \\
+EGDB & electric DI + 5 amp sims & yes & no & no & none stated & Train: ids not multiple of 5; test: multiples of 5 and the real clips \\
+EGSet12 & real electric, miked amp & yes & no & no & CC BY 4.0 & Test only \\
+GOAT & electric DI + amp renders & yes (tabs) & yes & no & NC, on request & Official test split; never in a distributed model \\
+Guitar-TECHS & electric DI, amp, mics & no & yes & no & CC BY 4.0 & Chords/scales train; excerpts and techniques test \\
+IDMT-SMT-Guitar & electric notes and licks & yes & yes & no & CC BY-NC-ND & Test only (techniques) \\
+GAPS & classical, real & no & no & no & -- & Pre-training of the GAPS model (by its authors) \\
+DadaGP & none (symbolic) & yes & yes & -- & research, on request & \planned{} fingering pre-training \\
+MUSDB18 & real stems & no & no & yes & NC research & Backing for synthetic band mixes \\
+MoisesDB & real stems & no & no & yes & check terms & Real-mix benchmark (Section~\ref{sec:bench-moises}) \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\begin{inapp}[: where the data lives]
+None of the datasets is in the repository. They live under
+\file{~/.cache/gva_test} (about 60\,GB), prepared by the scripts in
+\file{scripts/train/} (\code{prepare_data.py}, \code{make_mixes.py},
+\code{prepare_moisesdb.py}, \code{align_labels.py}), which write manifests
+(\code{.tsv} files listing audio and notes files) that the Rust benchmark
+\code{eval_manifest} and the Python benchmarks read.
+\end{inapp}
+
+\begin{caution}[: the missing dataset]
+There is no public set of commercial band recordings with reference tabs, which
+is exactly the use case. MuScriptor showed how one could be built (align
+existing tabs to recordings, reject bad alignments). The app has the tool for
+this, \code{scripts/train/align_tabs.py} \done, but no aligned and hand-checked
+song pairs yet (Section~\ref{sec:bench-real}).
+\end{caution}

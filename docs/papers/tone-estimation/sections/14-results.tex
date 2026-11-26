@@ -1,0 +1,121 @@
+% !TeX root = ../main.tex
+\section{How well it works}
+\label{sec:results}
+
+\subsection{The benchmark}
+
+\code{eval_tone} (an ignored test in \file{tone/eval.rs}) uses EGDB test items:
+each has the DI of a performance, renders of the same DI through three
+amplifier simulations (Marshall, Mesa, Plexi: equipment \emph{outside} the app's
+chain) and labelled notes. Per item there are four kinds of target:
+\begin{description}[style=nextline,leftmargin=1.2cm]
+\item[chain] The DI through a random template chain followed by a random
+  cabinet-like EQ (a high-pass near 80\Hz, a roll-off above 3--7\kHz, six
+  smooth bumps of up to $\pm4\dB$). The true settings are known, so parameter
+  error can be measured. Random settings: a random voicing, each parameter
+  uniform in 0.1--0.9, and the compressor, drive and reverb each switched off
+  with probability 0.5, 0.4 and 0.5. In the working tree half of these targets
+  also get a delay of 150--700\ms{} \wip.
+\item[Marshall, Mesa, Plexi] The EGDB renders: can the app's chain imitate gear
+  it does not contain?
+\end{description}
+
+Each target is estimated by five methods, all ending in the same kind of chain:
+\begin{enumerate}
+\item \textbf{dry DI}: no processing at all (a floor to beat).
+\item \textbf{best factory preset}: the closest of the 20 presets, as is.
+\item \textbf{preset + match}: that preset plus the match IR.
+\item \textbf{search + match, from notes}: the full estimator, with the stand-in
+  dry signal from the plucked-string model playing the \emph{labelled} notes.
+  This is the real use case, except that the notes are perfect.
+\item \textbf{search + match, true DI}: the full estimator given the real DI.
+  An upper bound: what the search achieves when the dry signal is right.
+\end{enumerate}
+
+\begin{keyidea}[: how each estimate is scored]
+Whatever dry signal the estimator used, the \emph{true} DI is rendered through
+its estimated chain and compared with the target by the plain log-band distance
+(no EQ allowance, Section~\ref{sec:app-distance}). This asks the question the
+user cares about: if I play this performance through the proposed preset, how
+far is it from the record? It also makes the five methods comparable.
+\end{keyidea}
+
+\subsection{Results}
+
+Committed run (\code{7db5015}): 12 EGDB items, 12\,s excerpts, about 15\,s per
+estimate on 28 threads \measured.
+
+\begin{table}[h]
+\centering
+\caption{Mean log-band distance (dB, lower is better) between the true DI
+rendered through each estimate and the target, 12 EGDB items \measured.}
+\label{tab:tone-results}
+\footnotesize
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{@{}lccccc@{}}
+\toprule
+Target & Dry DI & Best preset & Preset + match & Search, notes & Search, true DI \\
+\midrule
+Random app chain + cab EQ & 6.60 & 9.29 & 6.64 & \textbf{5.30} & 0.66 \\
+EGDB Marshall & 7.52 & 7.55 & 6.84 & \textbf{6.49} & 3.11 \\
+EGDB Mesa & 7.94 & 8.90 & 6.52 & \textbf{5.83} & 2.67 \\
+EGDB Plexi & 7.61 & 8.16 & 7.63 & \textbf{6.26} & 2.32 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\paragraph{What the table says.}
+\begin{itemize}
+\item \textbf{The estimator works, modestly.} Search from notes beats every
+  baseline on average in all four groups, and in 7--8 of the 12 items per group.
+  The gain over the best baseline is 0.35--1.35\dB.
+\item \textbf{The match filter matters.} A factory preset alone is often
+  \emph{worse} than no processing (9.29 against 6.60 on chain targets), because
+  its colour is wrong; with the match IR it gets close to or better than the dry
+  DI.
+\item \textbf{The search itself is good; the stand-in dry signal is the
+  bottleneck.} With the true DI the search gets within 0.66\dB{} of targets made
+  with the app's own chain, essentially solving them, and to 2.3--3.1\dB{} of
+  real amp simulations. From the notes it stays at 5.3--6.5\dB. The difference
+  (3.2--4.6\dB) is the cost of the plucked-string stand-in, which is still
+  9.9\dB{} from real DI even with an EQ allowed.
+\item \textbf{Settings are not recovered, and that is expected.} On chain targets
+  the mean parameter error is 0.41 on the 0--1 scale and the amp voicing is right
+  in 7 of 12 items. Several settings sound alike (Section~\ref{sec:comparison}),
+  so the search finds \emph{a} chain that sounds close, not \emph{the} chain.
+\end{itemize}
+
+\begin{worked}[: what a decibel of distance means]
+The score is an average absolute error per band and frame. 6\dB{} means each
+band of each frame is, on average, off by about a factor of two in amplitude
+(20\,log$_{10}$\,2 $\approx$ 6\dB). It is a coarse measure: it cannot tell a
+small error everywhere from a large error in a few bands, and it has not been
+checked against listeners for these sounds.
+\end{worked}
+
+\begin{caution}[: what this benchmark does not yet test]
+\begin{itemize}
+\item \textbf{Perfect notes}: the stand-in plays labelled notes. With
+  transcribed notes, missed and extra notes will add error \expected.
+\item \textbf{Isolated guitar}: no target is a separated stem. The working tree
+  adds separated-stem targets (\code{GVA_TONE_STEMS}), scored against the clean
+  render they came from \wip.
+\item \textbf{Small sample}: 12 items. Differences of a few tenths of a dB
+  between methods are within item-to-item variation.
+\item \textbf{The score is not validated}: no listening test yet. The benchmark
+  writes WAVs (\code{GVA_TONE_OUT}) for listening.
+\item \textbf{Only simulated amps} for the gear-outside-the-chain case; the
+  working tree adds Guitar-TECHS miked real amplifiers \wip.
+\end{itemize}
+\end{caution}
+
+\subsection{Being measured in the working tree}
+
+At the time of writing, the benchmark in the working tree \wip{} adds: the
+sampler stand-in as a sixth method (\code{GVA_TONE_SAMPLES}); delay-time accuracy
+(right within 5\% when the target has a delay, ``no delay'' when it has none);
+separated-stem and Guitar-TECHS miked-amp targets; a higher search floor
+(\code{GVA_TONE_FLOOR}) so the search ignores quiet bands where a stand-in
+differs most from a real DI; and \code{GVA_TONE_PLUCK=0} to skip the pluck
+stand-in. No numbers from it are recorded yet; when they are, this section and
+Table~\ref{tab:tone-results} should be updated.

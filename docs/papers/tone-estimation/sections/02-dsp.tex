@@ -1,0 +1,104 @@
+% !TeX root = ../main.tex
+\section{Signal processing primer}
+\label{sec:dsp}
+
+The pieces of a guitar rig fall into four kinds, and each kind calls for a
+different estimation strategy. This section explains them.
+
+\subsection{Linear filters: EQ, tone stack, cabinet}
+
+A processor is \term{linear and time-invariant} (LTI) when (a) doubling the
+input doubles the output, (b) the response to a sum of inputs is the sum of the
+responses, and (c) it behaves the same at all times. Equalisers, the tone stack
+of an amplifier (taken alone), a speaker cabinet with its microphone, and to a
+good approximation a room, are LTI.
+
+\begin{keyidea}[: an LTI system is fully described by its impulse response]
+Feed an LTI system a single click (an \term{impulse}); the output is its
+\term{impulse response} (IR) $h$. The output for any input $x$ is then the
+\term{convolution}
+\[
+  y[n] = \sum_{k} h[k]\,x[n-k],
+\]
+each input sample triggering a scaled copy of the IR. Equivalently, in
+frequency, each frequency is multiplied by the \term{frequency response}
+$H(f)$, the Fourier transform of $h$. This is why a cabinet can be stored as a
+\file{.wav} IR and why the app's Cabinet pedal is a convolution
+(\file{backend/dsp/convolution.rs}).
+\end{keyidea}
+
+Two consequences matter for tone estimation.
+\begin{itemize}
+\item \textbf{The linear part can be measured from long-term spectra.} If
+  $y = h * x$, the average spectrum of $y$ is the average spectrum of $x$
+  times $|H(f)|^2$, so in decibels
+  $L_y(f) = L_x(f) + 20\log_{10}|H(f)|$. The difference between two
+  \term{long-term average spectra} is the EQ that turns one into the other.
+  This is what Tone Match products and the app's final step do.
+\item \textbf{Phase.} Many IRs have the same magnitude response $|H(f)|$. The
+  \term{minimum-phase} one concentrates its energy as early as possible, so it
+  adds the least delay and smearing~\cite{oppenheim2010dtsp}. When only a
+  magnitude is known (as from spectra), the minimum-phase IR is the natural
+  choice. It can be computed through the \term{cepstrum} (the inverse Fourier
+  transform of the log magnitude): keeping only its causal half and
+  transforming back gives the minimum-phase filter (Section~\ref{sec:impl-match}).
+\end{itemize}
+
+\subsection{Nonlinear processors: drive, distortion, the amplifier}
+
+A distortion circuit \term{clips}: above some level, the output stops growing.
+Clipping a sine wave adds harmonics (multiples of its frequency); clipping two
+notes together adds sum and difference frequencies (\term{intermodulation}).
+Two properties of nonlinear processors drive the design of the app's search.
+
+\begin{keyidea}[: input level is a setting]
+How much a clipper distorts depends on how loud its input is. The same amp at
+the same gain sounds clean with a soft guitar and crunchy with a hot pickup. A
+tone estimate must therefore choose the input level together with the gain; in
+the app it is the first searched parameter (\code{input level (RMS)}).
+\end{keyidea}
+
+\begin{worked}[: order matters]
+Put a treble boost \emph{before} a distortion: the high strings drive the
+clipper harder, so they distort more and gain harmonics, and the result is
+brighter and fizzier. Put the same boost \emph{after}: the distortion is the
+same as without it and only the final colour is brighter. For an LTI chain, the
+order of filters does not matter; around a nonlinearity it does. Corollary: a
+linear filter \emph{after} all the clipping (the cabinet, mix EQ, and in the
+app's amp model the tone stack) can be estimated separately at the end, which is
+what the app does.
+\end{worked}
+
+\subsection{Dynamics: compressors}
+
+A \term{compressor} lowers the gain when the signal exceeds a
+\term{threshold}, by a \term{ratio} (4:1 means 4\dB{} above the threshold
+becomes 1\dB), reacting with an \term{attack} time and recovering with a
+\term{release} time. It changes the envelope of notes (less attack, more
+sustain) more than their spectrum. It is nonlinear and time-varying, and it is
+easy to confuse with the natural compression of a distorted amp.
+
+\subsection{Time-varying effects: modulation}
+
+Chorus, flanger, phaser and tremolo are driven by a \term{low-frequency
+oscillator} (LFO, typically 0.1--10\Hz) that slowly moves a delay time, a
+filter notch or the volume. Their sound depends on the LFO rate and depth. The
+search landscape over an LFO rate is very rugged (many local minima): a small
+change in rate shifts the LFO's phase completely after a few seconds.
+
+\subsection{Long-memory effects: delay and reverb}
+
+A \term{delay} adds copies of the signal after a fixed time (the \term{delay
+time}), each copy quieter by the \term{feedback} factor. A \term{reverb} adds a
+dense, decaying tail; its decay time (RT60, the time to fall by 60\dB) and
+brightness are its main traits. Like LFO rates, delay times make rugged
+landscapes: a delay of 300\ms{} and one of 310\ms{} produce echoes that land in
+different places, so the comparison score does not change smoothly between
+them. That is why the app \emph{measures} the delay time from the recording
+instead of searching it (Section~\ref{sec:impl-delay}).
+
+\subsection{Loudness}
+
+Two renders that differ only in volume should count as the same tone, because
+the mix level of a guitar says nothing about its rig. All comparisons in the app
+first scale both signals to the same RMS (root-mean-square) level.

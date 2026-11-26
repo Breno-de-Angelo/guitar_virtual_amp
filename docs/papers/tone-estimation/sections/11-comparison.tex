@@ -1,0 +1,99 @@
+% !TeX root = ../main.tex
+\section{Comparison, failure modes and open problems}
+\label{sec:comparison}
+
+\subsection{Comparison}
+
+The commercial case needs three properties at once: no dry signal of the target,
+an output a real-time chain can use, and robustness to separated stems.
+Table~\ref{tab:methods} shows that no published method has all three. Effect
+recognition returns usable parameters but was trained and tested almost only on
+synthetic, isolated renders. Unpaired modelling needs no aligned dry signal and
+returns a real-time model, but covered only distortion on isolated guitar. Tone
+transfer (EG-VAE) handles whole chains but returns audio. Inference-time search
+(ST-ITO) drives any chain but fails on guitar tone with an embedding objective.
+StemFX is the only work trained on separated stems, for mixing effects.
+
+\begin{table}[h]
+\centering
+\caption{Main methods by requirement and output. ``Non-diff.'': works with a
+chain that cannot be differentiated. ``Sep.'': trained or tested on separated
+stems. Licence of released code or weights (NC = non-commercial; -- = not
+released or no licence file; ? = code released, licence not checked).}
+\label{tab:methods}
+\footnotesize
+\setlength{\tabcolsep}{2.5pt}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{@{}llllllll@{}}
+\toprule
+Method & Needs & Output & Non-diff. & Guitar & Sep. & Code & Reported \\
+\midrule
+FxNet~\cite{comunita2021guitar} & wet & drive type, gain, tone & yes & yes & no & BSD-3 & 81--91\%, MAE $\approx$0.04 \\
+Hinrichs 2022~\cite{hinrichs2022convolutional} & wet in mix & type, params & yes & yes & no (mix) & -- & 90.0\% in mixes \\
+Okita~\cite{okita2026audio} & wet & chain (search) & yes & yes & no & -- & 23.07\dB{} wet SI-SDR \\
+StemFX~\cite{cheng2026stemfx} & wet stems & mixing FX chain & yes & no & yes & MIT & 86.8\% top-1 \\
+DeepAFx-ST~\cite{steinmetz2022style} & wet + input & EQ, comp. & SPSA & no & no & NC & -- \\
+ST-ITO~\cite{steinmetz2024stito} & wet + input & any chain (search) & yes & fails & no & Apache-2.0 & 0.86 style acc. \\
+TAPE~\cite{long2026tape} & wet + input & own DSP chain & no & partly & no & -- & STFT L1 1.12 vs 2.34 \\
+Fx-Encoder++~\cite{yeh2025fxencoder} & mix + query & embedding & -- & partly & yes & NC & R@10 39.4 $\to$ 20.5\% \\
+Unpaired GAN~\cite{wright2023adversarial} & wet + other DI & neural amp & -- & yes & no & -- & MUSHRA 77--84 \\
+Diffusion blind~\cite{moliner2025unsupervised} & wet + clean prior & neural / grey-box & -- & yes & no & ? & stable from 18\,s \\
+Remove + model~\cite{hinrichs2024blind} & wet & neural effect & -- & yes & no & -- & MUSHRA $\geq$92 (1 effect) \\
+EG-VAE~\cite{yeh2026egvae} & wet + any DI & audio, DI estimate & -- & yes & no & -- & MOS 4.30 / 3.70 \\
+Tone embedding~\cite{chen2024zeroshot} & wet ref.\ + DI & neural amp & -- & yes & no & -- & 2$\times$ loss unseen \\
+Open-Amp~\cite{wright2025openamp} & paired (enrol) & neural, 394 devices & -- & yes & no & -- & 91.1\% class acc. \\
+Tone Match~\cite{fractalndtonematch} & isolated wet & EQ / IR & yes & yes & no & product & -- \\
+\midrule
+This app & stem + notes & app chain + IR & yes & yes & \wip & GPL-3.0 & Section~\ref{sec:results} \\
+\bottomrule
+\end{tabular}}
+\end{table}
+
+\subsection{Known and expected failure modes}
+
+\begin{description}[style=nextline,leftmargin=1.2cm]
+\item[Separation artefacts] Effect retrieval roughly halves from isolated to
+  separated stems \reported~\cite{yeh2025fxencoder}. Reverb tails, stereo delays
+  and wide choruses are the most exposed to leakage and masking; bleed from keys
+  or other guitars adds energy a matcher will try to reproduce \expected.
+\item[Several guitars in one stem] Double-tracked or layered guitars give one
+  stem with mixed tones. The pan split separates parts on different sides, not
+  in the same position \expected.
+\item[Mixing and mastering] Bus compression, limiting and mix EQ act after the
+  guitarist's chain. An estimator attributes them to the guitar; a final linear
+  match absorbs the EQ but not the dynamics \expected.
+\item[Non-uniqueness] Drive vs amp gain, fuzz vs high-gain amp, compression vs
+  picking dynamics, effect order. Device identity is confused even between clean
+  renders of similar circuits~\cite{comunita2021guitar}, and order is harder than
+  presence~\cite{wada2025hyperbolic}. Harmless for reproduction if the result
+  sounds alike, which is why audio objectives are preferred~\cite{peladeau2024blind}.
+  The app's benchmark shows it: the right amp voicing is found in only 7 of 12
+  items, yet the sound gets closer \measured.
+\item[Equipment outside the chain] Guitar, pickups and microphone shape the tone
+  and can only be compensated by EQ. A mono chain cannot reproduce stereo
+  effects. Generic blocks may lack a specific amp's character, as EG-VAE's
+  differentiable baseline showed~\cite{yeh2026egvae}.
+\item[Search pathologies] LFO rates and delay times make rugged
+  landscapes~\cite{okita2026audio,uzrad2024diffmoog}; an embedding objective can
+  improve while the sound moves away~\cite{long2026tape}; errors of a removal
+  model add to errors of the estimate~\cite{take2024audio}.
+\item[Tone changes within a song] Clean verses and distorted choruses need
+  different presets. Segmenting songs into tone sections exists only in
+  products~\cite{bouharb2026gptonebuilder}.
+\end{description}
+
+\subsection{Open problems}
+
+\begin{enumerate}
+\item Estimating an interpretable amp, cabinet and effects chain from a separated
+  stem of a commercial song, evaluated against known equipment.
+\item A benchmark for that task: commercial-like mixes with known chains, and
+  real multitracks with the guitarist's DI and amp tracks, scored with metrics
+  validated by listening tests.
+\item Unpaired or blind modelling of a full chain, on separated rather than
+  isolated guitar.
+\item Delay, reverb and modulation estimation on real guitar phrases, with
+  validated metrics.
+\item Training data that can be redistributed: most realistic sets and the
+  largest capture libraries are non-commercial or forbid bulk use.
+\end{enumerate}

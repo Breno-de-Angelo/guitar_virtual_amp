@@ -1,0 +1,69 @@
+% !TeX root = ../main.tex
+\section*{How to read this document}
+\addcontentsline{toc}{section}{How to read this document}
+
+\paragraph{Purpose.} Coding agents are building a tone estimator for Guitar
+Virtual Amp (\file{guitar_core/src/tone/}). This document explains the problem,
+the research it builds on, the design that was chosen, exactly what is
+implemented, and how well it works, so the owner can follow and steer that
+work. It replaces an earlier conference-style literature review and keeps all of
+its references.
+
+\paragraph{Structure.}
+\begin{itemize}
+\item \textbf{Part I, Background} (Sections~\ref{sec:problem}--\ref{sec:search}):
+  what a tone is, the signal processing behind a guitar rig, how two sounds are
+  compared, and how a search finds settings. Read this first if any of
+  ``impulse response'', ``minimum phase'' or ``CMA-ES'' is unfamiliar.
+\item \textbf{Part II, The literature} (Sections~\ref{sec:datasets}--\ref{sec:comparison}):
+  datasets, effect recognition, amplifier modelling, working without the dry
+  signal, style transfer and sound matching, commercial products, and a
+  comparison with failure modes.
+\item \textbf{Part III, Guitar Virtual Amp} (Sections~\ref{sec:design}--\ref{sec:next}):
+  the design, the implementation component by component (with the formulas the
+  code uses), the benchmark and its results, and the next steps.
+\item \textbf{Appendices}: glossary; code map and commands.
+\end{itemize}
+
+\paragraph{Labels.} Coloured boxes: \emph{Key idea} (intuition), \emph{In Guitar
+Virtual Amp} (what the code does), \emph{Caution} (pitfalls), \emph{Worked
+example}, \emph{Next steps}. Inline tags: \measured{} run by us in this
+repository; \reported{} stated by a paper's authors; \expected{} a hypothesis.
+For the app: \done{} in the committed code, \wip{} in the working tree or being
+changed, \planned{} only in the roadmap.
+
+\paragraph{Snapshot and moving parts.} Written on 25 November 2026. The tone
+module was committed in \code{7db5015}; at the time of writing an agent is
+extending it in the working tree (a measured delay time, a sampler-based dry
+signal, more benchmark targets, and an optional stage in the transcription
+pipeline that saves the estimate as a preset). Section~\ref{sec:impl} marks
+which parts are committed and which are in progress. The results in
+Section~\ref{sec:results} are from the committed version.
+
+\paragraph{Related files.} \file{ROADMAP.md} (``Tone from the recording''),
+\file{CLAUDE.md} (section ``Tone from a recording''), and the companion
+document on tablature, \file{docs/papers/tablature-transcription/}, whose
+separation and note transcription this work reuses~\cite{deangelo2026tabreview}.
+
+\subsection*{The whole story in one table}
+\addcontentsline{toc}{subsection}{The whole story in one table}
+
+\begin{table}[h]
+\centering
+\caption{Summary. Distances are in dB of log-band difference (lower is better,
+Section~\ref{sec:app-distance}).}
+\label{tab:summary}
+\small
+\begin{tabularx}{\textwidth}{@{}>{\raggedright}p{2.6cm}>{\raggedright}p{4.4cm}X@{}}
+\toprule
+Question & Literature & Guitar Virtual Amp \\
+\midrule
+Which effects are present? & Close to solved on synthetic isolated guitar (set F1 0.987 on 3-effect chains) \reported & Not estimated separately: the search switches pedals off \\
+Knob values of a known chain? & Regression MAE 0.02--0.05 on a unit scale for known plugins \reported; search by re-rendering beats prediction (wet SI-SDR 18.2 $\to$ 23.1\dB) \reported & CMA-ES search through the app's own renderer \done \\
+Without the dry signal? & Unpaired amp models score 77--84 MUSHRA \reported; effect removal; no notes-based resynthesis found & Dry signal synthesised from the transcribed notes (plucked-string model) \done; sampler of real DI notes \wip \\
+On a stem from a commercial mix? & Only one measurement: effect retrieval halves on separated stems \reported & Benchmark has separated-stem targets \wip; not yet measured \\
+Final colour (cabinet, mix EQ) & Spectral matching to an IR, after the gain is right (Tone Match) & Minimum-phase match IR in a Cabinet pedal \done \\
+How good is it? & No benchmark for the full task & EGDB, 12 items: 5.3--6.5\dB{} against 6.5--7.6\dB{} for the best baseline; 0.7--3.1\dB{} with the true DI \measured \\
+\bottomrule
+\end{tabularx}
+\end{table}

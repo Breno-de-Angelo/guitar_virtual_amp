@@ -1,0 +1,66 @@
+% !TeX root = ../main.tex
+\section{Next steps}
+\label{sec:next}
+
+\subsection{Order of work}
+
+The results point at the dry signal first: the search is close to optimal when
+it has the right one.
+
+\begin{nextsteps}
+\begin{enumerate}
+\item \textbf{A better dry signal} \wip: the sampler of real DI notes; later a
+  learned DI renderer (in the manner of GuitarFlow~\cite{loth2025guitarflow},
+  trained on redistributable DI), an effect remover trained on the app's own
+  renders~\cite{lee2024distortion,yeh2026egvae}, and the player's own DI through a
+  pre-chain tap in practice mode.
+\item \textbf{Separated stems} in the benchmark \wip, then the transcription
+  pipeline's own notes instead of labels.
+\item \textbf{Time-based effects from notes and tempo}: delay \wip; reverb decay
+  from rests; modulation rate from sustained notes \planned.
+\item \textbf{A learned initial guess} trained on separated renders of the
+  template chain, returning several candidates \planned.
+\item \textbf{Listening tests} (MUSHRA via webMUSHRA) to check that the distance
+  agrees with ears \planned.
+\item \textbf{The UI}: save as a preset tagged with the song and track \wip;
+  compare the preset with the stem played in sync by the tab player \planned.
+\item \textbf{Captures}: the user's NAM files as amp candidates \planned.
+\end{enumerate}
+\end{nextsteps}
+
+\subsection{The full evaluation protocol}
+
+The benchmark is meant to grow into four sets:
+\begin{enumerate}
+\item \textbf{In-chain synthetic}: held-out DI (Guitar-TECHS P3, GuitarSet
+  players 03--05) through random template chains, isolated and over backing tracks
+  after separation; parameter error and audio distances. The difference between
+  isolated and separated inputs measures the cost of separation.
+\item \textbf{Equipment outside the chain}: EGDB and EGDB-PG renders, Guitar-TECHS
+  real amplifiers, and for research only GOAT and ToneTwist devices; the true DI
+  is rendered through the estimate and compared with the real output.
+\item \textbf{Real productions}: MoisesDB songs with isolated guitar tracks;
+  estimates from the separated stem against estimates from the isolated track,
+  each scored against the isolated track.
+\item \textbf{Listening}: MUSHRA on sets 1 and 2, where the same performance
+  exists on both sides; tone-similarity scores on set 3; correlation of the
+  objective metrics with the ratings.
+\end{enumerate}
+Baselines throughout: the current metadata-based suggestion, the nearest factory
+preset, that preset plus the match, the full pipeline, and the search with the
+true DI as upper bound.
+
+\subsection{Conclusion}
+
+Each part of guitar tone estimation has working methods under easier conditions:
+effects are recognised on synthetic isolated guitar, amplifiers are captured from
+paired audio and, less accurately, from unpaired audio, tone-transfer models
+reproduce whole chains as audio, and inference-time search drives arbitrary,
+non-differentiable chains. What was missing is the combination the commercial
+case needs: an editable chain, estimated from a separated stem without the dry
+signal. The app now has a first version of that combination, using its own
+renderer as the forward model, a gradient-free search, a final linear match,
+and one idea the literature had not used: a dry signal synthesised from the
+transcribed notes. The first benchmark shows that the search is not the weak
+part; the stand-in dry signal is. Improving it, and measuring on separated stems
+and with listeners, are the next steps.

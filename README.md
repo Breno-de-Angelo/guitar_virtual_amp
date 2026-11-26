@@ -288,8 +288,9 @@ deletes it, and [spotify.com/account/apps](https://www.spotify.com/account/apps)
 
 ## Roadmap
 
-See [ROADMAP.md](ROADMAP.md): a mobile-friendly UI redesign, MIDI/footswitch control and online
-preset sharing are planned.
+This is a personal open-source project, with no hosted service or store release planned. See
+[ROADMAP.md](ROADMAP.md): next up are a mobile-friendly UI redesign and MIDI/footswitch control,
+plus more play-along and transcription work.
 
 ## License
 

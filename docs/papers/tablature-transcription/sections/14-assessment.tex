@@ -1,0 +1,166 @@
+% !TeX root = ../main.tex
+\section{Assessment: where we stand and what comes next}
+\label{sec:assessment}
+
+\subsection{The app against the state of the art}
+
+The literature splits in two (Table~\ref{tab:methods}). Methods that handle real
+mixes (MuScriptor, YourMT3+, source separators) output notes or stems without
+fingering; methods that output tablature (TabCNN, FretNet, Noise2Fret, TART)
+require a solo guitar. A modular pipeline that chains a separator, a guitar note
+model and a fingering model is currently the only way to get a tab from a
+commercial recording. The app is such a pipeline, built from the strongest
+components with released weights, and our measurements support the choice: on
+electric guitar and on separated mixes it beats the end-to-end models we could
+run by 0.17--0.23 Tab F1 (Table~\ref{tab:bench-tab}).
+
+The most direct published comparison is TART: 54.08\% end-to-end Tab F1 averaged
+over clean and noisy solo-guitar sets \reported. Our closest numbers are Tab F1
+0.64--0.68 on the EGDB tones and 0.65 on separated band mixes with v2 and the
+tagger \measured. These are \emph{not} the same test sets, so the only safe
+conclusion is that the app is in the same range as the best published system,
+on harder inputs (amplified and mixed guitar).
+
+\begin{table}[h]
+\centering
+\caption{Main methods by stage. ``Mix'': designed or shown to work on
+multi-instrument recordings. ``Here'': whether we ran it. Reported results use
+different test sets.}
+\label{tab:methods}
+\small
+\setlength{\tabcolsep}{3pt}
+\begin{tabularx}{\textwidth}{@{}>{\raggedright}p{3.0cm}>{\raggedright}p{1.7cm}>{\raggedright}p{2.6cm}c>{\raggedright}p{2.6cm}X@{}}
+\toprule
+Method & Stage & Output & Mix & Here & Reported (as published) \\
+\midrule
+HT Demucs~\cite{rouard2023htdemucs} & separation & 4 or 6 stems & yes & app fallback & 9.20\dB{} SDR, MUSDB18 \\
+BS-RoFormer~\cite{lu2023bsroformer} & separation & stems & yes & app default & 9.80\dB{} SDR; SDX23 winner \\
+Banquet~\cite{watcharasupat2024banquet} & separation & queried stem & yes & not yet & beats \code{htdemucs_6s} on guitar \\
+GAPS model~\cite{riley2024gaps} & notes & notes & no & app default & SOTA on GuitarSet \\
+Basic Pitch~\cite{bittner2022basicpitch} & notes & notes, contour & no & bundled & lightweight baseline \\
+YourMT3+~\cite{chang2024yourmt3} & notes & notes + instrument & yes & benchmarked & limited on pop \\
+MuScriptor~\cite{rouard2026muscriptor} & notes & notes + instrument & yes & benchmarked & 60.4 onset F1 (own test) \\
+Beat This!~\cite{foscarin2024beatthis} & rhythm & beats, downbeats & yes & app default & SOTA beat F1 without DBN \\
+AlignBeat~\cite{ahn2025alignbeat} & rhythm & beats, downbeats & yes & not yet & +3.6 downbeat CMLt \\
+Viterbi / HMM~\cite{sayegh1989fingering,hori2016minimax} & fingering & string, fret & -- & app fallback & hand-made costs \\
+MIDI-to-Tab~\cite{edwards2024miditotab} & fingering & string & -- & no weights & preferred in a user study \\
+Fretting-Transformer~\cite{hamberger2025fretting} & fingering & string, fret & -- & no weights & beats A* and Guitar Pro \\
+Chen et al.~\cite{chen2015technique}, TENT~\cite{su2019tent} & techniques & per note & no & rules like these & TENT +14.7\% note F \\
+TabCNN~\cite{wiggins2019tabcnn} & end-to-end & frets per frame & no & benchmarked & GuitarSet baseline \\
+Noise2Fret~\cite{simionato2026noise2fret} & end-to-end & string, fret & no & own protocol only & beats baselines \\
+TART~\cite{gupta2026tart} & hybrid & tab + techniques & no & no code & 81.35 F50 / 71.8 / 54.08 Tab F1 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\subsection{Decisions taken, and the evidence for each}
+
+\begin{table}[h]
+\centering
+\caption{Design decisions in the transcription pipeline (all November 2026).}
+\label{tab:decisions}
+\small
+\begin{tabularx}{\textwidth}{@{}>{\raggedright}p{4.3cm}X>{\raggedright\arraybackslash}p{1.5cm}@{}}
+\toprule
+Decision & Evidence & Section \\
+\midrule
+Modular pipeline, not end-to-end & Wins by 0.17--0.23 Tab F1 on electric guitar and mixes & \ref{sec:bench-tab} \\
+BS-RoFormer SW as default separator, Demucs as fallback & +0.07 F50 on synthetic mixes, +0.12 on real songs; cost 34\,s against 10\,s per song & \ref{sec:separation}, \ref{sec:bench-moises} \\
+Keep separator + CRNN rather than MuScriptor on the mix & Real songs: MuScriptor 0.42 on the mix against 0.71 for v2 on the stem; 1.3$\times$ real time & \ref{sec:bench-moises} \\
+Beat This! final0 over small0 & Accompaniment CMLt 0.80 $\to$ 0.92; bar lines 35 $\to$ 41 of 60 & \ref{sec:rhythm} \\
+v2 electric CRNN as an option, not the default & ``Metal High Gain'' 0.43 $\to$ 0.69, but EGDB has no licence & \ref{sec:notes} \\
+Learned fingering tagger when installed & String accuracy +0.07 solo, +0.13 EGDB; final-tab 68 $\to$ 78\% & \ref{sec:fingering} \\
+No hand-written octave correction for distortion & Made clean and crunch worse, metal no better & \ref{sec:notes} \\
+Pan split for several guitars & Lead F1 0.40 $\to$ 0.85 in two-guitar mixes; single guitars unaffected & \ref{sec:separation} \\
+Train in TF32, not bf16 & bf16 crashed (NaN) at step 1100 & \ref{sec:notes} \\
+Separation-aware training (T1) moved down, fingering (T2) up, after BS-RoFormer & Stems cost only about 0.02 F50 against isolated guitar on synthetic mixes & \ref{sec:next} \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\subsection{Failure modes, collected}
+
+\begin{enumerate}
+\item \textbf{Distorted guitar in real mixes} is the largest remaining loss:
+  0.56 F50 on MoisesDB distorted guitars against 0.83 on acoustic.
+\item \textbf{Two guitars in the same place} of the stereo image stay one
+  track.
+\item \textbf{Fingering on new players} is limited by training-data diversity.
+\item \textbf{Techniques}: most bends, vibrato and slides are missed; palm
+  mute, harmonics and dead notes are not detected at all.
+\item \textbf{Rhythm}: compound meters, 16th triplets and 32nds; solo-guitar
+  recordings without accompaniment.
+\item \textbf{Same-pitch notes} cannot be represented by MT3-style
+  transcribers (a reason not to adopt them as-is).
+\item \textbf{No real-song benchmark}: the use case is not yet measured.
+\end{enumerate}
+
+\subsection{Open problems in the literature}
+
+\begin{enumerate}
+\item \textbf{Mix-level tablature}: no method outputs string and fret from a
+  band recording. Adding string and fret tokens to a mix-trained transcriber
+  such as MuScriptor would combine mix robustness with timbre-aware fingering,
+  and would also fix the same-pitch limitation (a unison on two strings becomes
+  two different tokens).
+\item \textbf{Separation for transcription}: separators are trained for SDR,
+  transcribers on clean stems; training each on the other's output is untested
+  for guitar.
+\item \textbf{Part separation}: splitting two guitars of the same kind needs
+  spatial cues or a separator conditioned on the part.
+\item \textbf{Techniques in context}: learned classifiers evaluated on
+  amplified and polyphonic material.
+\item \textbf{A public real benchmark}: commercial recordings with aligned
+  reference tabs.
+\item \textbf{Rhythm notation}: quantisation, tuplets and compound meters are
+  done by rules and not evaluated anywhere.
+\end{enumerate}
+
+\subsection{What the agents are working on next}
+\label{sec:next}
+
+The detailed plan, with data and compute estimates, is in
+\file{docs/transcription_roadmap.md}; the tasks are named T1--T5 there.
+
+\begin{nextsteps}[: in order]
+\begin{enumerate}
+\item \textbf{Real-song benchmark} (Phase 0.3) \planned: collect 30--50 song +
+  tab pairs, align, hand-check 20--30, record the current pipeline as baseline.
+\item \textbf{T1, separation-aware CRNN} \wip: train on what inference sees.
+  The uncommitted script \code{scripts/train/pseudo_label_moisesdb.py} builds
+  training data from MoisesDB: the input is a separator's guitar stem of the
+  real mix, the target the notes a teacher model (v2) transcribed from the
+  song's isolated guitars (\term{pseudo-labels}), split by song into train
+  (67\%), validation (8\%) and test (25\%). \code{finetune_crnn.py} gains
+  \code{--extra-train} and \code{--extra-val} to mix these items in. The target
+  is the 0.56 on distorted guitars in real songs.
+\item \textbf{T2, fingering}: request DadaGP for pre-training (more players),
+  then condition on audio (CRNN features at each onset, as TART does); retrain
+  without EGDB if its authors do not allow distribution \planned.
+\item \textbf{T3, per-note technique classifier} on GOAT, IDMT and Guitar-TECHS
+  with tone augmentation \planned.
+\item \textbf{T4, guitar tab transformer on full mixes}: fine-tune MuScriptor
+  with string and fret tokens, small first, then large across the DGX Sparks;
+  only after T1/T2 baselines exist \planned.
+\item \textbf{T5, two guitars in the same spot}: a query-based or fine-tuned
+  RoFormer separator for ``rhythm'' and ``lead''; lowest priority \planned.
+\end{enumerate}
+Smaller items: try Banquet and AlignBeat; palm mute and harmonics; 6/8,
+16th triplets and 32nds; batch transcription of a Spotify playlist via YouTube;
+a native (ONNX) separator so Android could separate; a tab editor.
+\end{nextsteps}
+
+\subsection{Conclusion}
+
+Guitar tablature transcription moved from frame-wise CNNs on acoustic guitar to
+modular systems with learned fingering and techniques, and to generative
+end-to-end models; in parallel, large transcribers trained on real mixes now
+handle distorted guitar but stop at notes. For transcribing a guitar part from a
+song, the practical state of the art is a modular pipeline, and that is what the
+app implements. A band-split separator recovers most of what the mix costs, a
+note model trained on many tones handles amplified guitar on isolated
+recordings, and a learned fingering model fixes most of the Viterbi's trouble
+with solo lines. What remains is distorted guitar inside real mixes, the
+separation of guitars that share a position, techniques beyond the easy
+cases, and, before anything else, a benchmark of real songs with reference tabs
+so that progress on the actual task can be measured.

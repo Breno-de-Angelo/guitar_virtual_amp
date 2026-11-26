@@ -1,0 +1,97 @@
+% !TeX root = ../main.tex
+\section{Finding settings: prediction and search}
+\label{sec:search}
+
+\subsection{Two ways to invert a chain}
+
+\begin{description}[style=nextline,leftmargin=1.2cm]
+\item[Prediction] Train a network on many renders of the chain with random
+  settings to output the settings from the audio. Fast at use time (one pass),
+  but it only knows the kind of audio it was trained on, and it struggles when
+  several settings sound alike (it averages them).
+\item[Analysis by synthesis (search)] Propose settings, render the dry signal
+  through the real chain, measure the distance to the target, and improve the
+  proposal; repeat. Slow (hundreds of renders), but it uses the exact forward
+  model and needs no training.
+\end{description}
+The literature agrees on combining them: a prediction gives starting points, a
+search refines them (Sections~\ref{sec:recognition} and~\ref{sec:matching}).
+The app currently implements the search, starting from neutral settings and
+from the factory presets.
+
+\subsection{Gradient or no gradient}
+
+If the chain is written in a differentiable framework (DDSP, PyTorch), the
+gradient of the distance with respect to every setting is available and
+gradient descent can be used. The app's chain is Rust code working on 16-bit
+samples, with switches (pedal on or off) and discrete choices (amp voicing): it
+has no gradients. So the search must be \term{gradient-free}: it may only
+evaluate the distance at chosen points. That is also the situation of the
+commercial plugins ST-ITO and Okita and Katayose search over
+(Section~\ref{sec:recognition}). On non-convex problems gradient-free search can
+even win: in synthesizer matching, CMA-ES reached a loss of 2.09 where Adam
+(a gradient method) reached 4.60 \reported~\cite{bogdan2026instrumental}.
+
+\subsection{CMA-ES, step by step}
+
+\begin{keyidea}[: a cloud that moves, stretches and shrinks]
+CMA-ES (Covariance Matrix Adaptation Evolution Strategy)~\cite{hansen2001cmaes}
+keeps a Gaussian ``cloud'' over the search space: a \emph{mean} (the current
+best guess), a \emph{step size} $\sigma$ (how wide the cloud is) and a
+\emph{covariance} (its shape: which directions are stretched). Each generation
+it samples candidates from the cloud, evaluates them, moves the mean toward the
+best ones, stretches the cloud along directions that worked, and widens or
+narrows it depending on whether the steps have been consistently in one
+direction (far from the optimum: widen) or random (near it: narrow).
+\end{keyidea}
+
+One generation, with $n$ parameters, population $\lambda$ and the best
+$\mu = \lambda/2$ kept:
+\begin{enumerate}
+\item \textbf{Sample} $\lambda$ candidates $x_k = m + \sigma\, C^{1/2} z_k$,
+  with $z_k$ standard normal.
+\item \textbf{Evaluate} each candidate (here: render and compare). This is the
+  expensive part and runs in parallel.
+\item \textbf{Rank} them and form the new mean as a weighted average of the
+  best $\mu$, with larger weights for better ranks:
+  $m' = \sum_{i=1}^{\mu} w_i\, x_{(i)}$.
+\item \textbf{Update the shape} $C$ from the steps of the best candidates
+  (rank-$\mu$ update) and from the accumulated path of the mean (rank-one
+  update), so directions of progress grow.
+\item \textbf{Update the step size}: compare the length of the accumulated path
+  of the mean with the length expected of a random walk; longer means the
+  search is moving consistently, so $\sigma$ grows; shorter means it is
+  circling the optimum, so $\sigma$ shrinks.
+\end{enumerate}
+Only the \emph{ranks} of the candidates matter, not the distance values, which
+makes CMA-ES robust to the scale and noise of the objective. The
+\term{separable} variant~\cite{ros2008sepcmaes} keeps only the diagonal of $C$
+(one width per parameter, no correlations): cheaper and faster to adapt, and
+adequate for about ten parameters. The app uses it (\file{tone/cmaes.rs}).
+
+\begin{worked}[: budget]
+The app runs three searches (one per amp voicing), each with a population of
+16 for 30 generations: $3 \times (1 + 16\cdot30) = 1443$ renders, plus one
+render per factory preset for the baseline. Each render processes a 12\,s
+excerpt through the chain. In the committed benchmark one estimate took about
+15\,s on 28 threads \measured.
+\end{worked}
+
+\subsection{Pitfalls of search}
+
+\begin{itemize}
+\item \textbf{Rugged landscapes}: LFO rates and delay times
+  (Section~\ref{sec:dsp}). Okita and Katayose had to fix the chorus rate because
+  its landscape was too rugged \reported~\cite{okita2026audio}. Remedy: measure
+  those parameters from the signal instead.
+\item \textbf{Discrete choices} (amp voicing, which capture, which IR) are not
+  continuous: search each one separately, or treat them as candidates.
+\item \textbf{The objective can be gamed}: TAPE showed a search driving an
+  embedding distance down while the spectral error rose above that of the
+  unprocessed input \reported~\cite{long2026tape}. Use an objective close to
+  what listeners hear, and check the result with a different score.
+\item \textbf{Ambiguity}: many settings reach the same distance. A
+  \term{prior} over realistic presets (a probability distribution fitted on
+  real presets) turns the search into a maximum-a-posteriori estimate and
+  reduced parameter error by up to a third in Yu et al.\ \reported~\cite{yu2025improving}.
+\end{itemize}

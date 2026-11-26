@@ -1,0 +1,87 @@
+% !TeX root = ../main.tex
+\section{Working without the dry signal}
+\label{sec:nodi}
+
+Everything in Section~\ref{sec:modelling} needs the dry signal of the same
+performance. A song does not have it. There are three ways around this.
+
+\subsection{Unpaired and blind modelling}
+
+\begin{keyidea}[: learn the device from its output's statistics]
+If we cannot compare the model's output with the target sample by sample, we
+can still ask that the model's output \emph{looks like} processed guitar in
+general. A \term{discriminator} network trained to tell real processed guitar
+from the model's output provides that signal (adversarial training, as in GANs).
+\end{keyidea}
+
+Wright, Välimäki and Juvela trained a real-time WaveNet amp model only
+adversarially~\cite{wright2023adversarial}. With input and target from the same
+guitar, the best unpaired model scored 83--92 MUSHRA across three plugin tones;
+with a different guitar for the input, the realistic case, 77--84, comparable to
+an oracle that equalised the true plugin's output (72--81) \reported. Training
+took 4--10 GPU hours per tone. Chen et al.\ improved stability with multi-scale
+and multi-period discriminators and extra clean data, and found loudness
+normalisation essential~\cite{chen2024unsupervised}.
+
+Moliner et al.\ estimate the clean signals and the effect jointly by
+\term{diffusion posterior sampling} with a prior trained on clean
+guitar~\cite{moliner2025unsupervised}. Diffusion stays stable with only 18\,s of
+processed audio, where adversarial training degrades; adversarial training is
+better on heavy distortion; a grey-box operator matched black-box ones under
+diffusion but collapsed under adversarial training. Švento et al.\ estimate a
+memoryless nonlinearity (a spline) together with the clean
+signal~\cite{svento2025estimation}, giving both a dry estimate and a waveshaper
+curve; LOUDAR moves the operator into an autoencoder's latent
+space~\cite{svento2026loudar}.
+
+All of these were evaluated on isolated, plugin-rendered guitar, mostly with
+distortion alone. None handles cabinet, modulation, delay and reverb together,
+and none was tested on a separated stem.
+
+\subsection{Effect removal}
+
+A recovered dry signal turns the wet-only problem back into a paired one. Imort
+et al.\ removed distortion with separation networks~\cite{imort2022distortion}.
+RemFX detects which of five effects are present and chains effect-specific
+removers; SI-SDR falls from 16.7\dB{} with one effect to 2.6\dB{} with
+five~\cite{rice2023general}. Distortion Recovery restores a mel spectrogram and
+re-synthesises it with a vocoder~\cite{lee2024distortion}. EG-VAE splits a
+processed recording into frame-level content and a global tone embedding;
+swapping the embedding transfers the tone, a masking mode removes
+it~\cite{yeh2026egvae}. On plugin tones it reaches a tone-similarity opinion
+score of 4.30 on seen and 3.70 on unseen tones (oracle 4.48; baselines at most
+2.74), and a ``dryness'' score of 3.42--3.50 for removal against 4.39--4.58 for
+the true DI \reported. A baseline that fitted a fixed differentiable chain of
+generic blocks to EG-VAE's dry estimate scored only 1.44--2.74 in tone
+similarity: evidence that generic EQ, compressor and distortion blocks do not
+cover guitar tone diversity. No code or weights were found for EG-VAE.
+
+Removal and remodelling have been chained: Hinrichs et al.\ remove a single
+effect with a separation network, then train a model on the recovered pair;
+listeners rated the copies at medians of 92--100 for slapback, phaser and soft
+clipping~\cite{hinrichs2024blind}. SDR does not track perceived dryness for
+distortion, as also found by Imort et al.\ and the EG-VAE authors.
+
+\subsection{Dry signals from other sources}
+
+Three other sources of a dry signal exist, each with its own mismatch:
+\begin{center}
+\small
+\begin{tabular}{@{}>{\raggedright}p{4.2cm}ccc@{}}
+\toprule
+Source & Same notes and timing & Same guitar timbre & Artefacts \\
+\midrule
+A different performance (corpus DI, the player's DI) & no & roughly & none \\
+Resynthesis of the transcribed notes & yes & no & transcription errors \\
+An effect-removal model & yes & yes & removal errors \\
+\bottomrule
+\end{tabular}
+\end{center}
+A different performance supports only unaligned losses, as in unpaired
+modelling~\cite{wright2023adversarial}. Resynthesis gives the same notes at the
+same times with the wrong timbre; GuitarFlow turns sample-based renders of
+tablature into realistic DI with flow matching~\cite{loth2025guitarflow}, but for
+data generation, not tone estimation. \textbf{We found no published work that
+resynthesises a DI from transcribed notes in order to fit a tone.} That is the
+route the app takes first (Section~\ref{sec:impl-dry}), because the app already
+transcribes the notes.

@@ -1,0 +1,106 @@
+% !TeX root = ../main.tex
+\section{Datasets and licences}
+\label{sec:datasets}
+
+To train or test a tone estimator we need processed guitar audio, ideally with
+the dry signal of the same performance (so the true chain can be re-applied) and
+labels saying which equipment and settings produced it. Table~\ref{tab:datasets}
+lists what exists. The sets fall into four groups.
+
+\paragraph{Effect sets with dry and processed notes.} IDMT-SMT-Audio-Effects:
+55\,044 two-second notes and chords of two guitars and two basses through ten
+software effects and a no-effect class~\cite{stein2010aes}. GUITAR-FX-DIST
+re-renders its dry notes through 13 overdrive, distortion and fuzz plugins with
+continuous gain and tone (about 250\,h)~\cite{comunita2021guitar}. EGFxSet
+records every note of a Stratocaster on five pickup positions through 12
+hardware pedals at one setting each~\cite{pedroza2022egfxset}. Hinrichs et al.\
+place processed guitar inside mixes with sample-based bass, keys and drums, the
+only set with effects estimated in a mix~\cite{hinrichs2022convolutional} (its
+release could not be confirmed). Rossi et al.\ record 400 DI improvisations on
+four guitars and apply five effects in 32 chains with fixed or random parameters
+and order~\cite{rossi2025automatic}.
+
+\paragraph{Amplifier renders of DI performances.} EGDB: 118 minutes of DI from a
+hexaphonic pickup, rendered through five amplifier simulations~\cite{chen2022egdb}.
+EGDB-PG renders the same DI through 256 BIAS FX\,2 head and cabinet combinations
+labelled low gain, crunch or high gain (514\,h)~\cite{chen2026toward}. GOAT
+pairs 5.9\,h of DI with tablature and renders each item five times through
+randomly drawn public NAM captures, a cabinet IR and an optional room
+reverb~\cite{loth2025goat}. Guitar-TECHS records DI, a microphone on three real
+amplifiers at flat EQ, and room microphones~\cite{pedroza2025guitartechs};
+EGSet12 has 12 performances through a miked amplifier, without
+DI~\cite{pedroza2024egset12}.
+
+\paragraph{Device sets with knob labels.} ToneTwist AFx: dry and processed pairs
+from over 40 compressors, overdrives, distortions, fuzzes and amplifiers, some
+densely sampled over the knobs~\cite{comunita2025differentiable}. Amp-Space
+sampled real devices with servo-driven knobs (about 50\,h real, 500\,h
+simulated)~\cite{naradowsky2021ampspace}. Open-Amp is a generator that renders
+dry audio through 160 crowd-sourced LSTM captures on the fly~\cite{wright2025openamp}.
+
+\paragraph{Real multitracks.} MoisesDB splits guitar stems into acoustic, clean
+electric and distorted electric (240 songs)~\cite{pereira2023moisesdb};
+MedleyDB has the same classes and some raw tracks~\cite{bittner2014medleydb};
+MUSDB18 keeps guitar inside ``other''~\cite{rafii2017musdb18}. None has
+equipment or settings labels, and we found no open set that pairs commercial
+guitar stems with verified equipment.
+
+\begin{table}[h]
+\centering
+\caption{Datasets with processed guitar audio. ``DI'': the dry signal of the
+same performance is included. Licences as stated on the hosting record on
+2026-11-25; NC = non-commercial, ND = no derivatives.}
+\label{tab:datasets}
+\footnotesize
+\setlength{\tabcolsep}{3pt}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{@{}lllllll@{}}
+\toprule
+Dataset & Audio & DI & Labels & Size & Processing & Licence \\
+\midrule
+IDMT-SMT-Audio-Effects~\cite{stein2010aes} & notes, chords & yes & effect class & 55k notes & 10 plugins & CC BY-NC-ND \\
+GUITAR-FX-DIST~\cite{comunita2021guitar} & IDMT notes & yes & plugin, gain, tone & $\approx$250\,h & 13 drive plugins & CC BY (dry NC-ND) \\
+EGFxSet~\cite{pedroza2022egfxset} & single notes & yes & pedal, 1 setting & 8,970 clips & 12 hardware pedals & CC BY \\
+Rossi et al.~\cite{rossi2025automatic} & improvisations & yes & chain, order & 400 DI & 5 effects & CC BY \\
+EGDB~\cite{chen2022egdb} & tablatures & yes & notes & 118\,min $\times$ 6 & 5 amp sims & not stated \\
+EGDB-PG~\cite{chen2026toward} & EGDB DI & yes & preset, gain class & 514\,h & 256 head/cab presets & CC BY \\
+GOAT~\cite{loth2025goat} & performances & yes & tablature & 5.9\,h DI & NAM captures + IR & CC BY-NC, on request \\
+Guitar-TECHS~\cite{pedroza2025guitartechs} & techniques, excerpts & yes & MIDI notes & $>$5\,h & 3 real amps, miked & CC BY \\
+EGSet12~\cite{pedroza2024egset12} & solos & no & notes, strings & 380\,s & 1 real amp, miked & CC BY \\
+ToneTwist AFx~\cite{comunita2025differentiable} & guitar, bass & yes & device, knobs & 40+ devices & real hardware & mostly CC BY-NC \\
+Amp-Space~\cite{naradowsky2021ampspace} & various & yes & device, knobs & 50\,h real & servo-driven devices & not stated \\
+MoisesDB~\cite{pereira2023moisesdb} & songs & no & clean / distorted & 240 songs & real productions & CC BY-NC-SA \\
+\bottomrule
+\end{tabular}}
+\end{table}
+
+\subsection{Captures, impulse responses and their terms}
+
+Libraries of amp captures and cabinet IRs are the natural source of amplifier
+variety, but their terms matter. TONE3000 forbids automated or bulk downloading
+and data mining in its site terms~\cite{tone30002025terms}; its API terms forbid
+bulk download, caching or preloading of the catalogue and require that models are
+downloaded only when a user asks for them~\cite{tone30002026apiterms}. Neither
+grants a right to train on the catalogue, so GOAT-style renders through thousands
+of public captures are a research resource we cannot reproduce from TONE3000.
+Common free cabinet IRs (Kalthallen, OwnHammer) forbid redistribution and
+modification~\cite{kalthallenfree,ownhammereula}. NAM's standard re-amping
+signal (about three minutes at 48\kHz) is a fixed probe for making captures
+in-house~\cite{atkinsonndnam}. The sets that allow redistribution and contain real
+playing with a DI are EGDB-PG's renders, Guitar-TECHS, EGFxSet, Rossi et al.'s
+improvisations and GuitarSet~\cite{xi2018guitarset}.
+
+\begin{inapp}[: data used so far]
+\begin{itemize}
+\item \textbf{Benchmark}: EGDB test items (DI, the Marshall, Mesa and Plexi
+  renders, and labelled notes), through the manifest \code{eval_egdb.tsv}
+  written by \code{scripts/train/prepare_data.py} (Section~\ref{sec:results}).
+  The working tree adds Guitar-TECHS miked-amp recordings and separated stems as
+  targets \wip.
+\item \textbf{Fitting the plucked-string model}: 14 Guitar-TECHS DI recordings
+  (P1/P2 single notes, chords, scales), CC BY 4.0. Never EGDB, which is the
+  benchmark.
+\item \textbf{Sampler dry signal}: Guitar-TECHS ``allsinglenotes'' DI \wip.
+\end{itemize}
+All of it lives outside the repository, under \file{~/.cache/gva_test}.
+\end{inapp}

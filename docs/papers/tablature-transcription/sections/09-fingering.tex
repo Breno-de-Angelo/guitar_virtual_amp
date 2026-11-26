@@ -1,0 +1,145 @@
+% !TeX root = ../main.tex
+\section{String and fret assignment (fingering)}
+\label{sec:fingering}
+
+\subsection{What the stage must do}
+
+Input: notes (onset, pitch, duration), grouped into chords, plus a tuning.
+Output: one string and fret per note, such that every chord is playable (one
+note per string, a reachable fret span) and the sequence is comfortable and
+idiomatic. Section~\ref{sec:problem} showed why this is ambiguous: a pitch has
+up to five positions, a three-note chord can have dozens of shapes.
+
+\subsection{Search with hand-designed costs}
+
+\begin{keyidea}[: fingering as a shortest path]
+Treat every possible position (or chord shape) of every note as a node, give
+each node a cost (high frets, stretched shapes) and each move between
+consecutive nodes a cost (hand movement), and find the cheapest path through
+the whole piece with the Viterbi algorithm (Section~\ref{sec:viterbi}). Sayegh
+framed it this way in 1989~\cite{sayegh1989fingering}; HMM versions decode
+left-hand forms~\cite{hori2016minimax}.
+\end{keyidea}
+
+The weakness is that the costs are local and hand-made. They know nothing of
+long-range habits: a riff repeated in another position, idiomatic chord shapes,
+an open string used as a pedal tone, or the way solos move up the neck.
+
+\subsection{Learned fingering}
+
+\paragraph{Symbolic models} learn from human tabs (no audio). They treat
+fingering as translation from note tokens to string/fret tokens, usually
+pre-trained on DadaGP. MIDI-to-Tab~\cite{edwards2024miditotab} (encoder-decoder
+transformer, masked pre-training, fine-tuned on professional transcriptions)
+was rated more playable than other algorithms in a user study \reported.
+Fretting-Transformer~\cite{hamberger2025fretting} (T5, with tuning and capo
+conditioning) beat an A* baseline and Guitar Pro's own conversion \reported.
+Hsu et al.~\cite{hsu2026noteevent} added note-event tokens and \term{constrained
+decoding} that forbids string-fret pairs inconsistent with the pitch, and beat
+Fretting-Transformer, especially with little training data \reported. None of
+these three has released weights.
+
+\paragraph{Audio-conditioned models} also listen: the same pitch sounds
+different on a thick and a thin string. TART's third stage is a T5
+conditioned on audio features~\cite{gupta2026tart}; with its note stage it
+reaches 71.8\% string-fret Tab F1 averaged over its benchmarks, 8.5 points above
+the best earlier baseline \reported. No code was found.
+
+\begin{inapp}[: the Viterbi (fallback) \done]
+\file{transcribe/arrange.rs}, \code{fret_events}. States are fingerings of each
+chord (or single note); the hand position is carried through open strings. The
+cost of a fingering is a weighted sum (\code{FingeringCosts}, weights fitted
+with \code{eval_fingering} on GuitarSet players 00--02 and 10 human Guitar Pro
+tabs):
+\begin{center}
+\small
+\begin{tabular}{@{}lrl@{}}
+\toprule
+Term & Weight & Per \\
+\midrule
+\code{span} & 0.40 & fret between lowest and highest fretted note of a chord \\
+\code{position} & $-0.01$ & fret of hand position (almost neutral after fitting) \\
+\code{high} & 0.08 & fret above the 12th \\
+\code{open} & 0.06 & open string \\
+\code{gap} & 0.80 & unused string inside a chord (must be muted) \\
+\code{moving} & 0.28 & fret of hand movement between events \\
+\code{prior} & 0.11 & $-\ln P(\text{string}\mid\text{pitch})$, learned from 34\,150 GuitarSet notes \\
+\bottomrule
+\end{tabular}
+\end{center}
+Two hard-ish rules come from the techniques stage: a slide or hammer-on that
+changes string costs 4.0 (\code{LINK_STRING_CHANGE}), a bend on an open string
+6.0 (\code{BENT_OPEN_STRING}). Before fingering, a tuning is chosen from the
+lowest notes (standard, E$\flat$, drop D, drop C, 7 and 8 strings).
+\end{inapp}
+
+\begin{inapp}[: the learned tagger \done{} (local model)]
+\label{sec:fingering-app}
+\file{transcribe/fingering_net.rs}, trained by \file{scripts/train/fingering/}.
+\begin{itemize}
+\item \textbf{Model}: a 4-layer Transformer \emph{tagger} (0.57\,M parameters).
+  It does not generate tokens; for each note it outputs a score for each of
+  the 6 strings. Inputs per note: the fret the note would have on each string
+  (or ``impossible''), plus 16 timing and interval features (\code{common.features}).
+  Windows of 128 notes.
+\item \textbf{Decoder}: puts each chord on distinct strings, adds a stretch
+  cost, and runs a hand-position Viterbi over the tagger's scores, with the
+  same technique rules as above.
+\item \textbf{Training data} (``ship'' variant, about 70\,k notes): GuitarSet
+  00--02, EGDB train, Guitar-TECHS P1/P2. Settings were chosen with GuitarSet
+  player 02 held out; never on 03--05.
+\item \textbf{Use}: 6-string guitars, when \code{fingering_tagger.onnx} is in the
+  models folder and the Transcribe form (or \cmd{--fingering learned}) asks for
+  it; otherwise, and on any model error, the Viterbi. Local only (trained on
+  EGDB).
+\item \textbf{Parity}: the Rust port agrees with the Python model on 99.94\% of
+  41\,293 test notes \measured. It needs each note's own onset: giving every
+  chord note the chord's onset costs 0.02 accuracy.
+\item \textbf{Cost}: about 6--10\ms{} per 128-note window on the CPU.
+\end{itemize}
+\end{inapp}
+
+\subsection{What we measured}
+
+\begin{table}[h]
+\centering
+\caption{String accuracy given the true notes, all test items, mean of 3 seeds
+for the tagger \measured{} (\code{scripts/train/fingering/}). ``Full'' adds GOAT
+training data (non-commercial).}
+\label{tab:fingering}
+\small
+\begin{tabular}{@{}lccccc@{}}
+\toprule
+Method & GuitarSet comp & GuitarSet solo & EGDB test & EGSet12 & GOAT test \\
+\midrule
+Lowest fret (naive) & 0.33 & 0.25 & 0.65 & 0.43 & -- \\
+Viterbi (app fallback) & 0.807 & 0.549 & 0.677 & 0.688 & 0.648 \\
+Tagger, ship (app) & \textbf{0.853} & \textbf{0.616} & \textbf{0.806} & 0.698 & 0.667 \\
+Tagger, full & 0.845 & 0.613 & 0.783 & \textbf{0.722} & \textbf{0.674} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+With transcribed notes (v2 CRNN) the tagger raises Tab F1 from 0.53--0.60 to
+0.64--0.68 on the EGDB tones, from 0.53 to 0.63 on GuitarSet solo, and from
+0.59 to 0.65 on BS-RoFormer stems of band mixes \measured. In the app pipeline
+(\code{eval_guitarset}, players 03--05), the median share of notes on the
+reference string and fret goes from 68\% to 78\% with GAPS notes on clean
+guitar, and from 67\% to 76\% with v2 on ``Metal High Gain'' \measured.
+Chords stay playable: fewer than 0.5\% impossible stretches, except 6.5\% on
+EGSet12.
+
+\subsection{Failure modes}
+\begin{itemize}
+\item \textbf{Too few players.} The tagger scores 0.95 and more on its training
+  players and 0.57--0.69 on new ones; a 3.3\,M-parameter version did no better.
+  Player diversity, not model size, is the limit \measured. DadaGP
+  pre-training is the planned fix.
+\item \textbf{Transposition hurts.} Training on passages shifted by $k$ frets
+  lowered solo accuracy to 0.43: positions depend on the key \measured.
+\item \textbf{Solos.} The Viterbi puts only 55--56\% of solo notes on the
+  player's string (80\% for accompaniment): it keeps notes low while solos move
+  up the neck.
+\item \textbf{Licence.} The tagger is trained on EGDB, so it cannot be
+  distributed until EGDB's authors allow it or it is retrained without EGDB.
+\end{itemize}

@@ -1,0 +1,179 @@
+% !TeX root = ../main.tex
+\section{Note transcription}
+\label{sec:notes}
+
+\subsection{What the stage must do}
+
+Input: the guitar stem (or the mix). Output: a list of notes, each with onset,
+offset, pitch and a loudness estimate. This is \term{automatic music
+transcription} (AMT) restricted to one instrument.
+
+\subsection{Frame-and-onset models}
+
+\begin{keyidea}[: predict onsets and sustain separately]
+Onsets and Frames~\cite{hawthorne2018onsets} trains one network to output two
+posteriorgrams: where notes \emph{start} and where notes \emph{sound}. A note is
+created only at a detected onset and lasts while the frame output stays high.
+Separating the two makes repeated notes and sustained notes both readable.
+\end{keyidea}
+
+Kong et al.~\cite{kong2021highres} improved this for piano by \emph{regressing}
+the exact onset and offset time inside each 10\ms{} frame instead of a yes/no
+target, which gives sub-frame timing and tolerates labels that are a little off.
+It reached 96.72\% onset F1 on the MAESTRO piano dataset \reported. This
+architecture (a CRNN with onset, offset, frame and velocity outputs at 100
+frames per second) is the basis of today's best guitar models: Riley et al.\
+first adapted it to guitar by aligning published scores to
+recordings~\cite{riley2024domain}, then trained it on the GAPS classical guitar
+dataset~\cite{riley2024gaps}, with state-of-the-art results on GuitarSet both
+when trained on it and zero-shot \reported.
+
+\textbf{Basic Pitch}~\cite{bittner2022basicpitch} is a small model that works
+on any instrument. It outputs onsets, notes and a \term{pitch contour} at a
+third of a semitone. It is fast and a useful baseline, and its contour is the
+basis of our technique detection, but being instrument-agnostic it tends to
+report string harmonics as extra notes.
+
+\subsection{Electric guitar and tone}
+
+Amplifier tone is the main obstacle. EGDB showed that accuracy depends strongly
+on the amplifier~\cite{chen2022egdb}. EGDB-PG trained a Tone-informed
+Transformer (TIT) on many amplifier-cabinet renders with a tone
+embedding~\cite{chen2025egdbpg}; Pedroza et al.\ trained on synthetic
+performances played through recorded tones and effects~\cite{pedroza2024tones}.
+The recipe is the same in all of them: show the model the same performance in
+many tones.
+
+\subsection{Sequence-to-sequence transcribers}
+\label{sec:notes-seq2seq}
+
+Hawthorne et al.~\cite{hawthorne2021seq2seq} showed that a generic transformer
+that ``translates'' a spectrogram into MIDI-like tokens matches specialised piano
+models. MT3~\cite{gardner2022mt3} extended this to many instruments with tokens
+that include the instrument. YourMT3+~\cite{chang2024yourmt3} improved the
+encoder and the training mixtures but remains limited on pop recordings.
+MuScriptor~\cite{rouard2026muscriptor} changes the data rather than the
+architecture: a decoder-only transformer (up to 1.3\,B parameters, 5\,s
+inputs) pre-trained on 1.45\,M synthesised MIDI files, trained on 170\,000
+aligned real recordings, then refined with reinforcement learning. Distorted
+electric guitar is the second most frequent class in its real data (about 47\%
+of tracks). It can be told which instruments are present. Two limitations
+matter for us: its tokens cannot represent the same pitch twice at once on one
+instrument (keeping such notes in its test set lowers the large model's onset
+F1 from 60.4 to 51.8 \reported), and like all models of this kind it outputs no
+string and merges all guitars of one class. Its weights are non-commercial.
+
+\begin{inapp}[: note models \done]
+\begin{itemize}
+\item \textbf{Guitar, default}: the GAPS CRNN (\file{transcribe/guitar_crnn.rs},
+  optional download by \code{scripts/install_transcription_models.sh}, exported
+  to ONNX by \code{scripts/export_guitar_crnn.py}, MIT). Audio is resampled to
+  16\kHz{} and cut into 10\,s windows with 50\% overlap, run in parallel on at
+  most 4 threads (each window takes about 600\,MB in tract). Notes are read
+  with Kong's post-processing: onset and offset peaks with sub-frame shift, a
+  frame threshold, notes under 30\ms{} dropped.
+\item \textbf{Guitar, electric option}: \code{guitar_electric_crnn.onnx}, our
+  fine-tune (``v2'', below), chosen in the Transcribe form or with
+  \cmd{--guitar-model electric}. Local file only, because EGDB has no licence.
+\item \textbf{Fallback and bass}: Basic Pitch (\file{transcribe/basic_pitch.rs},
+  bundled, Apache-2.0; 22.05\kHz, 2\,s windows). It always transcribes the bass,
+  and the guitar when the CRNN is not installed. With the CRNN it still runs on
+  the guitar audio, only for its pitch contour (Section~\ref{sec:techniques}).
+\item \code{prune_weak} removes weak simultaneous detections and, for Basic
+  Pitch, likely overtones.
+\end{itemize}
+\end{inapp}
+
+\begin{inapp}[: how v2 was trained]
+\code{scripts/train/finetune_crnn.py} starts from the GAPS weights and trains on
+EGDB (training ids), Guitar-TECHS chords and scales and GuitarSet players
+00--02. Each DI recording is rendered through the app's own factory presets with
+the desktop tool \code{render_tones} (\file{backend/offline.rs}); ``Metal High
+Gain'' and ``Blues Crunch'' are left out of training because they are the
+distortion benchmark. Labels are first shifted per recording to remove timing
+offsets (\code{align_labels.py}). BatchNorm layers are frozen (batches are
+small), precision is fp32/TF32 (fp16 overflowed in the power spectrum; bf16
+crashed with NaNs at step 1100). The adopted run (\code{runs/spark_tf32}) took
+8000 steps of 8 clips, about 1\,h on one DGX Spark; the best validation
+checkpoint was step 5000.
+\end{inapp}
+
+\subsection{What we measured}
+
+\begin{table}[h]
+\centering
+\caption{Note F50 (mean per item) on held-out sets \measured{}
+(\code{bench_notes.py}, up to 12 items per group). MS = MuScriptor, conditioned
+on the guitar classes; multi-instrument models are scored on their guitar
+notes. Speed in audio seconds per second on one DGX Spark GPU (Basic Pitch on
+CPU).}
+\label{tab:bench-notes}
+\footnotesize
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{@{}lccccccc@{}}
+\toprule
+Set & GAPS & v2 & Basic Pitch & YourMT3+ & MS small & MS medium & MS large \\
+\midrule
+EGDB, DI + 3 amp sims & 0.74 & \textbf{0.84} & 0.67 & 0.71 & 0.73 & 0.74 & 0.76 \\
+EGDB real recordings (5) & 0.89 & \textbf{0.90} & 0.69 & 0.83 & 0.71 & 0.79 & 0.59 \\
+EGSet12, real, miked amp & \textbf{0.89} & 0.88 & 0.76 & 0.54 & 0.85 & 0.88 & \textbf{0.89} \\
+GOAT DI & 0.82 & \textbf{0.84} & 0.74 & 0.81 & 0.74 & 0.83 & 0.82 \\
+GOAT, 5 amp renders & 0.56 & 0.71 & 0.56 & 0.39 & 0.66 & 0.76 & \textbf{0.77} \\
+Guitar-TECHS excerpts & \textbf{0.81} & 0.78 & 0.61 & 0.70 & 0.66 & 0.73 & 0.71 \\
+GuitarSet comp & 0.87 & 0.89 & 0.75 & \textbf{0.92} & 0.77 & 0.77 & 0.77 \\
+GuitarSet solo & 0.91 & 0.92 & 0.81 & \textbf{0.93} & 0.86 & 0.89 & 0.86 \\
+\midrule
+Speed ($\times$ real time) & 34 & 89 & 165 & 14 & 6.4 & 4.0 & 1.3 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+How to read Table~\ref{tab:bench-notes}:
+\begin{itemize}
+\item \textbf{No model wins everywhere.} On amplified guitar the models trained
+  on many tones lead: MuScriptor large 0.77 and v2 0.71 on the GOAT amplifier
+  renders, against 0.56 for GAPS. MuScriptor large also makes the fewest
+  octave-low errors there (2.1\% of notes against 8.0\% for GAPS).
+\item \textbf{Real electric guitar through a clean amp} (EGSet12): GAPS, v2 and
+  MuScriptor large tie at 0.88--0.89.
+\item \textbf{YourMT3+} is best on acoustic GuitarSet and has the best note
+  ends, but labels much amplified guitar as other instruments (0.39 on GOAT
+  amps).
+\item \textbf{Speed}: MuScriptor large runs at 1.3$\times$ real time on a large
+  GPU, too slow for the app's CPU path; v2 runs at 89$\times$.
+\end{itemize}
+
+In the full app pipeline (\code{eval_guitarset}, GuitarSet players 03--05 played
+through the app's presets, final-tab F1 median / octave errors) \measured:
+\begin{center}
+\small
+\begin{tabular}{@{}lcc@{}}
+\toprule
+Tone & GAPS & v2 (electric) \\
+\midrule
+Clean & 0.84 / 1.2\% & \textbf{0.86} / 0.8\% \\
+``Blues Crunch'' & 0.76 / 1.5\% & \textbf{0.81} / 1.0\% \\
+``Metal High Gain'' & 0.43 / 4.5\% & \textbf{0.69} / 2.3\% \\
+\bottomrule
+\end{tabular}
+\end{center}
+A hand-written rule that raised notes struck with a strong partial a twelfth
+above them (the distortion difference tone) made clean and crunch worse and
+metal no better, so it was dropped: distortion needs a model trained on
+distorted guitar, which is what v2 is.
+
+\subsection{Failure modes}
+\begin{itemize}
+\item \textbf{Distortion}: octave-low errors from difference tones
+  (Section~\ref{sec:audio-harmonics}). The 8-string SoundFont render of
+  ``Meshuggah -- Bleed'' gets a final-tab F1 of 0.02 with the GAPS CRNN, against
+  0.24 with Basic Pitch \measured.
+\item \textbf{Distorted guitar in real mixes}: on MoisesDB, v2 on the
+  BS-RoFormer stem scores 0.56 on distorted guitars, 0.75 on clean electric and
+  0.83 on acoustic \measured. This is the largest remaining loss on real songs.
+\item \textbf{Separation artefacts} are unseen in training (no published guitar
+  transcriber is trained on separated stems); planned as training task T1
+  (Section~\ref{sec:next}).
+\item \textbf{Same-pitch notes} (unisons on two strings) cannot be represented
+  by MT3-style tokens.
+\end{itemize}

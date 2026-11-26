@@ -1,0 +1,98 @@
+% !TeX root = ../main.tex
+\section{Style transfer, effect representations and sound matching}
+\label{sec:matching}
+
+\subsection{Reference-based style transfer}
+
+Audio-effect \term{style transfer} processes an input so that it sounds like a
+reference. DeepAFx-ST predicts EQ and compressor parameters from an input and a
+reference, trained self-supervised with an audio loss; numerical gradients (SPSA)
+let it drive non-differentiable effects at a cost in
+stability~\cite{steinmetz2022style}. Grant trained the same way through legacy
+plugins~\cite{grant2023style}. Koo et al.\ learn an effects encoder by
+contrastive learning and render input stems in a reference's mixing style; its
+embedding distances on Demucs-separated stems stayed close to those on clean
+stems~\cite{koo2023music}. Diff-MST predicts a differentiable mixing console for
+any number of tracks~\cite{vanka2024diffmst}.
+
+\textbf{ST-ITO} removes the trained controller: CMA-ES searches the parameters of
+an arbitrary plugin chain to maximise the cosine similarity of AFx-Rep embeddings
+of the processed input and the reference~\cite{steinmetz2024stito}. AFx-Rep is
+trained without dry references to recognise which of 63 plugins and 10 presets
+produced an output, and beats CLAP and MFCCs on zero-shot style classification
+(0.86 against 0.56 for CLAP) \reported. The search uses a population of 64 for at
+most 25 steps (about a minute). The authors state that it does not work well for
+challenging cases such as \emph{guitar tone matching}. Yu et al.\ add a Gaussian
+prior fitted on real presets, turning the search into a maximum-a-posteriori
+estimate and reducing parameter error by up to a third~\cite{yu2025improving}.
+ITO-Master found that optimising a learned conditioning embedding beats
+optimising raw DSP parameters for mastering~\cite{koo2025itomaster}.
+
+\begin{caution}[: an embedding is not an objective]
+TAPE predicts editable parameters of its own differentiable chain (EQ,
+compressor, waveshaper, a small residual network, reverb) in one pass and runs in
+real time~\cite{long2026tape}. Its comparison is the most instructive result for
+us: CMA-ES over ST-ITO's chain with the AFx-Rep objective lowered the embedding
+distance (0.259 against 0.660 for TAPE) but raised the spectral error to 2.91,
+\emph{above} the 2.34 of the unprocessed input, while TAPE reached 1.12
+\reported. An embedding that is good for retrieval can be a bad objective to
+optimise. The app's search therefore uses a spectral distance.
+\end{caution}
+
+\subsection{Effect representations}
+
+Several encoders describe effects independently of content: AFx-Rep, the effects
+encoder of Koo et al., Fx-Encoder++, the tone encoder of Chen et
+al.~\cite{chen2024zeroshot}, the capture-trained encoder of Open-Amp (91.1\%
+effect-class accuracy on EGDB~\cite{wright2025openamp}) and TAPE's.
+Fx-Encoder++ extracts an instrument-wise effects embedding from a mixture given
+an audio or text query~\cite{yeh2025fxencoder}, and gives \textbf{the only
+measurement on separated stems}: effect retrieval R@10 falls from 39.4\% on true
+isolated stems to 20.5\% on Demucs-separated stems \reported, attributed to
+separation artefacts distorting effect cues. RelFx learns the \emph{relative}
+effect between two processed clips, so it needs no dry
+reference~\cite{liu2026beyond}. General embeddings (OpenL3, PANNs, CLAP) move
+monotonically with effect strength but not linearly, so they are weak parameter
+estimators~\cite{deng2025investigating}. TimberAgent retrieves the nearest of
+1\,063 guitar-effect presets with Gram matrices of Wav2Vec2
+features~\cite{he2026timberagent}.
+
+\subsection{Text and language models}
+
+Text2FX optimises EQ and reverb against a CLAP text embedding~\cite{chu2025text2fx};
+LLM2Fx predicts them with language models, better than Text2FX on guitar EQ
+(distribution distance 0.15 against 0.42)~\cite{doh2025llm2fx}; FxSearcher uses
+Bayesian optimisation over a plugin chain~\cite{ki2025fxsearcher}. The ``Does it
+chug?'' dataset collects guitar-tone adjectives on clips that vary EQ and
+distortion~\cite{sutar2024chug}. None estimates amp or drive settings; text suits
+refinement (``more bite'') better than estimation.
+
+\subsection{Lessons from synthesizer sound matching}
+
+Finding synthesizer settings that reproduce a sound is the same inverse problem
+with a longer history. Its findings carry over:
+\begin{itemize}
+\item \textbf{Loss choice}: training on audio losses alone often fails for
+  frequency-like parameters; pre-training on a parameter loss and fine-tuning on
+  a spectral loss works best~\cite{masuda2021ddsp,uzrad2024diffmoog}. LFO rates,
+  delay times and wah positions are such parameters.
+\item \textbf{Optimisers}: on non-convex landscapes CMA-ES beat Adam (loss 2.09
+  against 4.60)~\cite{bogdan2026instrumental}; evolution strategies match sounds
+  through non-differentiable synthesizers with a CLAP objective~\cite{cherep2024ctag};
+  reinforcement learning with rewards from rendered audio improves
+  out-of-domain matching~\cite{wu2026ddsynthrl}.
+\item \textbf{Ambiguity}: when different settings give the same sound, point
+  regression fails and generative models of the parameters do
+  better~\cite{hayes2025equivariant}.
+\item \textbf{Proxies}: a network that maps presets to a pretrained audio
+  embedding makes black-box synthesizers trainable~\cite{combes2025proxies}.
+\item \textbf{Domain gap}: every system degrades on real sounds outside its
+  training renders~\cite{hayes2024review}.
+\end{itemize}
+
+\begin{keyidea}[: the consensus]
+The effect and synthesizer literatures agree on a hybrid: predict an initial
+setting with a network trained on renders of the target chain, refine it by
+gradient-free search through the real renderer, regularise with a prior over
+realistic presets, and keep several candidates.
+\end{keyidea}
