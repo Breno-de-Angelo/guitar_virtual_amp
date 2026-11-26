@@ -51,10 +51,17 @@ impl AnalyzerPage {
         }
     }
 
-    pub fn ui(&mut self, ui: &mut Ui, buffer: &VecDeque<f64>) {
+    /// Draws the page. `dry` picks the guitar before (true) or after the
+    /// pedals; returns `true` when the user changed it.
+    pub fn ui(&mut self, ui: &mut Ui, buffer: &VecDeque<f64>, dry: &mut bool) -> bool {
         let palette = Palette::of(ui.ctx());
         let rate = GLOBAL_CONFIG.sample_rate as f64;
+        let mut source_changed = false;
         ui.horizontal_wrapped(|ui| {
+            ui.label("Signal:");
+            source_changed |= ui.selectable_value(dry, false, "after the pedals").changed();
+            source_changed |= ui.selectable_value(dry, true, "dry guitar").changed();
+            ui.separator();
             ui.label("Time base:");
             for ms in TIME_BASES_MS {
                 ui.selectable_value(&mut self.time_base_ms, ms, format!("{ms:.0} ms"));
@@ -95,7 +102,7 @@ impl AnalyzerPage {
             }
         };
 
-        let height = ((ui.available_height() - 40.0) / 2.0).max(120.0);
+        let height = ((ui.available_height() - 64.0) / 2.0).max(120.0);
         ui.label(RichText::new("Waveform").color(palette.text_dim));
         let window = ((self.time_base_ms / 1000.0) as f64 * rate) as usize;
         let start = trigger_index(&wave, window);
@@ -149,6 +156,7 @@ impl AnalyzerPage {
                 }
                 plot_ui.line(Line::new("spectrum", spectrum_points).color(palette.accent).width(1.5_f32).fill(-120.0_f32));
             });
+        source_changed
     }
 }
 
@@ -173,11 +181,11 @@ mod tests {
         let mut page = AnalyzerPage::new();
         let buffer: VecDeque<f64> = (0..4096).map(|i| (i as f64 * 0.03).sin() * 0.5).collect();
         let _ = ctx.run(egui::RawInput::default(), |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| page.ui(ui, &buffer));
+            egui::CentralPanel::default().show(ctx, |ui| page.ui(ui, &buffer, &mut true));
         });
         page.frozen = Some((buffer.iter().copied().collect(), page.smoothed.clone()));
         let _ = ctx.run(egui::RawInput::default(), |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| page.ui(ui, &VecDeque::new()));
+            egui::CentralPanel::default().show(ctx, |ui| page.ui(ui, &VecDeque::new(), &mut false));
         });
         assert!(!page.peak_hold.is_empty());
     }

@@ -8,7 +8,7 @@
 //! bit patterns sort like the values, so `fetch_max` on the bits keeps the
 //! largest peak without a compare-and-swap loop.
 
-use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, Ordering};
 
 /// What the output callback sends to the recorder (see `backend::recorder`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -36,6 +36,15 @@ pub struct AudioControls {
     output_peak: AtomicU32,
     /// 0 = not recording, 1 = guitar, 2 = mix.
     record_mode: AtomicU8,
+    /// Send the guitar *before* the pedal chain to the UI (tuner, practice,
+    /// analyzer), so effects don't fool the pitch detection.
+    analysis_dry: AtomicBool,
+    /// Samples the output callback has sent to the UI channel so far.
+    analysis_sent: AtomicU64,
+    /// A latency-test pulse was requested / the `analysis_sent` count at
+    /// which the last one went out.
+    pulse_requested: AtomicBool,
+    pulse_sent_at: AtomicU64,
 }
 
 impl Default for AudioControls {
@@ -51,6 +60,10 @@ impl Default for AudioControls {
             input_peak: AtomicU32::new(0),
             output_peak: AtomicU32::new(0),
             record_mode: AtomicU8::new(0),
+            analysis_dry: AtomicBool::new(true),
+            analysis_sent: AtomicU64::new(0),
+            pulse_requested: AtomicBool::new(false),
+            pulse_sent_at: AtomicU64::new(u64::MAX),
         }
     }
 }
@@ -126,6 +139,40 @@ impl AudioControls {
     /// Largest output sample (0..1, what the speakers get) since the last call.
     pub fn take_output_peak(&self) -> f32 {
         f32::from_bits(self.output_peak.swap(0, Ordering::Relaxed))
+    }
+
+    pub fn analysis_dry(&self) -> bool {
+        self.analysis_dry.load(Ordering::Relaxed)
+    }
+    pub fn set_analysis_dry(&self, dry: bool) {
+        self.analysis_dry.store(dry, Ordering::Relaxed);
+    }
+    pub(crate) fn count_analysis_samples(&self, n: u64) {
+        self.analysis_sent.fetch_add(n, Ordering::Relaxed);
+    }
+    /// Samples sent to the UI channel since the stream started (the UI
+    /// compares it with how many it received to place the latency pulse).
+    pub fn analysis_sent(&self) -> u64 {
+        self.analysis_sent.load(Ordering::Relaxed)
+    }
+    /// Asks the output callback to play one latency-test pulse.
+    pub fn request_pulse(&self) {
+        self.pulse_sent_at.store(u64::MAX, Ordering::Relaxed);
+        self.pulse_requested.store(true, Ordering::Relaxed);
+    }
+    /// Takes a pending pulse request (audio thread).
+    pub(crate) fn take_pulse_request(&self) -> bool {
+        self.pulse_requested.swap(false, Ordering::Relaxed)
+    }
+    pub(crate) fn mark_pulse_sent(&self, at: u64) {
+        self.pulse_sent_at.store(at, Ordering::Relaxed);
+    }
+    /// `analysis_sent` count when the last pulse started, once it has.
+    pub fn pulse_sent_at(&self) -> Option<u64> {
+        match self.pulse_sent_at.load(Ordering::Relaxed) {
+            u64::MAX => None,
+            at => Some(at),
+        }
     }
 
     pub fn record_source(&self) -> Option<RecordSource> {

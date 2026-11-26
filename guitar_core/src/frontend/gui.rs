@@ -22,6 +22,7 @@ use crate::{
     },
     frontend::{
         devices::DeviceManager,
+        lib::latency::LatencyProbe,
         lib::tunings::Tuning,
         style::{self, AppliedStyle, Palette},
         ui::analyzer::AnalyzerPage,
@@ -178,6 +179,11 @@ pub struct AudioApp {
     toast: Option<Toast>,
     show_shortcuts: bool,
     applied_style: Option<AppliedStyle>,
+    /// Analysis samples drained since launch (see `lib::latency`).
+    received_total: u64,
+    latency_probe: LatencyProbe,
+    /// Warned about input clipping (once per launch).
+    warned_clipping: bool,
     settings: AppSettings,
 }
 
@@ -187,6 +193,7 @@ impl AudioApp {
         let controls = setup.controls.clone();
         controls.set_input_gain(db_to_gain(settings.ui.input_gain_db));
         controls.set_output_volume(db_to_gain(settings.ui.output_volume_db));
+        controls.set_analysis_dry(settings.ui.analysis_dry);
 
         // Restore the last-loaded preset, if any -- best-effort, silently
         // starting with an empty chain if it's gone missing.
@@ -238,6 +245,9 @@ impl AudioApp {
             toast: None,
             show_shortcuts: false,
             applied_style: None,
+            received_total: 0,
+            latency_probe: LatencyProbe::new(crate::shared::config::GLOBAL_CONFIG.sample_rate as f64),
+            warned_clipping: false,
             devices,
             settings,
         }
@@ -695,11 +705,40 @@ impl AudioApp {
                 }
                 None => {}
             },
-            Page::Analyzer => self.analyzer.ui(ui, &self.buffer),
+            Page::Analyzer => {
+                if self.analyzer.ui(ui, &self.buffer, &mut self.settings.ui.analysis_dry) {
+                    self.controls.set_analysis_dry(self.settings.ui.analysis_dry);
+                    save_settings(&self.settings);
+                }
+            }
             Page::Settings => {
-                let out = self.settings_page.ui(ui, &mut self.devices, &self.pedal_chain, &mut self.settings, &mut self.midi);
+                let muted = self.controls.muted();
+                let out = self.settings_page.ui(
+                    ui,
+                    &mut self.devices,
+                    &self.pedal_chain,
+                    &mut self.settings,
+                    &mut self.midi,
+                    &self.latency_probe,
+                    muted,
+                );
                 if out.levels_changed {
                     self.apply_levels();
+                }
+                if out.analysis_changed {
+                    self.controls.set_analysis_dry(self.settings.ui.analysis_dry);
+                }
+                if out.start_latency_probe {
+                    self.latency_probe.start(self.received_total);
+                }
+                if out.cancel_latency_probe {
+                    self.latency_probe.cancel();
+                }
+                if let Some(extra) = out.use_extra_latency_ms {
+                    self.settings.practice.extra_latency_ms = extra.round();
+                    self.tab_panel.set_practice_prefs(&self.settings.practice);
+                    save_settings(&self.settings);
+                    self.toast(format!("Practice extra latency set to {:+.0} ms", extra), false);
                 }
             }
         }
@@ -721,6 +760,8 @@ impl eframe::App for AudioApp {
         }
         // Tab practice mode needs every sample, not just the display window.
         self.tab_panel.feed_input(&fresh, self.devices.configured_latency_secs);
+        self.received_total += fresh.len() as u64;
+        self.latency_probe.feed(&fresh, &self.controls);
         self.devices.poll();
 
         let narrow = ctx.screen_rect().width() < style::NARROW_WIDTH;
@@ -730,6 +771,10 @@ impl eframe::App for AudioApp {
         let dt = ctx.input(|i| i.stable_dt).min(0.1);
         self.in_meter.update(self.controls.take_input_peak(), dt);
         self.out_meter.update(self.controls.take_output_peak(), dt);
+        if self.in_meter.clip_secs > 0.0 && !self.warned_clipping {
+            self.warned_clipping = true;
+            self.toast("The input is clipping: turn the interface gain (or the input gain in Settings) down", true);
+        }
 
         let mut chain_changed = false;
         for (trigger, value) in self.midi.poll() {

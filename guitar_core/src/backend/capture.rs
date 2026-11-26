@@ -128,8 +128,17 @@ struct OutputRenderer {
     metronome_click: MetronomeClick,
     trimmer: BacklogTrimmer,
     block: Vec<i16>,
+    /// The block before the chain (for the dry analysis tap).
+    dry: Vec<i16>,
     controls: Arc<AudioControls>,
+    /// Samples of the latency-test pulse still to play.
+    pulse_remaining: u32,
 }
+
+/// Latency-test pulse: a 2 ms, 2 kHz burst at half scale.
+const PULSE_SAMPLES: u32 = 96;
+const PULSE_FREQ_HZ: f32 = 2000.0;
+const PULSE_GAIN: f32 = 0.5;
 
 impl OutputRenderer {
     fn new(pedal_chain: PedalChain, metronome_click: MetronomeClick, controls: Arc<AudioControls>) -> Self {
@@ -138,9 +147,28 @@ impl OutputRenderer {
             metronome_click,
             trimmer: BacklogTrimmer::default(),
             block: vec![0; OUTPUT_BLOCK_SAMPLES],
+            dry: vec![0; OUTPUT_BLOCK_SAMPLES],
             controls,
+            pulse_remaining: 0,
         }
     }
+
+}
+
+/// Next sample of the latency-test pulse (added to the click).
+fn next_pulse_sample(remaining: &mut u32) -> i16 {
+    {
+        if *remaining == 0 {
+            return 0;
+        }
+        let i = (PULSE_SAMPLES - *remaining) as f32;
+        *remaining -= 1;
+        let phase = i * std::f32::consts::TAU * PULSE_FREQ_HZ / GLOBAL_CONFIG.sample_rate;
+        (phase.sin() * PULSE_GAIN * i16::MAX as f32) as i16
+    }
+}
+
+impl OutputRenderer {
 
     /// Renders `frames` mono samples, calling `write(frame_index, guitar,
     /// click)` for each. Pulls input from `input_rx` (silence if it runs
@@ -182,12 +210,22 @@ impl OutputRenderer {
                 };
             }
             self.controls.record_input_peak(peak as f32 / i16::MAX as f32);
+            let dry_tap = self.controls.analysis_dry();
+            if dry_tap {
+                self.dry[..len].copy_from_slice(block);
+            }
             self.pedal_chain.process_block(block);
+            if self.controls.take_pulse_request() {
+                self.pulse_remaining = PULSE_SAMPLES;
+                self.controls.mark_pulse_sent(self.controls.analysis_sent());
+            }
             for (i, &sample) in block.iter().enumerate() {
-                let click = self.metronome_click.next_sample();
-                let _ = audio_tx.try_send(sample);
+                let click = self.metronome_click.next_sample().saturating_add(next_pulse_sample(&mut self.pulse_remaining));
+                let analysed = if dry_tap { self.dry[i] } else { sample };
+                let _ = audio_tx.try_send(analysed);
                 write(done + i, sample, click);
             }
+            self.controls.count_analysis_samples(len as u64);
             done += len;
         }
     }
@@ -1101,6 +1139,30 @@ mod tests {
         assert_eq!(out, [200, i16::MIN]);
         // The visualizer gets the same (gained) guitar signal.
         assert_eq!(audio_rx.try_iter().collect::<Vec<_>>(), vec![200, i16::MIN]);
+    }
+
+    #[test]
+    fn dry_tap_sends_the_input_and_pulses_are_placed_in_the_analysis_stream() {
+        use crate::shared::pedals::{AmpParams, PedalDescription};
+        let (input_tx, input_rx) = bounded::<i16>(64);
+        let (pedal_tx, pedal_rx) = bounded::<Vec<PedalInstance>>(1);
+        let (audio_tx, audio_rx) = bounded::<i16>(64);
+        let controls = Arc::new(AudioControls::default());
+        let metronome =
+            MetronomeClick::new(Arc::new(AtomicBool::new(false)), Arc::new(AtomicU32::new(0)), controls.clone());
+        let mut renderer = OutputRenderer::new(PedalChain::new(), metronome, controls.clone());
+        pedal_tx.send(vec![PedalInstance::new(PedalDescription::Amp(AmpParams { gain: 4.0, ..Default::default() }))]).unwrap();
+        for s in [1000, 2000, 3000, 4000] {
+            input_tx.send(s).unwrap();
+        }
+        let mut clicks = Vec::new();
+        renderer.render(2, &pedal_rx, &input_rx, &audio_tx, |_, _, _| {});
+        controls.request_pulse();
+        renderer.render(2, &pedal_rx, &input_rx, &audio_tx, |_, _, click| clicks.push(click));
+        assert_eq!(audio_rx.try_iter().collect::<Vec<_>>(), vec![1000, 2000, 3000, 4000], "dry by default");
+        assert_eq!(controls.pulse_sent_at(), Some(2), "pulse starts at the third analysis sample");
+        assert_eq!(controls.analysis_sent(), 4);
+        assert!(clicks[1] != 0, "pulse is audible");
     }
 
     #[test]

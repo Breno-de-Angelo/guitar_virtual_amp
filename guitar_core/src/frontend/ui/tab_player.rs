@@ -304,6 +304,11 @@ impl TabPlayerPanel {
         (!track.percussion && !track.tuning.is_empty()).then(|| track.tuning.clone())
     }
 
+    /// Replaces the practice knobs (e.g. after a latency measurement).
+    pub fn set_practice_prefs(&mut self, prefs: &PracticePrefs) {
+        self.practice_prefs = prefs.clone();
+    }
+
     /// `true` once after the user pressed "tune to this tab".
     pub fn take_tuner_request(&mut self) -> bool {
         std::mem::take(&mut self.tuner_requested)

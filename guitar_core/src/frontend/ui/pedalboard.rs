@@ -5,7 +5,7 @@
 use eframe::egui::{self, RichText, Sense, Ui};
 use strum::IntoEnumIterator;
 
-use crate::frontend::lib::history::{ChainHistory, EditKind, classify_edit};
+use crate::frontend::lib::history::{ChainHistory, classify_edit};
 use crate::frontend::style::{self, Palette};
 use crate::frontend::ui::pedals::{PedalAction, pedal_card};
 use crate::frontend::ui::tone3000::Tone3000Request;
@@ -15,6 +15,8 @@ use crate::shared::pedals::{PedalCategory, PedalDescription, PedalInstance};
 pub struct PedalboardPage {
     pub history: ChainHistory,
     confirm_clear: bool,
+    /// The other chain of an A/B comparison, and whether the live chain is B.
+    compare: Option<(Vec<PedalInstance>, bool)>,
 }
 
 #[derive(Default)]
@@ -90,6 +92,18 @@ impl PedalboardPage {
         }
     }
 
+    /// Swaps the live chain with the A/B snapshot. Returns whether it did.
+    pub fn swap_compare(&mut self, chain: &mut Vec<PedalInstance>) -> bool {
+        match &mut self.compare {
+            Some((other, on_b)) => {
+                std::mem::swap(chain, other);
+                *on_b = !*on_b;
+                true
+            }
+            None => false,
+        }
+    }
+
     pub fn ui(&mut self, ui: &mut Ui, chain: &mut Vec<PedalInstance>) -> BoardOutput {
         let palette = Palette::of(ui.ctx());
         let before = chain.clone();
@@ -133,6 +147,31 @@ impl PedalboardPage {
                     }
                 } else if ui.button("Clear").on_hover_text("Remove every pedal (undoable)").clicked() {
                     self.confirm_clear = true;
+                }
+            }
+            ui.separator();
+            match &self.compare {
+                None => {
+                    if ui
+                        .button("📌 A/B")
+                        .on_hover_text("Keep this sound as A, then edit freely and flip between A and B to compare")
+                        .clicked()
+                    {
+                        self.compare = Some((chain.clone(), true));
+                    }
+                }
+                Some((_, on_b)) => {
+                    let label = if *on_b { "Hearing B ⇄ A" } else { "Hearing A ⇄ B" };
+                    if ui
+                        .add(egui::Button::new(RichText::new(label).color(palette.accent)))
+                        .on_hover_text("Flip between the two sounds")
+                        .clicked()
+                    {
+                        self.swap_compare(chain);
+                    }
+                    if ui.small_button("✖").on_hover_text("Stop comparing (keep what you hear now)").clicked() {
+                        self.compare = None;
+                    }
                 }
             }
         });
@@ -284,7 +323,6 @@ fn empty_state(ui: &mut Ui, chain: &mut Vec<PedalInstance>) {
             }
         });
     });
-    let _ = EditKind::Structure;
 }
 
 #[cfg(test)]
@@ -302,6 +340,21 @@ mod tests {
         assert_eq!(insert_in_signal_order(&mut chain, PedalDescription::Chorus(Default::default())), 2);
         let names: Vec<&str> = chain.iter().map(|p| p.description.name()).collect();
         assert_eq!(names, ["Compressor", "Amp", "Chorus", "Reverb"]);
+    }
+
+    #[test]
+    fn ab_compare_swaps_chains_back_and_forth() {
+        let mut page = PedalboardPage::default();
+        let a = vec![PedalInstance::new(PedalDescription::Amp(AmpParams::default()))];
+        let mut chain = a.clone();
+        assert!(!page.swap_compare(&mut chain));
+        page.compare = Some((chain.clone(), true));
+        chain.push(PedalInstance::new(PedalDescription::Reverb(ReverbParams::default())));
+        let b = chain.clone();
+        assert!(page.swap_compare(&mut chain));
+        assert_eq!(chain, a);
+        assert!(page.swap_compare(&mut chain));
+        assert_eq!(chain, b);
     }
 
     #[test]

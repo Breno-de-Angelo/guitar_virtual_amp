@@ -91,6 +91,9 @@ pub struct UiPrefs {
     pub metronome_volume: f32,
     /// Record everything heard (guitar + metronome + song) instead of the guitar alone.
     pub record_mix: bool,
+    /// The tuner, practice mode and analyzer hear the guitar before the
+    /// pedals (effects confuse pitch detection).
+    pub analysis_dry: bool,
     /// Presets in performance order, for next/previous switching and MIDI
     /// program changes. Empty = every preset, user ones first.
     pub setlist: Vec<PresetRef>,
@@ -111,6 +114,7 @@ impl Default for UiPrefs {
             metronome_beats_per_bar: 4,
             metronome_volume: 1.0,
             record_mix: false,
+            analysis_dry: true,
             setlist: Vec::new(),
             midi: Default::default(),
         }

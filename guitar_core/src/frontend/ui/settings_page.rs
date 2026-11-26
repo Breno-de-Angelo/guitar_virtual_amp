@@ -9,6 +9,7 @@ use eframe::egui::{self, RichText, Ui};
 use crate::backend::midi::MidiInputManager;
 use crate::backend::recorder::{Recording, list_recordings, recordings_dir};
 use crate::frontend::devices::DeviceManager;
+use crate::frontend::lib::latency::{LatencyProbe, ProbeState};
 use crate::frontend::style::{self, Palette};
 use crate::shared::midi::MidiAction;
 use crate::shared::pedals::PedalInstance;
@@ -54,6 +55,12 @@ pub struct SettingsPage {
 pub struct SettingsOutput {
     /// Input gain / output volume moved: push them to the audio thread.
     pub levels_changed: bool,
+    /// The dry/processed analysis choice changed.
+    pub analysis_changed: bool,
+    pub start_latency_probe: bool,
+    pub cancel_latency_probe: bool,
+    /// Practice mode's extra latency should become this (ms).
+    pub use_extra_latency_ms: Option<f32>,
 }
 
 impl SettingsPage {
@@ -62,6 +69,7 @@ impl SettingsPage {
         self.recordings = None;
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn ui(
         &mut self,
         ui: &mut Ui,
@@ -69,6 +77,8 @@ impl SettingsPage {
         chain: &[PedalInstance],
         settings: &mut AppSettings,
         midi: &mut MidiInputManager,
+        probe: &LatencyProbe,
+        muted: bool,
     ) -> SettingsOutput {
         let palette = Palette::of(ui.ctx());
         let mut out = SettingsOutput::default();
@@ -85,6 +95,70 @@ impl SettingsPage {
             };
 
             section(ui, "🔊 Audio", &mut |ui| devices.ui(ui, chain, settings));
+
+            section(ui, "⏱ Latency and analysis", &mut |ui| {
+                ui.label(
+                    RichText::new(
+                        "Practice mode compensates the time sound takes to go out and come back in.                          Measure it: point the microphone at the speakers (or connect the output to the input                          with a cable), keep the guitar quiet, and press Measure.",
+                    )
+                    .small()
+                    .color(palette.text_dim),
+                );
+                ui.horizontal_wrapped(|ui| {
+                    if probe.running() {
+                        ui.spinner();
+                        if let ProbeState::Running { done, of } = probe.state() {
+                            ui.label(format!("Listening for pulse {}/{of}…", (*done + 1).min(*of)));
+                        }
+                        if ui.button("Cancel").clicked() {
+                            out.cancel_latency_probe = true;
+                        }
+                    } else {
+                        let ready = devices.audio_running() && !muted;
+                        if ui.add_enabled(ready, egui::Button::new("⏱ Measure latency")).clicked() {
+                            out.start_latency_probe = true;
+                        }
+                        if !ready {
+                            ui.label(RichText::new("(needs audio running and unmuted)").color(palette.text_dim));
+                        }
+                    }
+                });
+                match probe.state() {
+                    ProbeState::Done { latency_secs, heard } => {
+                        let measured_ms = (*latency_secs * 1000.0) as f32;
+                        let reported_ms = devices.configured_latency_secs * 1000.0;
+                        let extra = measured_ms - reported_ms;
+                        ui.horizontal_wrapped(|ui| {
+                            ui.label(RichText::new(format!("Round trip: {measured_ms:.1} ms")).strong().color(palette.ok));
+                            ui.label(
+                                RichText::new(format!(
+                                    "(the driver reports {reported_ms:.1} ms, so {extra:+.1} ms extra; {heard} pulses heard)"
+                                ))
+                                .color(palette.text_dim),
+                            );
+                            if ui.button("Use for practice mode").clicked() {
+                                out.use_extra_latency_ms = Some(extra);
+                            }
+                        });
+                    }
+                    ProbeState::Failed(why) => {
+                        ui.colored_label(palette.warn, why);
+                    }
+                    _ => {}
+                }
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(format!("Practice extra latency: {:+.0} ms", settings.practice.extra_latency_ms));
+                });
+                ui.separator();
+                if ui
+                    .checkbox(&mut settings.ui.analysis_dry, "Tuner, practice and analyzer listen to the guitar before the pedals")
+                    .on_hover_text("Distortion, octavers and delays make pitch detection harder; the dry signal is cleaner")
+                    .changed()
+                {
+                    out.analysis_changed = true;
+                    save = true;
+                }
+            });
 
             section(ui, "🔉 Levels", &mut |ui| {
                 let prefs = &mut settings.ui;
