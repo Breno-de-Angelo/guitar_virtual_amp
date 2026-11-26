@@ -9,6 +9,7 @@ use crate::frontend::lib::history::{ChainHistory, classify_edit};
 use crate::frontend::style::{self, Palette};
 use crate::frontend::ui::pedals::{PedalAction, pedal_card};
 use crate::frontend::ui::tone3000::Tone3000Request;
+use crate::shared::i18n::tr;
 use crate::shared::pedals::{PedalCategory, PedalDescription, PedalInstance};
 
 #[derive(Default)]
@@ -19,6 +20,38 @@ pub struct PedalboardPage {
     confirm_clear: bool,
     /// The other chain of an A/B comparison, and whether the live chain is B.
     compare: Option<(Vec<PedalInstance>, bool)>,
+    row_heights: RowHeights,
+}
+
+/// The tallest card body of each card row, measured last frame, so every
+/// card in a row is drawn that tall with its footswitch at the bottom.
+/// egui only learns a card's height while drawing it, hence last frame's.
+/// Cards report their unpadded height, so the rows shrink again when a tall
+/// pedal goes away.
+#[derive(Default, Debug, PartialEq)]
+struct RowHeights {
+    /// Cards per row when the heights were measured.
+    per_row: usize,
+    rows: Vec<f32>,
+}
+
+impl RowHeights {
+    /// The body height to draw the cards of `row` with.
+    fn target(&self, per_row: usize, row: usize) -> f32 {
+        if per_row == self.per_row { self.rows.get(row).copied().unwrap_or(0.0) } else { 0.0 }
+    }
+
+    /// Stores this frame's tallest body per row. Returns whether the cards
+    /// were drawn with different heights (then the frame should be redrawn).
+    fn update(&mut self, per_row: usize, rows: Vec<f32>) -> bool {
+        let changed = per_row != self.per_row
+            || rows.len() != self.rows.len()
+            || rows.iter().zip(&self.rows).any(|(a, b)| (a - b).abs() > 0.5);
+        if changed {
+            *self = Self { per_row, rows };
+        }
+        changed
+    }
 }
 
 #[derive(Default)]
@@ -118,75 +151,56 @@ impl PedalboardPage {
     }
 
     pub fn ui(&mut self, ui: &mut Ui, chain: &mut Vec<PedalInstance>) -> BoardOutput {
-        let palette = Palette::of(ui.ctx());
         let before = chain.clone();
         let mut out = BoardOutput::default();
 
-        // Toolbar.
+        // Toolbar. Phones get the less used actions in a "…" menu so it
+        // fits on one row.
+        let narrow = ui.ctx().screen_rect().width() < style::NARROW_WIDTH;
         ui.horizontal_wrapped(|ui| {
-            let add = ui.menu_button(RichText::new("➕ Add pedal").strong(), add_pedal_menu);
+            let add = ui.menu_button(RichText::new(tr("➕ Add pedal", "➕ Adicionar pedal")).strong(), add_pedal_menu);
             if let Some(Some(pedal)) = add.inner {
                 insert_in_signal_order(chain, pedal);
             }
             ui.separator();
-            if ui.add_enabled(self.history.can_undo(), egui::Button::new("⟲ Undo")).on_hover_text("Ctrl+Z").clicked() {
+            if ui.add_enabled(self.history.can_undo(), egui::Button::new(tr("⟲ Undo", "⟲ Desfazer"))).on_hover_text("Ctrl+Z").clicked() {
                 self.undo(chain);
             }
-            if ui.add_enabled(self.history.can_redo(), egui::Button::new("⟳ Redo")).on_hover_text("Ctrl+Shift+Z / Ctrl+Y").clicked() {
+            if ui.add_enabled(self.history.can_redo(), egui::Button::new(tr("⟳ Redo", "⟳ Refazer"))).on_hover_text("Ctrl+Shift+Z / Ctrl+Y").clicked() {
                 self.redo(chain);
             }
-            ui.separator();
-            let any_on = chain.iter().any(|p| p.enabled);
-            if !chain.is_empty()
-                && ui
-                    .button(if any_on { "Bypass all" } else { "Enable all" })
-                    .on_hover_text("Hear the dry guitar / bring every pedal back")
-                    .clicked()
-            {
-                for pedal in chain.iter_mut() {
-                    pedal.enabled = !any_on;
-                }
+            if narrow {
+                ui.menu_button("…", |ui| self.more_menu(ui, chain))
+                    .response
+                    .on_hover_text(tr("More actions", "Mais ações"));
+                return;
             }
+            ui.separator();
+            bypass_all_button(ui, chain);
             if !chain.is_empty() {
                 if self.confirm_clear {
-                    ui.label("Remove every pedal?");
-                    if ui.button(RichText::new("Remove").color(palette.danger)).clicked() {
-                        chain.clear();
-                        self.confirm_clear = false;
-                    }
-                    if ui.button("Cancel").clicked() {
-                        self.confirm_clear = false;
-                    }
-                } else if ui.button("Clear").on_hover_text("Remove every pedal (undoable)").clicked() {
+                    self.confirm_clear_ui(ui, chain);
+                } else if ui.button(tr("Clear", "Limpar"))
+                    .on_hover_text(tr("Remove every pedal (undoable)", "Remover todos os pedais (dá para desfazer)")).clicked() {
                     self.confirm_clear = true;
                 }
             }
             ui.separator();
-            match &self.compare {
-                None => {
-                    if ui
-                        .button("📌 A/B")
-                        .on_hover_text("Keep this sound as A, then edit freely and flip between A and B to compare")
-                        .clicked()
-                    {
-                        self.compare = Some((chain.clone(), true));
-                    }
-                }
-                Some((_, on_b)) => {
-                    let label = if *on_b { "Hearing B ⇄ A" } else { "Hearing A ⇄ B" };
-                    if ui
-                        .add(egui::Button::new(RichText::new(label).color(palette.accent)))
-                        .on_hover_text("Flip between the two sounds")
-                        .clicked()
-                    {
-                        self.swap_compare(chain);
-                    }
-                    if ui.small_button("✖").on_hover_text("Stop comparing (keep what you hear now)").clicked() {
-                        self.compare = None;
-                    }
-                }
+            if self.compare.is_some() {
+                self.compare_ui(ui, chain, false);
+            } else {
+                self.start_compare_button(ui, chain);
             }
         });
+        if narrow {
+            // States the "…" menu leads to stay on screen below the toolbar.
+            if self.confirm_clear && !chain.is_empty() {
+                ui.horizontal_wrapped(|ui| self.confirm_clear_ui(ui, chain));
+            }
+            if self.compare.is_some() {
+                ui.horizontal_wrapped(|ui| self.compare_ui(ui, chain, true));
+            }
+        }
         signal_flow(ui, chain);
         ui.add_space(style::space::S);
 
@@ -198,6 +212,72 @@ impl PedalboardPage {
 
         out.chain_changed |= before != *chain;
         out
+    }
+
+    /// The phone toolbar's "…" menu: bypass all, clear (confirmed below
+    /// the toolbar) and A/B.
+    fn more_menu(&mut self, ui: &mut Ui, chain: &mut [PedalInstance]) {
+        ui.set_min_width(190.0);
+        bypass_all_button(ui, chain);
+        if !chain.is_empty()
+            && ui.button(tr("Clear", "Limpar"))
+                .on_hover_text(tr("Remove every pedal (undoable)", "Remover todos os pedais (dá para desfazer)"))
+                .clicked()
+        {
+            self.confirm_clear = true;
+        }
+        if self.compare.is_some() {
+            if ui.button(tr("✖ Stop comparing", "✖ Parar de comparar")).clicked() {
+                self.compare = None;
+            }
+        } else {
+            self.start_compare_button(ui, chain);
+        }
+    }
+
+    /// "Remove every pedal? Remove / Cancel".
+    fn confirm_clear_ui(&mut self, ui: &mut Ui, chain: &mut Vec<PedalInstance>) {
+        let palette = Palette::of(ui.ctx());
+        ui.label(tr("Remove every pedal?", "Remover todos os pedais?"));
+        if ui.button(RichText::new(tr("Remove", "Remover")).color(palette.danger)).clicked() {
+            chain.clear();
+            self.confirm_clear = false;
+        }
+        if ui.button(tr("Cancel", "Cancelar")).clicked() {
+            self.confirm_clear = false;
+        }
+    }
+
+    fn start_compare_button(&mut self, ui: &mut Ui, chain: &[PedalInstance]) {
+        if ui
+            .button("📌 A/B")
+            .on_hover_text(tr(
+                "Keep this sound as A, then edit freely and flip between A and B to compare",
+                "Guardar este som como A, depois editar à vontade e alternar entre A e B para comparar",
+            ))
+            .clicked()
+        {
+            self.compare = Some((chain.to_vec(), true));
+        }
+    }
+
+    /// While comparing: flip between A and B, or stop. `narrow` makes the
+    /// stop button touch-sized.
+    fn compare_ui(&mut self, ui: &mut Ui, chain: &mut Vec<PedalInstance>, narrow: bool) {
+        let palette = Palette::of(ui.ctx());
+        let Some((_, on_b)) = &self.compare else { return };
+        let label = if *on_b { tr("Hearing B 🔁 A", "Ouvindo B 🔁 A") } else { tr("Hearing A 🔁 B", "Ouvindo A 🔁 B") };
+        if ui
+            .add(egui::Button::new(RichText::new(label).color(palette.accent)))
+            .on_hover_text(tr("Flip between the two sounds", "Alternar entre os dois sons"))
+            .clicked()
+        {
+            self.swap_compare(chain);
+        }
+        let stop = if narrow { ui.button("✖") } else { ui.small_button("✖") };
+        if stop.on_hover_text(tr("Stop comparing (keep what you hear now)", "Parar de comparar (manter o som atual)")).clicked() {
+            self.compare = None;
+        }
     }
 
     fn cards(&mut self, ui: &mut Ui, chain: &mut Vec<PedalInstance>, out: &mut BoardOutput) {
@@ -212,12 +292,19 @@ impl PedalboardPage {
             let available = ui.available_width();
             let per_row = (((available + gap) / (style::PEDAL_CARD_WIDTH + gap)).floor() as usize).max(1);
             let width = if per_row == 1 { available.min(520.0) } else { style::PEDAL_CARD_WIDTH };
-            for row_start in (0..count).step_by(per_row) {
+            // Phones show one card per row: nothing to line up.
+            let align = per_row > 1;
+            let mut tallest = Vec::new();
+            for (row, row_start) in (0..count).step_by(per_row).enumerate() {
+                let body_height = if align { self.row_heights.target(per_row, row) } else { 0.0 };
+                let mut row_tallest = 0.0_f32;
                 ui.horizontal_top(|ui| {
                     ui.spacing_mut().item_spacing.x = gap;
                     let row_end = (row_start + per_row).min(count);
                     for (i, pedal) in chain.iter_mut().enumerate().take(row_end).skip(row_start) {
-                        let card = ui.push_id(("pedal_card", i), |ui| pedal_card(ui, i, count, pedal, width)).inner;
+                        let card =
+                            ui.push_id(("pedal_card", i), |ui| pedal_card(ui, i, count, pedal, width, body_height)).inner;
+                        row_tallest = row_tallest.max(card.body_height);
                         card.handle.dnd_set_drag_payload(i);
                         let zone = ui.interact(card.rect, ui.id().with(("pedal_drop", i)), Sense::hover());
                         if let Some(from) = zone.dnd_hover_payload::<usize>()
@@ -234,7 +321,17 @@ impl PedalboardPage {
                         }
                     }
                 });
+                tallest.push(row_tallest);
                 ui.add_space(gap);
+            }
+            if !align {
+                tallest.clear();
+            }
+            if self.row_heights.update(per_row, tallest) {
+                // Redraw now with the new heights instead of showing a
+                // frame of misaligned cards.
+                ui.ctx().request_discard("pedal card row heights changed");
+                ui.ctx().request_repaint();
             }
             ui.add_space(style::space::XL);
         });
@@ -273,6 +370,27 @@ impl PedalboardPage {
     }
 }
 
+/// "Bypass all" while any pedal is on, else "Enable all". Hidden for an
+/// empty chain.
+fn bypass_all_button(ui: &mut Ui, chain: &mut [PedalInstance]) {
+    if chain.is_empty() {
+        return;
+    }
+    let any_on = chain.iter().any(|p| p.enabled);
+    if ui
+        .button(if any_on { tr("Bypass all", "Desligar todos") } else { tr("Enable all", "Ligar todos") })
+        .on_hover_text(tr(
+            "Hear the dry guitar / bring every pedal back",
+            "Ouvir a guitarra sem efeitos / religar todos os pedais",
+        ))
+        .clicked()
+    {
+        for pedal in chain.iter_mut() {
+            pedal.enabled = !any_on;
+        }
+    }
+}
+
 /// "🎸 → Comp → Drive → Amp → 🔊": the chain at a glance. Clicking a chip
 /// toggles that pedal's bypass.
 fn signal_flow(ui: &mut Ui, chain: &mut [PedalInstance]) {
@@ -287,7 +405,11 @@ fn signal_flow(ui: &mut Ui, chain: &mut [PedalInstance]) {
             let text = if pedal.enabled { text.color(color).strong() } else { text.color(palette.text_dim).strikethrough() };
             if ui
                 .add(egui::Button::new(text).small().frame(false))
-                .on_hover_text(if pedal.enabled { "Click to bypass" } else { "Bypassed: click to turn on" })
+                .on_hover_text(if pedal.enabled {
+                    tr("Click to bypass", "Clique para desligar")
+                } else {
+                    tr("Bypassed: click to turn on", "Em bypass: clique para ligar")
+                })
                 .clicked()
             {
                 pedal.enabled = !pedal.enabled;
@@ -301,14 +423,17 @@ fn empty_state(ui: &mut Ui, chain: &mut Vec<PedalInstance>) {
     let palette = Palette::of(ui.ctx());
     ui.add_space(style::space::XL);
     ui.vertical_centered(|ui| {
-        ui.label(RichText::new("Your pedalboard is empty").size(style::text::HEADING).color(palette.text));
-        ui.label(RichText::new("Add pedals one by one, or load a preset from the Presets page.").color(palette.text_dim));
+        ui.label(RichText::new(tr("Your pedalboard is empty", "Sua pedaleira está vazia")).size(style::text::HEADING).color(palette.text));
+        ui.label(RichText::new(tr(
+            "Add pedals one by one, or load a preset from the Presets page.",
+            "Adicione pedais um a um ou carregue um preset na página Presets.",
+        )).color(palette.text_dim));
         ui.add_space(style::space::M);
         ui.horizontal(|ui| {
             // Center the quick-start buttons.
             let width = 330.0;
             ui.add_space(((ui.available_width() - width) / 2.0).max(0.0));
-            if ui.button("Clean amp").clicked() {
+            if ui.button(tr("Clean amp", "Amp limpo")).clicked() {
                 chain.push(PedalInstance::new(PedalDescription::Amp(Default::default())));
                 chain.push(PedalInstance::new(PedalDescription::Reverb(Default::default())));
             }
@@ -321,7 +446,7 @@ fn empty_state(ui: &mut Ui, chain: &mut Vec<PedalInstance>) {
                     ..Default::default()
                 })));
             }
-            if ui.button("Ambient").clicked() {
+            if ui.button(tr("Ambient", "Ambiente")).clicked() {
                 chain.push(PedalInstance::new(PedalDescription::Chorus(Default::default())));
                 chain.push(PedalInstance::new(PedalDescription::Delay(Default::default())));
                 chain.push(PedalInstance::new(PedalDescription::Reverb(crate::shared::pedals::ReverbParams {
@@ -364,6 +489,64 @@ mod tests {
         assert_eq!(chain, a);
         assert!(page.swap_compare(&mut chain));
         assert_eq!(chain, b);
+    }
+
+    #[test]
+    fn row_heights_follow_the_measured_cards() {
+        let mut rows = RowHeights::default();
+        assert_eq!(rows.target(4, 0), 0.0);
+        assert!(rows.update(4, vec![300.0, 200.0]));
+        assert_eq!(rows.target(4, 0), 300.0);
+        assert_eq!(rows.target(4, 1), 200.0);
+        assert_eq!(rows.target(4, 2), 0.0);
+        // Same measurements (or sub-pixel noise): nothing to redraw.
+        assert!(!rows.update(4, vec![300.2, 200.0]));
+        assert_eq!(rows.target(4, 0), 300.0);
+        // The tall pedal went away: the row shrinks.
+        assert!(rows.update(4, vec![250.0, 200.0]));
+        assert_eq!(rows.target(4, 0), 250.0);
+        // A different column count invalidates every row.
+        assert_eq!(rows.target(3, 0), 0.0);
+        assert!(rows.update(3, vec![250.0]));
+    }
+
+    /// Runs the page for a few frames in a window `width` wide.
+    fn run_page(ctx: &egui::Context, page: &mut PedalboardPage, chain: &mut Vec<PedalInstance>, width: f32) {
+        for _ in 0..3 {
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width, 800.0))),
+                ..Default::default()
+            };
+            let _ = ctx.run(input, |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    page.ui(ui, chain);
+                });
+            });
+        }
+    }
+
+    #[test]
+    fn card_rows_take_the_tallest_card_and_shrink_back() {
+        use crate::shared::pedals::{NoiseGateParams, TremoloParams};
+        let ctx = egui::Context::default();
+        let mut page = PedalboardPage::default();
+        let mut chain = vec![
+            PedalInstance::new(PedalDescription::Tremolo(TremoloParams::default())),
+            PedalInstance::new(PedalDescription::NoiseGate(NoiseGateParams::default())),
+        ];
+        run_page(&ctx, &mut page, &mut chain, 1200.0);
+        let with_gate = page.row_heights.target(page.row_heights.per_row, 0);
+        assert!(with_gate > 0.0);
+        // Two rows of knobs (gate) are taller than one (tremolo); removing
+        // the gate brings the row back to the tremolo's height.
+        chain.remove(1);
+        run_page(&ctx, &mut page, &mut chain, 1200.0);
+        let tremolo_only = page.row_heights.target(page.row_heights.per_row, 0);
+        assert!(tremolo_only > 0.0 && tremolo_only < with_gate, "{tremolo_only} vs {with_gate}");
+        // Phones: one card per row, nothing stored.
+        run_page(&ctx, &mut page, &mut chain, 390.0);
+        assert_eq!(page.row_heights.per_row, 1);
+        assert!(page.row_heights.rows.is_empty());
     }
 
     #[test]

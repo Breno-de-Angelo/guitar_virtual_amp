@@ -3,7 +3,8 @@
 //! Usage: `cargo run -- [OUT_DIR] [FILTER]` from this folder. OUT_DIR
 //! defaults to `snapshots/`; FILTER renders only shots whose name contains
 //! it. `GVA_SNAPSHOT_TAB=<file.gp5>` adds a Tabs page shot with that tab
-//! open and the Loop and Practice toggles clicked.
+//! open and the Loop and Practice toggles clicked. `GVA_SNAPSHOT_LANG=pt`
+//! renders in Portuguese (default English).
 //!
 //! The app runs without audio devices (`AudioSetup::without_audio`), and
 //! `XDG_CONFIG_HOME`/`XDG_DATA_HOME` point at a scratch folder so it never
@@ -15,6 +16,7 @@ use eframe::egui;
 use egui_kittest::kittest::Queryable;
 use guitar_core::backend::capture::AudioSetup;
 use guitar_core::frontend::gui::{AudioApp, Page, VISUALIZER_CHANNEL_SAMPLES};
+use guitar_core::shared::i18n::{LanguagePref, tr};
 use guitar_core::shared::settings::{AppSettings, PresetRef, ThemePref};
 
 const WIDE: egui::Vec2 = egui::vec2(1280.0, 820.0);
@@ -32,7 +34,16 @@ struct Shot {
     tone_hz: Option<f64>,
 }
 
-fn harness(settings: AppSettings, size: egui::Vec2, page: Option<Page>) -> (egui_kittest::Harness<'static, AudioApp>, crossbeam::channel::Sender<i16>) {
+/// The UI language of every shot, from `GVA_SNAPSHOT_LANG` (`pt` or `en`).
+fn language() -> LanguagePref {
+    match std::env::var("GVA_SNAPSHOT_LANG").as_deref() {
+        Ok("pt") => LanguagePref::Portuguese,
+        _ => LanguagePref::English,
+    }
+}
+
+fn harness(mut settings: AppSettings, size: egui::Vec2, page: Option<Page>) -> (egui_kittest::Harness<'static, AudioApp>, crossbeam::channel::Sender<i16>) {
+    settings.ui.language = language();
     let (audio_tx, audio_rx) = crossbeam::channel::bounded(VISUALIZER_CHANNEL_SAMPLES);
     let tx = audio_tx.clone();
     let harness = egui_kittest::Harness::builder().with_size(size).build_eframe(move |_cc| {
@@ -78,7 +89,7 @@ fn interaction_shots(dir: &Path) {
     settings.last_preset = Some(PresetRef::Factory("Clean Jazz".into()));
     let (mut harness, _tx) = harness(settings, WIDE, Some(Page::Pedalboard));
     harness.run_steps(3);
-    harness.get_by_label("➕ Add pedal").click();
+    harness.get_by_label(tr("➕ Add pedal", "➕ Adicionar pedal")).click();
     harness.run_steps(3);
     save(&mut harness, dir, "add_menu");
     harness.get_by_label("Phaser").click();
@@ -105,10 +116,10 @@ fn interaction_shots(dir: &Path) {
     save(&mut harness, dir, "shortcuts");
 }
 
-fn tab_shot(dir: &Path, tab: PathBuf) {
+fn tab_shot(dir: &Path, tab: PathBuf, name: &str, size: egui::Vec2) {
     let mut settings = AppSettings::default();
     settings.last_tab = Some(tab);
-    let (mut harness, _tx) = harness(settings, WIDE, Some(Page::Tabs));
+    let (mut harness, _tx) = harness(settings, size, Some(Page::Tabs));
     // The tab loads on a worker thread.
     for _ in 0..30 {
         harness.step();
@@ -116,9 +127,48 @@ fn tab_shot(dir: &Path, tab: PathBuf) {
     }
     harness.get_by_label("🔁 Loop").click();
     harness.step();
-    harness.get_by_label("🎯 Prática").click();
+    harness.get_by_label(tr("🎯 Practice", "🎯 Prática")).click();
     harness.run_steps(4);
-    save(&mut harness, dir, "tabs_loaded");
+    save(&mut harness, dir, name);
+}
+
+/// Opens the Transcribe form, searches YouTube for `query` (needs the
+/// network and `GVA_YTDLP` or yt-dlp on PATH), then plays the first result's
+/// preview.
+fn youtube_shot(dir: &Path, query: &str) {
+    let (mut harness, _tx) = harness(AppSettings::default(), WIDE, Some(Page::Tabs));
+    harness.run_steps(3);
+    harness.get_by_label(tr("⚡ Transcribe audio...", "⚡ Transcrever áudio...")).click();
+    harness.run_steps(3);
+    harness.get_all_by_role(egui::accesskit::Role::TextInput).next().expect("the search field").type_text(query);
+    harness.key_press(egui::Key::Enter);
+    let wait = |harness: &mut egui_kittest::Harness<'_, AudioApp>, until: &dyn Fn(&egui_kittest::Harness<'_, AudioApp>) -> bool| {
+        for _ in 0..300 {
+            harness.step();
+            if until(harness) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        // Thumbnails.
+        for _ in 0..20 {
+            harness.step();
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+    };
+    wait(&mut harness, &|h| h.query_by_label(tr("More results", "Mais resultados")).is_some());
+    save(&mut harness, dir, "transcribe_youtube");
+    // The lowest ▶ on the page is a result row's (the top bar has one too):
+    // take the first row's, the highest of those below the search field.
+    let field_y = harness.get_all_by_role(egui::accesskit::Role::TextInput).next().unwrap().rect().bottom();
+    let play = harness
+        .get_all_by_label("▶")
+        .filter(|n| n.rect().top() > field_y)
+        .min_by(|a, b| a.rect().top().total_cmp(&b.rect().top()))
+        .expect("a result's play button");
+    play.click();
+    wait(&mut harness, &|h| h.query_by_label("⏸").is_some());
+    save(&mut harness, dir, "transcribe_youtube_preview");
 }
 
 fn main() {
@@ -145,6 +195,10 @@ fn main() {
         Shot { name: "analyzer", size: WIDE, page: Page::Analyzer, theme: ThemePref::Dark, preset: "", tone_hz: Some(220.0) },
         Shot { name: "settings", size: WIDE, page: Page::Settings, theme: ThemePref::Dark, preset: "", tone_hz: None },
         Shot { name: "spotify", size: WIDE, page: Page::Spotify, theme: ThemePref::Dark, preset: "", tone_hz: None },
+        Shot { name: "presets_phone", size: PHONE, page: Page::Presets, theme: ThemePref::Dark, preset: "Rock Lead", tone_hz: None },
+        Shot { name: "tabs_phone", size: PHONE, page: Page::Tabs, theme: ThemePref::Dark, preset: "", tone_hz: None },
+        Shot { name: "settings_phone", size: PHONE, page: Page::Settings, theme: ThemePref::Dark, preset: "", tone_hz: None },
+        Shot { name: "analyzer_phone", size: PHONE, page: Page::Analyzer, theme: ThemePref::Dark, preset: "", tone_hz: Some(220.0) },
     ];
     for shot in shots.iter().filter(|s| s.name.contains(&filter)) {
         page_shot(shot, &dir);
@@ -152,10 +206,17 @@ fn main() {
     if "add_menu knob_drag shortcuts".contains(&filter) || filter.is_empty() {
         interaction_shots(&dir);
     }
-    if let Ok(tab) = std::env::var("GVA_SNAPSHOT_TAB")
-        && "tabs_loaded".contains(&filter)
+    if let Ok(tab) = std::env::var("GVA_SNAPSHOT_TAB") {
+        for (name, size) in [("tabs_loaded", WIDE), ("tabs_loaded_phone", PHONE)] {
+            if name.contains(&filter) {
+                tab_shot(&dir, PathBuf::from(&tab), name, size);
+            }
+        }
+    }
+    if let Ok(query) = std::env::var("GVA_SNAPSHOT_YOUTUBE")
+        && "transcribe_youtube_preview".contains(&filter)
     {
-        tab_shot(&dir, PathBuf::from(tab));
+        youtube_shot(&dir, &query);
     }
     let _ = std::fs::remove_dir_all(&scratch);
 }

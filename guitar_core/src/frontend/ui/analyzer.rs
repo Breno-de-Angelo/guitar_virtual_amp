@@ -10,6 +10,7 @@ use egui_plot::{GridMark, Line, Plot, PlotPoints, log_grid_spacer};
 use crate::frontend::lib::fft::SpectrumAnalyzer;
 use crate::frontend::style::Palette;
 use crate::shared::config::GLOBAL_CONFIG;
+use crate::shared::i18n::tr;
 
 const TIME_BASES_MS: [f32; 5] = [5.0, 10.0, 20.0, 40.0, 80.0];
 
@@ -58,25 +59,25 @@ impl AnalyzerPage {
         let rate = GLOBAL_CONFIG.sample_rate as f64;
         let mut source_changed = false;
         ui.horizontal_wrapped(|ui| {
-            ui.label("Signal:");
-            source_changed |= ui.selectable_value(dry, false, "after the pedals").changed();
-            source_changed |= ui.selectable_value(dry, true, "dry guitar").changed();
+            ui.label(tr("Signal:", "Sinal:"));
+            source_changed |= ui.selectable_value(dry, false, tr("after the pedals", "depois dos pedais")).changed();
+            source_changed |= ui.selectable_value(dry, true, tr("dry guitar", "guitarra sem pedais")).changed();
             ui.separator();
-            ui.label("Time base:");
+            ui.label(tr("Time base:", "Base de tempo:"));
             for ms in TIME_BASES_MS {
                 ui.selectable_value(&mut self.time_base_ms, ms, format!("{ms:.0} ms"));
             }
             ui.separator();
             let mut frozen = self.frozen.is_some();
-            if ui.toggle_value(&mut frozen, "❄ Freeze").on_hover_text("Hold the current picture").changed() {
+            if ui.toggle_value(&mut frozen, tr("❄ Freeze", "❄ Congelar")).on_hover_text(tr("Hold the current picture", "Manter a imagem atual")).changed() {
                 self.frozen = None;
                 if frozen {
                     let wave: Vec<f64> = buffer.iter().copied().collect();
                     self.frozen = Some((wave, self.smoothed.clone()));
                 }
             }
-            ui.checkbox(&mut self.show_peaks, "Peak hold");
-            if ui.button("Reset peaks").clicked() {
+            ui.checkbox(&mut self.show_peaks, tr("Peak hold", "Segurar picos"));
+            if ui.button(tr("Reset peaks", "Zerar picos")).clicked() {
                 self.peak_hold.clear();
             }
         });
@@ -103,7 +104,7 @@ impl AnalyzerPage {
         };
 
         let height = ((ui.available_height() - 64.0) / 2.0).max(120.0);
-        ui.label(RichText::new("Waveform").color(palette.text_dim));
+        ui.label(RichText::new(tr("Waveform", "Forma de onda")).color(palette.text_dim));
         let window = ((self.time_base_ms / 1000.0) as f64 * rate) as usize;
         let start = trigger_index(&wave, window);
         let points: PlotPoints = wave[start..(start + window).min(wave.len())]
@@ -114,7 +115,10 @@ impl AnalyzerPage {
         Plot::new("analyzer_waveform")
             .height(height)
             .default_x_bounds(0.0, self.time_base_ms as f64)
-            .default_y_bounds(-1.0, 1.0)
+            // A little headroom so the ±1 labels don't sit on the time axis.
+            .default_y_bounds(-1.15, 1.15)
+            .y_grid_spacer(|_| [-1.0, -0.5, 0.0, 0.5, 1.0].map(|value| GridMark { value, step_size: 0.5 }).to_vec())
+            .y_axis_formatter(|mark, _| if mark.value.fract() == 0.0 { format!("{:.0}", mark.value) } else { format!("{:.1}", mark.value) })
             .allow_drag(false)
             .allow_zoom(false)
             .allow_scroll(false)
@@ -123,7 +127,7 @@ impl AnalyzerPage {
                 plot_ui.line(Line::new("wave", points).color(palette.accent).width(1.5_f32));
             });
 
-        ui.label(RichText::new("Spectrum (dBFS)").color(palette.text_dim));
+        ui.label(RichText::new(tr("Spectrum (dBFS)", "Espectro (dBFS)")).color(palette.text_dim));
         let bin_hz = rate / self.analyzer.size() as f64;
         let to_points = |values: &[f64]| -> PlotPoints<'static> {
             values
@@ -146,7 +150,7 @@ impl AnalyzerPage {
             .x_grid_spacer(log_grid_spacer(10))
             .x_axis_formatter(|mark: GridMark, _| {
                 let hz = 10f64.powf(mark.value);
-                if hz >= 1000.0 { format!("{:.0}k", hz / 1000.0) } else { format!("{hz:.0}") }
+                if hz >= 1000.0 { format!("{:.0} kHz", hz / 1000.0) } else { format!("{hz:.0} Hz") }
             })
             .y_axis_formatter(|mark, _| format!("{:.0} dB", mark.value))
             .label_formatter(|_, p| format!("{:.0} Hz, {:.1} dB", 10f64.powf(p.x), p.y))

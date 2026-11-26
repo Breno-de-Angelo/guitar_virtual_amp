@@ -61,6 +61,8 @@ fn collect(path: &Path, out: &mut Vec<PathBuf>) {
 }
 
 fn main() {
+    // Progress stages and errors come from guitar_core in the app's language.
+    guitar_core::shared::i18n::set_language(guitar_core::shared::settings::load_settings().ui.language.resolve());
     let mut args = std::env::args().skip(1);
     let mut inputs = Vec::new();
     let (mut repo, mut separate, mut guitar, mut bass, mut force) = (None, true, true, true, false);

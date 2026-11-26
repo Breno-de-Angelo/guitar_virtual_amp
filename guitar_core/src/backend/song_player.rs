@@ -15,6 +15,10 @@
 //!
 //! Both the synth and the backing track are advanced by the same
 //! output-sample clock, so they cannot drift apart from each other.
+//!
+//! A *preview* clip (e.g. a YouTube result heard before transcribing it)
+//! plays on its own, without a song loaded and without moving the tab's
+//! playhead: see [`SongPlayer::start_preview`].
 
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -40,6 +44,8 @@ pub struct PlayerStatus {
     output_rate: AtomicU32,
     counting_in: AtomicBool,
     loop_passes: AtomicU32,
+    previewing: AtomicBool,
+    preview_secs: AtomicU64,
 }
 
 impl PlayerStatus {
@@ -65,6 +71,20 @@ impl PlayerStatus {
     pub fn loop_passes(&self) -> u32 {
         self.loop_passes.load(Ordering::Relaxed)
     }
+    /// The preview clip is playing.
+    pub fn previewing(&self) -> bool {
+        self.previewing.load(Ordering::Relaxed)
+    }
+    /// Position in the preview clip, in seconds.
+    pub fn preview_secs(&self) -> f64 {
+        f64::from_bits(self.preview_secs.load(Ordering::Relaxed))
+    }
+}
+/// A clip played on its own (see [`SongPlayer::start_preview`]).
+struct Preview {
+    audio: Arc<DecodedAudio>,
+    secs: f64,
+    playing: bool,
 }
 
 /// Clicks before playback starts, so the player can come in on time.
@@ -102,6 +122,7 @@ pub struct PlayerEngine {
     /// `(start, end)` in score seconds: playback jumps back at the end.
     loop_range: Option<(f64, f64)>,
     count_in: Option<CountIn>,
+    preview: Option<Preview>,
 }
 
 impl PlayerEngine {
@@ -128,6 +149,7 @@ impl PlayerEngine {
             status,
             loop_range: None,
             count_in: None,
+            preview: None,
         }
     }
 
@@ -217,9 +239,35 @@ impl PlayerEngine {
         }
     }
 
+    /// The song and the preview never play together.
+    fn pause_preview(&mut self) {
+        if let Some(p) = &mut self.preview {
+            p.playing = false;
+        }
+        self.publish_preview();
+    }
+    fn publish_preview(&self) {
+        let (playing, secs) = self.preview.as_ref().map_or((false, 0.0), |p| (p.playing, p.secs));
+        self.status.previewing.store(playing, Ordering::Relaxed);
+        self.status.preview_secs.store(secs.to_bits(), Ordering::Relaxed);
+    }
+    /// Mixes the preview clip into `out`; it stops (but stays loaded) at its end.
+    fn render_preview(&mut self, out: &mut [f32]) {
+        let rate = self.output_rate.max(1) as f64;
+        let Some(preview) = self.preview.as_mut().filter(|p| p.playing) else { return };
+        for (i, sample) in out.iter_mut().enumerate() {
+            *sample += preview.audio.sample_at(preview.secs + i as f64 / rate);
+        }
+        preview.secs += out.len() as f64 / rate;
+        if preview.secs >= preview.audio.duration_secs() {
+            preview.playing = false;
+        }
+        self.publish_preview();
+    }
     /// Mixes the next `out.len()` mono frames of song audio into `out`.
     /// Called from the realtime output callback.
     pub fn render(&mut self, out: &mut [f32]) {
+        self.render_preview(out);
         if !self.playing || self.timeline.is_none() {
             return;
         }
@@ -430,6 +478,7 @@ impl SongPlayer {
             if e.score_secs >= e.end_secs() - 1.0 {
                 e.seek_score(0.0);
             }
+            e.pause_preview();
             e.playing = true;
             e.publish();
         });
@@ -444,6 +493,7 @@ impl SongPlayer {
             if e.score_secs >= e.end_secs() - 1.0 {
                 e.seek_score(0.0);
             }
+            e.pause_preview();
             let period = (beat_secs.clamp(0.1, 4.0) * e.output_rate.max(1) as f64) as u64;
             e.count_in = (beats > 0).then_some(CountIn { period, total: period * beats as u64, elapsed: 0 });
             e.playing = true;
@@ -523,6 +573,53 @@ impl SongPlayer {
             e.backing_gain = backing_gain.max(0.0);
         });
     }
+    /// Plays `audio` from `start_secs` on its own, pausing the song (a new
+    /// clip replaces the previous one).
+    pub fn start_preview(&self, audio: Arc<DecodedAudio>, start_secs: f64) {
+        let old = self.with(|e| {
+            if e.playing {
+                e.playing = false;
+                e.count_in = None;
+                e.silence();
+                e.publish();
+            }
+            let secs = start_secs.clamp(0.0, audio.duration_secs());
+            let old = e.preview.replace(Preview { audio, secs, playing: true });
+            e.publish_preview();
+            old
+        });
+        // Dropped here, on the caller's thread, not on the audio thread.
+        drop(old);
+    }
+    /// Pauses or resumes the preview clip (from the start once it ended).
+    pub fn set_preview_playing(&self, playing: bool) {
+        self.with(|e| {
+            if let Some(p) = &mut e.preview {
+                if playing && p.secs >= p.audio.duration_secs() {
+                    p.secs = 0.0;
+                }
+                p.playing = playing;
+            }
+            e.publish_preview();
+        });
+    }
+    pub fn seek_preview(&self, secs: f64) {
+        self.with(|e| {
+            if let Some(p) = &mut e.preview {
+                p.secs = secs.clamp(0.0, p.audio.duration_secs());
+            }
+            e.publish_preview();
+        });
+    }
+    /// Stops and unloads the preview clip.
+    pub fn stop_preview(&self) {
+        let old = self.with(|e| {
+            let old = e.preview.take();
+            e.publish_preview();
+            old
+        });
+        drop(old);
+    }
 }
 
 #[cfg(test)]
@@ -544,6 +641,45 @@ mod tests {
         player
     }
 
+    #[test]
+    fn preview_plays_without_a_song_and_pauses_it() {
+        let player = SongPlayer::new();
+        player.set_output_rate(1000);
+        let clip = Arc::new(DecodedAudio { samples: vec![0.25; 1500], sample_rate: 1000 });
+        player.start_preview(clip.clone(), 0.0);
+        let mut buf = vec![0.0; 1000];
+        player.try_render(&mut buf);
+        assert!(buf.iter().all(|s| (*s - 0.25).abs() < 1e-6));
+        assert!(player.status().previewing());
+        assert!((player.status().preview_secs() - 1.0).abs() < 1e-9);
+        // It stops at the end of the clip, and resumes from the start.
+        let mut buf = vec![0.0; 1000];
+        player.try_render(&mut buf);
+        assert!(!player.status().previewing());
+        assert_eq!(buf[999], 0.0);
+        player.set_preview_playing(true);
+        assert_eq!(player.status().preview_secs(), 0.0);
+        player.seek_preview(0.5);
+        assert!((player.status().preview_secs() - 0.5).abs() < 1e-9);
+
+        // A playing song is paused, and its playhead stays put.
+        let player = player_at(1000);
+        player.play();
+        player.try_render(&mut vec![0.0; 500]);
+        player.start_preview(clip, 0.0);
+        assert!(!player.status().playing());
+        let pos = player.status().score_secs();
+        player.try_render(&mut vec![0.0; 500]);
+        assert_eq!(player.status().score_secs(), pos);
+        player.set_preview_playing(true);
+        player.play();
+        assert!(!player.status().previewing(), "playing the song pauses the preview");
+        player.stop_preview();
+        assert!(!player.status().previewing());
+        let mut buf = vec![0.0; 100];
+        player.try_render(&mut buf);
+        assert!(buf.iter().all(|s| *s == 0.0));
+    }
     #[test]
     fn synth_only_clock_follows_speed() {
         let player = player_at(1000);

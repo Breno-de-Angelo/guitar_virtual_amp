@@ -19,6 +19,9 @@ pub mod types;
 
 use std::fmt;
 
+use crate::shared::i18n::tr;
+use crate::trf;
+
 pub use client::{BrowserFlowResult, DeviceCode, PendingBrowserFlow, Prompt, Tone3000Client};
 pub use types::{EmbeddedUser, Model, Tone, ToneList};
 
@@ -56,11 +59,11 @@ pub enum Tone3000Error {
 impl fmt::Display for Tone3000Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Tone3000Error::NotSignedIn => write!(f, "not signed in to TONE3000"),
-            Tone3000Error::Cancelled => write!(f, "cancelled"),
-            Tone3000Error::OAuth(message) => write!(f, "sign-in failed: {message}"),
-            Tone3000Error::Http(message) => write!(f, "network error: {message}"),
-            Tone3000Error::Io(message) => write!(f, "file error: {message}"),
+            Tone3000Error::NotSignedIn => f.write_str(tr("not signed in to TONE3000", "você não está conectado ao TONE3000")),
+            Tone3000Error::Cancelled => f.write_str(tr("cancelled", "cancelado")),
+            Tone3000Error::OAuth(message) => f.write_str(&trf!("sign-in failed: {message}", "falha no login: {message}")),
+            Tone3000Error::Http(message) => f.write_str(&trf!("network error: {message}", "erro de rede: {message}")),
+            Tone3000Error::Io(message) => f.write_str(&trf!("file error: {message}", "erro de arquivo: {message}")),
             Tone3000Error::Other(message) => write!(f, "{message}"),
         }
     }

@@ -8,9 +8,11 @@ use std::time::{Duration, Instant};
 use eframe::egui::{self, Align2, Color32, FontId, RichText, Sense, Stroke, Ui, pos2, vec2};
 
 use crate::frontend::lib::pitch::{detect_pitch, freq_to_midi, midi_to_freq, note_name, pitch_class_name};
-use crate::frontend::lib::tunings::{TUNINGS, Tuning, label};
+use crate::frontend::lib::tunings::{TUNINGS, Tuning, display_name, label};
 use crate::frontend::style::{self, Palette};
 use crate::shared::config::GLOBAL_CONFIG;
+use crate::shared::i18n::{Language, language, tr};
+use crate::trf;
 use crate::shared::settings::UiPrefs;
 
 /// Within this many cents a string counts as in tune.
@@ -45,6 +47,9 @@ pub struct TunerPanel {
     /// Strings that were held in tune, for the current tuning.
     tuned: Vec<bool>,
     tuned_for: Vec<u8>,
+    /// Widths of the toolbar groups last frame, for [`keep_together`].
+    a4_width: f32,
+    mute_width: f32,
 }
 
 impl Default for TunerPanel {
@@ -55,7 +60,15 @@ impl Default for TunerPanel {
 
 impl TunerPanel {
     pub fn new() -> Self {
-        Self { midi: None, last_seen: Instant::now(), in_tune_since: None, tuned: Vec::new(), tuned_for: Vec::new() }
+        Self {
+            midi: None,
+            last_seen: Instant::now(),
+            in_tune_since: None,
+            tuned: Vec::new(),
+            tuned_for: Vec::new(),
+            a4_width: 0.0,
+            mute_width: 0.0,
+        }
     }
 
     /// Feeds one detection (or `None` for silence).
@@ -106,48 +119,58 @@ impl TunerPanel {
         }
 
         ui.horizontal_wrapped(|ui| {
-            ui.label("Tuning:");
-            let selected = if prefs.tuner_tuning == TAB_TUNING {
-                format!("From the tab ({})", tuning.name)
-            } else {
-                tuning.name.clone()
-            };
-            egui::ComboBox::from_id_salt("tuner_tuning").selected_text(selected).width(200.0).show_ui(ui, |ui| {
-                if let Some(tab) = &tab_tuning {
-                    changed |= ui
-                        .selectable_value(&mut prefs.tuner_tuning, TAB_TUNING.to_string(), format!("From the tab: {}", tab.name))
-                        .changed();
-                    ui.separator();
-                }
-                for (name, strings) in TUNINGS {
-                    changed |= ui
-                        .selectable_value(&mut prefs.tuner_tuning, name.to_string(), format!("{name}  ({})", label(strings)))
-                        .changed();
+            // Each label stays on the same line as its control when the row wraps.
+            ui.horizontal(|ui| {
+                ui.label(tr("Tuning:", "Afinação:"));
+                let selected = if prefs.tuner_tuning == TAB_TUNING {
+                    trf!("From the tab ({})", "Da tab ({})", tuning.display_name())
+                } else {
+                    tuning.display_name().to_string()
+                };
+                egui::ComboBox::from_id_salt("tuner_tuning").selected_text(selected).width(200.0).show_ui(ui, |ui| {
+                    if let Some(tab) = &tab_tuning {
+                        changed |= ui
+                            .selectable_value(&mut prefs.tuner_tuning, TAB_TUNING.to_string(), trf!("From the tab: {}", "Da tab: {}", tab.display_name()))
+                            .changed();
+                        ui.separator();
+                    }
+                    for (name, strings) in TUNINGS {
+                        let text = format!("{}  ({})", display_name(name), label(strings));
+                        changed |= ui.selectable_value(&mut prefs.tuner_tuning, name.to_string(), text).changed();
+                    }
+                });
+            });
+            keep_together(ui, &mut self.a4_width, |ui| {
+                ui.label("A4 =");
+                changed |= ui
+                    .add(egui::DragValue::new(&mut prefs.tuner_reference_hz).range(400.0..=480.0).speed(0.1).suffix(" Hz").max_decimals(1))
+                    .on_hover_text(tr(
+                        "Reference pitch. 440 Hz is standard; some bands tune to 442 or 432.",
+                        "Nota de referência. 440 Hz é o padrão; algumas bandas afinam em 442 ou 432.",
+                    ))
+                    .changed();
+                if (prefs.tuner_reference_hz - 440.0).abs() > 0.01 && ui.small_button("440").clicked() {
+                    prefs.tuner_reference_hz = 440.0;
+                    changed = true;
                 }
             });
-            ui.separator();
-            ui.label("A4 =");
-            changed |= ui
-                .add(egui::DragValue::new(&mut prefs.tuner_reference_hz).range(400.0..=480.0).speed(0.1).suffix(" Hz").max_decimals(1))
-                .on_hover_text("Reference pitch. 440 Hz is standard; some bands tune to 442 or 432.")
-                .changed();
-            if (prefs.tuner_reference_hz - 440.0).abs() > 0.01 && ui.small_button("440").clicked() {
-                prefs.tuner_reference_hz = 440.0;
-                changed = true;
-            }
-            ui.separator();
-            changed |= ui
-                .checkbox(&mut prefs.mute_while_tuning, "Mute output while tuning")
-                .on_hover_text("Silence the speakers while this page is open")
-                .changed();
+            keep_together(ui, &mut self.mute_width, |ui| {
+                changed |= ui
+                    .checkbox(&mut prefs.mute_while_tuning, tr("Mute output while tuning", "Silenciar saída ao afinar"))
+                    .on_hover_text(tr(
+                        "Silence the speakers while this page is open",
+                        "Silencia os alto-falantes enquanto esta página estiver aberta",
+                    ))
+                    .changed();
+            });
         });
         if let Some(tab) = &tab_tuning
             && prefs.tuner_tuning != TAB_TUNING
             && tab.strings != tuning.strings
         {
             ui.horizontal_wrapped(|ui| {
-                ui.colored_label(palette.warn, format!("⚠ The open tab uses {} ({}).", tab.name, label(&tab.strings)));
-                if ui.button("Tune to the tab").clicked() {
+                ui.colored_label(palette.warn, trf!("⚠ The open tab uses {} ({}).", "⚠ A tab aberta usa {} ({}).", tab.display_name(), label(&tab.strings)));
+                if ui.button(tr("Tune to the tab", "Afinar pela tab")).clicked() {
                     prefs.tuner_tuning = TAB_TUNING.to_string();
                     changed = true;
                 }
@@ -194,7 +217,7 @@ impl TunerPanel {
                 }
                 None => {
                     ui.label(RichText::new("—").size(style::text::DISPLAY).color(palette.text_dim));
-                    ui.label(RichText::new("Play a single open string").color(palette.text_dim));
+                    ui.label(RichText::new(tr("Play a single open string", "Toque uma corda solta")).color(palette.text_dim));
                     needle(ui, 0.0, false, &palette);
                 }
             }
@@ -203,29 +226,36 @@ impl TunerPanel {
 
         // String targets.
         ui.vertical_centered(|ui| {
-            ui.horizontal(|ui| {
-                let count = tuning.strings.len() as f32;
-                let gap = ui.spacing().item_spacing.x;
-                let w = ((ui.available_width() - gap * count) / count).clamp(36.0, 64.0);
-                ui.add_space(((ui.available_width() - count * (w + gap)) / 2.0).max(0.0));
-                for (i, &open) in tuning.strings.iter().enumerate() {
-                    let active = string_target.is_some_and(|(s, _)| s == i) && self.midi.is_some();
-                    let cents = string_target.filter(|(s, _)| *s == i).map(|(_, c)| c);
-                    let tuned = self.tuned.get(i).copied().unwrap_or(false);
-                    string_chip(ui, open as i32, i, active, cents, tuned, a4, w, &palette);
-                }
-            });
+            let count = tuning.strings.len();
+            let gap = ui.spacing().item_spacing.x;
+            let available = ui.available_width();
+            let per_row = chips_per_row(count, available, gap);
+            let w = ((available - gap * (per_row as f32 - 1.0)) / per_row as f32).min(CHIP_MAX_WIDTH);
+            for row_start in (0..count).step_by(per_row.max(1)) {
+                let row = row_start..(row_start + per_row).min(count);
+                ui.horizontal(|ui| {
+                    let row_width = row.len() as f32 * (w + gap) - gap;
+                    ui.add_space(((available - row_width) / 2.0).max(0.0));
+                    for i in row {
+                        let open = tuning.strings[i];
+                        let active = string_target.is_some_and(|(s, _)| s == i) && self.midi.is_some();
+                        let cents = string_target.filter(|(s, _)| *s == i).map(|(_, c)| c);
+                        let tuned = self.tuned.get(i).copied().unwrap_or(false);
+                        string_chip(ui, open as i32, tuning.string_number(i), active, cents, tuned, a4, w, &palette);
+                    }
+                });
+            }
             if self.tuned.iter().any(|t| *t) {
                 let done = self.tuned.iter().filter(|t| **t).count();
                 let text = if done == self.tuned.len() {
-                    "✔ All strings tuned".to_string()
+                    tr("✔ All strings tuned", "✔ Todas as cordas afinadas").to_string()
                 } else {
-                    format!("{done}/{} strings tuned", self.tuned.len())
+                    trf!("{done}/{} strings tuned", "{done}/{} cordas afinadas", self.tuned.len())
                 };
                 ui.horizontal(|ui| {
                     ui.add_space(((ui.available_width() - 200.0) / 2.0).max(0.0));
                     ui.label(RichText::new(text).color(palette.ok));
-                    if ui.small_button("Reset").clicked() {
+                    if ui.small_button(tr("Reset", "Zerar")).clicked() {
                         self.tuned.iter_mut().for_each(|t| *t = false);
                     }
                 });
@@ -234,9 +264,32 @@ impl TunerPanel {
         ui.add_space(style::space::M);
 
         // Fretboard.
-        ui.label(RichText::new("Where this note is on the neck").small().color(palette.text_dim));
+        ui.label(RichText::new(tr("Where this note is on the neck", "Onde esta nota fica no braço")).small().color(palette.text_dim));
         fretboard(ui, &tuning.strings, nearest.map(|(n, _)| n), &palette);
         changed
+    }
+}
+
+/// Adds a group of widgets (a label and its control) to a
+/// `horizontal_wrapped` row, after a separator, so that the group wraps as
+/// a whole: egui only wraps single widgets, and would split "A4 =" from its
+/// value. `width` is the group's width last frame; on the first frame, or
+/// when it grew past the edge, the pass is redrawn with the new width.
+fn keep_together(ui: &mut Ui, width: &mut f32, add: impl FnOnce(&mut Ui)) {
+    // What's left of the current row (`available_width` is the whole row).
+    let wraps = *width > ui.available_size_before_wrap().x;
+    if wraps {
+        ui.end_row();
+    } else {
+        ui.separator();
+    }
+    let rect = ui.horizontal(add).response.rect;
+    let measured = rect.width();
+    if (measured - *width).abs() > 0.5 {
+        *width = measured;
+        if rect.right() > ui.max_rect().right() + 0.5 {
+            ui.ctx().request_discard("tuner toolbar group moved to a new row");
+        }
     }
 }
 
@@ -280,11 +333,64 @@ fn needle(ui: &mut Ui, cents: f64, live: bool, palette: &Palette) {
     painter.circle_filled(center, 6.0, color);
 }
 
+/// String chips are at most this wide, and get two rows (or more) before
+/// they'd shrink below the minimum.
+const CHIP_MAX_WIDTH: f32 = 84.0;
+const CHIP_MIN_WIDTH: f32 = 36.0;
+
+/// How many string chips go in one row of `available` points: all of them
+/// if they fit at [`CHIP_MIN_WIDTH`], else rows of (nearly) equal length.
+fn chips_per_row(count: usize, available: f32, gap: f32) -> usize {
+    if count == 0 {
+        return 1;
+    }
+    let fit = (((available + gap) / (CHIP_MIN_WIDTH + gap)).floor() as usize).clamp(1, count);
+    let rows = count.div_ceil(fit);
+    count.div_ceil(rows)
+}
+
+/// The second line of a string chip: how far off the string is while it's
+/// the one being played, else its number (1 = highest string). `short` is
+/// the form for narrow chips.
+fn chip_status(cents: Option<f64>, string_number: usize, short: bool, language: Language) -> String {
+    let pt = language == Language::Portuguese;
+    match cents {
+        Some(c) if c.abs() < IN_TUNE_CENTS => {
+            if short {
+                "✔".to_string()
+            } else if pt {
+                "✔ afinada".to_string()
+            } else {
+                "✔ in tune".to_string()
+            }
+        }
+        Some(c) => {
+            // Sharp: tune down. Flat: tune up.
+            let arrow = if c > 0.0 { "⬇" } else { "⬆" };
+            let amount = c.abs().round();
+            if short {
+                format!("{arrow}{amount:.0}¢")
+            } else {
+                let word = match (c > 0.0, pt) {
+                    (true, false) => "sharp",
+                    (true, true) => "aguda",
+                    (false, false) => "flat",
+                    (false, true) => "grave",
+                };
+                format!("{arrow} {amount:.0}¢ {word}")
+            }
+        }
+        None if short => string_number.to_string(),
+        None if pt => format!("corda {string_number}"),
+        None => format!("string {string_number}"),
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn string_chip(
     ui: &mut Ui,
     open: i32,
-    index: usize,
+    string_number: usize,
     active: bool,
     cents: Option<f64>,
     tuned: bool,
@@ -306,22 +412,23 @@ fn string_chip(
         FontId::proportional(if compact { 14.0 } else { 16.0 }),
         if tuned { palette.ok } else { palette.text },
     );
-    let sub = match cents {
-        Some(c) if c.abs() < IN_TUNE_CENTS => if compact { "ok".to_string() } else { "in tune".to_string() },
-        Some(c) if c < 0.0 => format!("⬆ {:.0}", -c),
-        Some(c) => format!("⬇ {c:.0}"),
-        None if compact => format!("{}", index + 1),
-        None => format!("string {}", index + 1),
+    // The long form if it fits the chip, else the short one.
+    let font = FontId::proportional(style::text::SMALL);
+    let status_color = match cents {
+        Some(c) if c.abs() < IN_TUNE_CENTS => palette.ok,
+        Some(_) => palette.text,
+        None => palette.text_dim,
     };
-    painter.text(
-        rect.center() + vec2(0.0, 12.0),
-        Align2::CENTER_CENTER,
-        sub,
-        FontId::proportional(style::text::SMALL),
-        palette.text_dim,
-    );
-    response.on_hover_text(format!(
-        "{} = {:.2} Hz. ⬆ tune up, ⬇ tune down",
+    let language = language();
+    let mut status = painter.layout_no_wrap(chip_status(cents, string_number, compact, language), font.clone(), status_color);
+    if !compact && status.size().x > rect.width() - 6.0 {
+        status = painter.layout_no_wrap(chip_status(cents, string_number, true, language), font, status_color);
+    }
+    painter.galley(rect.center() + vec2(0.0, 12.0) - status.size() / 2.0, status, status_color);
+    response.on_hover_text(trf!(
+        "String {}: {} = {:.2} Hz. ⬆ tune up, ⬇ tune down",
+        "Corda {}: {} = {:.2} Hz. ⬆ subir, ⬇ descer",
+        string_number,
         note_name(open),
         midi_to_freq(open as f64, a4)
     ));
@@ -397,6 +504,36 @@ mod tests {
             (0..4096).map(|i| 0.5 * (2.0 * PI * 110.0 * i as f64 / 48_000.0).sin()).collect();
         let f = detect(&buffer).expect("pitch");
         assert!((f - 110.0).abs() < 0.5, "{f}");
+    }
+
+    #[test]
+    fn chip_status_says_which_way_to_tune() {
+        let en = Language::English;
+        let pt = Language::Portuguese;
+        assert_eq!(chip_status(Some(16.2), 5, false, en), "⬇ 16¢ sharp");
+        assert_eq!(chip_status(Some(16.2), 5, false, pt), "⬇ 16¢ aguda");
+        assert_eq!(chip_status(Some(-9.6), 5, false, en), "⬆ 10¢ flat");
+        assert_eq!(chip_status(Some(-9.6), 5, false, pt), "⬆ 10¢ grave");
+        assert_eq!(chip_status(Some(-9.6), 5, true, en), "⬆10¢");
+        assert_eq!(chip_status(Some(2.0), 5, false, en), "✔ in tune");
+        assert_eq!(chip_status(Some(-2.0), 5, false, pt), "✔ afinada");
+        assert_eq!(chip_status(Some(2.0), 5, true, pt), "✔");
+        assert_eq!(chip_status(None, 6, false, en), "string 6");
+        assert_eq!(chip_status(None, 6, false, pt), "corda 6");
+        assert_eq!(chip_status(None, 6, true, en), "6");
+    }
+
+    #[test]
+    fn string_chips_wrap_into_even_rows() {
+        // Six 64-pt chips fit a wide card; on a phone they shrink.
+        assert_eq!(chips_per_row(6, 1100.0, 8.0), 6);
+        assert_eq!(chips_per_row(6, 340.0, 8.0), 6);
+        // Eight strings don't fit 340 pt at the minimum width: two rows of 4.
+        assert_eq!(chips_per_row(8, 340.0, 8.0), 4);
+        // Seven in a 200-pt column: rows of 4 and 3.
+        assert_eq!(chips_per_row(7, 200.0, 8.0), 4);
+        assert_eq!(chips_per_row(6, 10.0, 8.0), 1);
+        assert_eq!(chips_per_row(0, 300.0, 8.0), 1);
     }
 
     #[test]

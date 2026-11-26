@@ -7,6 +7,9 @@ use guitarpro::model::legacy::effects::BendEffect;
 use guitarpro::model::legacy::key_signature::Duration;
 use guitarpro::{BeatStatus, BendType, NoteType, Song};
 
+use crate::shared::i18n::tr;
+use crate::trf;
+
 use super::model::{
     FileSyncPoint, MasterBar, Score, ScoreTrack, TabBeat, TabNote, TrackBar, TICKS_PER_QUARTER,
 };
@@ -60,14 +63,14 @@ pub fn detect_format(data: &[u8], extension: Option<&str>) -> Option<TabFormat> 
 }
 
 pub fn load_score_file(path: &Path) -> Result<Score, String> {
-    let data = std::fs::read(path).map_err(|e| format!("Não foi possível ler o arquivo: {e}"))?;
+    let data = std::fs::read(path).map_err(|e| trf!("Couldn't read the file: {e}", "Não foi possível ler o arquivo: {e}"))?;
     let extension = path.extension().and_then(|e| e.to_str());
     load_score_bytes(&data, extension)
 }
 
 pub fn load_score_bytes(data: &[u8], extension: Option<&str>) -> Result<Score, String> {
     let format = detect_format(data, extension)
-        .ok_or_else(|| "Formato não reconhecido (esperado GP3/GP4/GP5/GPX/GP)".to_string())?;
+        .ok_or_else(|| tr("Unknown format (expected GP3/GP4/GP5/GPX/GP)", "Formato não reconhecido (esperado GP3/GP4/GP5/GPX/GP)").to_string())?;
     let mut song = Song::default();
     let result = match format {
         TabFormat::Gp3 => song.read_gp3(data),
@@ -76,7 +79,7 @@ pub fn load_score_bytes(data: &[u8], extension: Option<&str>) -> Result<Score, S
         TabFormat::Gpx => song.read_gpx(data),
         TabFormat::Gp => song.read_gp(data),
     };
-    result.map_err(|e| format!("Erro ao ler o arquivo Guitar Pro: {e}"))?;
+    result.map_err(|e| trf!("Error reading the Guitar Pro file: {e}", "Erro ao ler o arquivo Guitar Pro: {e}"))?;
     let gpif_tunings = match format {
         TabFormat::Gp => guitarpro::io::gpx::read_gp(data).ok().map(|g| gpif_track_tunings(&g)),
         TabFormat::Gpx => guitarpro::io::gpx::read_gpx(data).ok().map(|g| gpif_track_tunings(&g)),

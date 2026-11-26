@@ -14,12 +14,16 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use crossbeam::channel::{bounded, Receiver};
 use eframe::egui::{self, Color32, Key, RichText, Ui};
 use rustysynth::SoundFont;
 
 use crate::frontend::lib::tunings::{Tuning, label as tuning_label};
+use crate::frontend::style::{self, Palette};
+use crate::frontend::ui::soundfont::{self, CardAction};
+use crate::frontend::ui::tab_start::{push_recent, TabStartPage};
 use crate::frontend::ui::tab_view::TabOverlay;
 
 use crate::backend::audio_file::{self, DecodedAudio, AUDIO_EXTENSIONS};
@@ -28,6 +32,8 @@ use crate::frontend::lib::practice::{expected_beats, PracticeSession, PracticeSe
 use crate::frontend::ui::tab_view::{tab_view, CursorPos, TabLayout};
 use crate::frontend::ui::transcribe::TranscribePanel;
 use crate::shared::config::GLOBAL_CONFIG;
+use crate::shared::i18n::tr;
+use crate::trf;
 use crate::shared::factory_presets::factory_presets;
 use crate::shared::pedals::PedalInstance;
 use crate::shared::preset::{self, Preset};
@@ -38,18 +44,9 @@ use crate::shared::tab::repository;
 use crate::shared::tab::model::Score;
 use crate::shared::tab::timeline::{SyncMap, Timeline};
 
-/// Common SoundFont install locations, tried in order when none is configured.
-const SOUNDFONT_CANDIDATES: &[&str] = &[
-    "/usr/share/sounds/sf2/FluidR3_GM.sf2",
-    "/usr/share/soundfonts/FluidR3_GM.sf2",
-    "/usr/share/sounds/sf2/default-GM.sf2",
-    "/usr/share/soundfonts/default.sf2",
-    "/usr/share/sounds/sf2/TimGM6mb.sf2",
-    "/usr/share/sounds/sf2/GeneralUser_GS.sf2",
-    "/usr/share/soundfonts/GeneralUser_GS.sf2",
-    "/opt/homebrew/share/soundfonts/default.sf2",
-    "/usr/local/share/soundfonts/default.sf2",
-];
+/// How often to look for a SoundFont again while the Tabs page says
+/// there's none (a listing of a few folders, see `ui::soundfont`).
+const SOUNDFONT_RECHECK: Duration = Duration::from_secs(4);
 
 struct LoadedTab {
     path: PathBuf,
@@ -69,9 +66,9 @@ struct Backing {
     duration_secs: f64,
 }
 
-type Pending<T> = Option<Receiver<Result<T, String>>>;
+pub(crate) type Pending<T> = Option<Receiver<Result<T, String>>>;
 
-fn spawn<T: Send + 'static>(job: impl FnOnce() -> Result<T, String> + Send + 'static) -> Receiver<Result<T, String>> {
+pub(crate) fn spawn<T: Send + 'static>(job: impl FnOnce() -> Result<T, String> + Send + 'static) -> Receiver<Result<T, String>> {
     let (tx, rx) = bounded(1);
     std::thread::spawn(move || {
         let _ = tx.send(job());
@@ -79,7 +76,7 @@ fn spawn<T: Send + 'static>(job: impl FnOnce() -> Result<T, String> + Send + 'st
     rx
 }
 
-fn poll<T>(pending: &mut Pending<T>) -> Option<Result<T, String>> {
+pub(crate) fn poll<T>(pending: &mut Pending<T>) -> Option<Result<T, String>> {
     let result = pending.as_ref()?.try_recv().ok()?;
     *pending = None;
     Some(result)
@@ -90,27 +87,67 @@ fn format_time(secs: f64) -> String {
     format!("{}:{:02}", secs / 60, secs % 60)
 }
 
+/// Width of `text` drawn as a button label.
+fn text_width(ui: &Ui, text: &str) -> f32 {
+    let font = egui::TextStyle::Button.resolve(ui.style());
+    ui.fonts(|f| f.layout_no_wrap(text.to_owned(), font, Color32::WHITE).size().x)
+}
+
+/// In a `horizontal_wrapped` row, starts a new row unless `width` points
+/// still fit on this one. egui wraps plain widgets by itself, but not
+/// widgets drawn in a child `Ui` (sliders, combo boxes, groups): those run
+/// off the right edge instead.
+fn keep_together(ui: &mut Ui, width: f32) {
+    let row_started = ui.cursor().left() > ui.max_rect().left() + 0.5;
+    if row_started && ui.available_size_before_wrap().x < width {
+        ui.end_row();
+    }
+}
+
+/// A vertical separator between groups of a wrapped row. Left out on
+/// phones, where rows wrap after almost every group and would end in a
+/// dangling line.
+fn row_separator(ui: &mut Ui) {
+    if ui.ctx().screen_rect().width() >= style::NARROW_WIDTH {
+        ui.separator();
+    }
+}
+
+/// A slider with its label, kept on one row of a wrapped layout.
+fn labeled_slider(ui: &mut Ui, slider: egui::Slider, label: &str) -> egui::Response {
+    labeled_slider_enabled(ui, true, slider, label)
+}
+
+fn labeled_slider_enabled(ui: &mut Ui, enabled: bool, slider: egui::Slider, label: &str) -> egui::Response {
+    let spacing = ui.spacing();
+    // Rail, value field (about `interact_size.x` plus padding) and label.
+    let width = spacing.slider_width + spacing.interact_size.x + 2.0 * spacing.button_padding.x + 2.0 * spacing.item_spacing.x + text_width(ui, label);
+    keep_together(ui, width);
+    ui.add_enabled(enabled, slider.text(label))
+}
+
+/// A small button for the info row; full size on touch screens.
+fn chip(ui: &mut Ui, text: impl Into<egui::WidgetText>) -> egui::Response {
+    if ui.ctx().screen_rect().width() < style::NARROW_WIDTH { ui.button(text) } else { ui.small_button(text) }
+}
+
+/// A compact card for the Loop, Practice and Mixer panels.
+fn panel_card<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
+    let palette = Palette::of(ui.ctx());
+    ui.add_space(style::space::S);
+    style::card_frame(&palette)
+        .inner_margin(egui::Margin::same(style::space::S as i8))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            add(ui)
+        })
+        .inner
+}
+
 fn has_extension(path: &Path, extensions: &[&str]) -> bool {
     path.extension()
         .and_then(|e| e.to_str())
         .is_some_and(|e| extensions.contains(&e.to_ascii_lowercase().as_str()))
-}
-
-fn find_default_soundfont() -> Option<PathBuf> {
-    // A user-provided SoundFont dropped into the app's data dir wins.
-    if let Some(dir) = dirs::data_dir().map(|d| d.join("guitar_virtual_amp/soundfonts"))
-        && let Ok(entries) = std::fs::read_dir(dir)
-    {
-        let mut found: Vec<PathBuf> = entries
-            .filter_map(|e| e.ok().map(|e| e.path()))
-            .filter(|p| has_extension(p, &["sf2"]))
-            .collect();
-        found.sort();
-        if let Some(first) = found.into_iter().next() {
-            return Some(first);
-        }
-    }
-    SOUNDFONT_CANDIDATES.iter().map(PathBuf::from).find(|p| p.is_file())
 }
 
 fn tab_key(path: &Path) -> String {
@@ -159,6 +196,17 @@ pub struct TabPlayerPanel {
     tuner_requested: bool,
     /// Playing state last frame, to notice the end of a run.
     was_playing: bool,
+    /// What the page shows while no tab is open.
+    start: TabStartPage,
+    /// Looking for a SoundFont on a worker thread (`ui::soundfont`).
+    soundfont_search: Pending<Option<PathBuf>>,
+    last_soundfont_search: Option<Instant>,
+    /// The SoundFont being loaded was found by the search, not picked.
+    auto_soundfont: Option<PathBuf>,
+    /// Found SoundFonts that failed to load, not to be picked again.
+    rejected_soundfonts: Vec<PathBuf>,
+    /// For the app's toast (see [`TabPlayerPanel::take_notice`]).
+    notice: Option<String>,
     #[cfg(target_os = "android")]
     path_input: String,
 }
@@ -238,7 +286,7 @@ fn find_song_presets(title: String, artist: String) -> Result<Vec<(Preset, PathB
 impl TabPlayerPanel {
     pub fn new(player: SongPlayer, settings: &AppSettings) -> Self {
         let mut panel = Self {
-            player,
+            player: player.clone(),
             tab: None,
             loading_tab: None,
             loading_soundfont: None,
@@ -264,23 +312,25 @@ impl TabPlayerPanel {
             practice_prefs: settings.practice.clone(),
             song_presets: Vec::new(),
             loading_song_presets: None,
-            transcriber: TranscribePanel::new(),
+            transcriber: TranscribePanel::new(player.clone()),
             sidecar_sync: None,
             practice_loop: PracticeLoop::default(),
             count_in_bars: 0,
             show_heatmap: true,
             tuner_requested: false,
             was_playing: false,
+            start: TabStartPage::default(),
+            soundfont_search: None,
+            last_soundfont_search: None,
+            auto_soundfont: None,
+            rejected_soundfonts: Vec::new(),
+            notice: None,
             #[cfg(target_os = "android")]
             path_input: String::new(),
         };
-        let soundfont = settings
-            .soundfont_path
-            .clone()
-            .filter(|p| p.is_file())
-            .or_else(find_default_soundfont);
-        if let Some(path) = soundfont {
-            panel.load_soundfont(path);
+        match settings.soundfont_path.clone().filter(|p| p.is_file()) {
+            Some(path) => panel.load_soundfont(path, false),
+            None => panel.start_soundfont_search(),
         }
         if let Some(path) = settings.last_tab.clone().filter(|p| p.is_file()) {
             panel.load_tab(path);
@@ -307,6 +357,11 @@ impl TabPlayerPanel {
     /// Replaces the practice knobs (e.g. after a latency measurement).
     pub fn set_practice_prefs(&mut self, prefs: &PracticePrefs) {
         self.practice_prefs = prefs.clone();
+    }
+
+    /// A message for the app's toast, once (e.g. which SoundFont was found).
+    pub fn take_notice(&mut self) -> Option<String> {
+        self.notice.take()
     }
 
     /// `true` once after the user pressed "tune to this tab".
@@ -382,11 +437,11 @@ impl TabPlayerPanel {
         if self.practice_loop.trainer && !backing_on && good && self.speed < self.practice_loop.target_speed {
             self.speed = (self.speed + self.practice_loop.step).min(self.practice_loop.target_speed);
             self.player.set_speed(self.speed as f64);
-            self.set_message(format!("Treino de velocidade: {:.0}%", self.speed * 100.0), false);
+            self.set_message(trf!("Speed trainer: {:.0}%", "Treino de velocidade: {:.0}%", self.speed * 100.0), false);
         } else if let Some(a) = accuracy
             && !good
         {
-            self.set_message(format!("Passada com {:.0}%: repita nesta velocidade.", a * 100.0), false);
+            self.set_message(trf!("Pass at {:.0}%: repeat at this speed.", "Passada com {:.0}%: repita nesta velocidade.", a * 100.0), false);
         }
         if let Some((_, _, session)) = &mut self.practice {
             session.clear_marks_in(first..=last);
@@ -428,12 +483,13 @@ impl TabPlayerPanel {
             .metadata
             .tracks
             .iter()
-            .map(|t| format!("{} ({} notas, afinação {})", t.name, t.notes, t.tuning_name))
+            .map(|t| trf!("{} ({} notes, tuning {})", "{} ({} notas, afinação {})", t.name, t.notes, crate::frontend::lib::tunings::display_name(&t.tuning_name)))
             .collect();
         self.set_message(
-            format!(
+            trf!(
+                "Tab created{}: {} · {:.0} bpm · {}",
                 "Tab gerada{}: {} · {:.0} bpm · {}",
-                if output.replaced { " de novo" } else { "" },
+                if output.replaced { tr(" again", " de novo") } else { "" },
                 tracks.join(", "),
                 output.metadata.tempo_bpm,
                 output.tab_path.display()
@@ -455,13 +511,48 @@ impl TabPlayerPanel {
         }));
     }
 
-    fn load_soundfont(&mut self, path: PathBuf) {
+    /// Loads a SoundFont; `auto` when the search found it (the user didn't pick it).
+    fn load_soundfont(&mut self, path: PathBuf, auto: bool) {
+        self.auto_soundfont = auto.then(|| path.clone());
         self.loading_soundfont = Some(spawn(move || {
             let mut file = std::fs::File::open(&path)
-                .map_err(|e| format!("Não foi possível abrir o SoundFont: {e}"))?;
-            let sf = SoundFont::new(&mut file).map_err(|e| format!("SoundFont inválido: {e:?}"))?;
+                .map_err(|e| trf!("Couldn't open the SoundFont: {e}", "Não foi possível abrir o SoundFont: {e}"))?;
+            let sf = SoundFont::new(&mut file).map_err(|e| trf!("Invalid SoundFont: {e:?}", "SoundFont inválido: {e:?}"))?;
             Ok((path, Arc::new(sf)))
         }));
+    }
+
+    fn start_soundfont_search(&mut self) {
+        self.last_soundfont_search = Some(Instant::now());
+        let skip = self.rejected_soundfonts.clone();
+        self.soundfont_search = Some(spawn(move || Ok(soundfont::find_soundfont(&skip))));
+    }
+
+    /// While a tab is open without a SoundFont, looks again every few
+    /// seconds (one may have just been downloaded). Stops once one loads.
+    fn keep_looking_for_soundfont(&mut self, ctx: &egui::Context) {
+        if self.tab.is_none() || self.soundfont_name.is_some() || self.loading_soundfont.is_some() {
+            return;
+        }
+        if self.soundfont_search.is_none() && self.last_soundfont_search.is_none_or(|t| t.elapsed() >= SOUNDFONT_RECHECK) {
+            self.start_soundfont_search();
+        }
+        ctx.request_repaint_after(if self.soundfont_search.is_some() { Duration::from_millis(200) } else { SOUNDFONT_RECHECK });
+    }
+
+    fn close_tab(&mut self, settings: &mut AppSettings) {
+        self.player.stop();
+        self.player.set_loop(None);
+        self.player.set_backing(None, SyncMap::default());
+        self.tab = None;
+        self.loading_tab = None;
+        self.backing = None;
+        self.practice = None;
+        self.practice_loop = PracticeLoop::default();
+        self.layout = None;
+        self.message = None;
+        settings.last_tab = None;
+        save_settings(settings);
     }
 
     fn load_backing_file(&mut self, path: PathBuf) {
@@ -543,13 +634,16 @@ impl TabPlayerPanel {
             self.load_backing_file(path);
         }
 
-        let title = if score.artist.is_empty() {
+        let title = if score.title.trim().is_empty() {
+            tab.path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()
+        } else if score.artist.is_empty() {
             score.title.clone()
         } else {
             format!("{} - {}", score.artist, score.title)
         };
-        self.set_message(format!("Aberto: {title}"), false);
+        self.set_message(trf!("Opened: {title}", "Aberto: {title}"), false);
         settings.last_tab = Some(tab.path.clone());
+        push_recent(&mut settings.recent_tabs, &tab.path);
         save_settings(settings);
         self.tab = Some(tab);
     }
@@ -560,17 +654,35 @@ impl TabPlayerPanel {
             Some(Err(e)) => self.set_message(e, true),
             None => {}
         }
+        if let Some(Ok(Some(path))) = poll(&mut self.soundfont_search)
+            && self.soundfont_name.is_none()
+            && self.loading_soundfont.is_none()
+        {
+            self.load_soundfont(path, true);
+        }
         match poll(&mut self.loading_soundfont) {
             Some(Ok((path, sf))) => {
                 self.player.set_soundfont(sf);
-                self.soundfont_name =
-                    path.file_name().map(|n| n.to_string_lossy().into_owned());
+                let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                if self.auto_soundfont.take().is_some() {
+                    let text = trf!("SoundFont found: {name}", "SoundFont encontrado: {name}");
+                    self.set_message(text.clone(), false);
+                    self.notice = Some(text);
+                }
+                self.soundfont_name = Some(name);
                 if settings.soundfont_path.as_ref() != Some(&path) {
                     settings.soundfont_path = Some(path);
                     save_settings(settings);
                 }
             }
-            Some(Err(e)) => self.set_message(e, true),
+            Some(Err(e)) => match self.auto_soundfont.take() {
+                Some(path) => {
+                    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                    self.set_message(trf!("Skipped the SoundFont {name}: {e}", "SoundFont {name} ignorado: {e}"), true);
+                    self.rejected_soundfonts.push(path);
+                }
+                None => self.set_message(e, true),
+            },
             None => {}
         }
         if let Some(Ok(found)) = poll(&mut self.loading_song_presets) {
@@ -600,7 +712,7 @@ impl TabPlayerPanel {
                     self.load_backing_file(path);
                 }
             } else if has_extension(&path, &["sf2"]) {
-                self.load_soundfont(path);
+                self.load_soundfont(path, false);
             }
         }
     }
@@ -670,7 +782,13 @@ impl TabPlayerPanel {
         {
             *muted = true;
             self.player.set_track_enabled(self.track_enabled());
-            self.set_message("Modo prática: a faixa selecionada foi mutada no sintetizador.", false);
+            self.set_message(
+                tr(
+                    "Practice mode: the selected track is muted in the synth.",
+                    "Modo prática: a faixa selecionada foi mutada no sintetizador.",
+                ),
+                false,
+            );
         }
         self.ensure_practice();
     }
@@ -690,6 +808,7 @@ impl TabPlayerPanel {
     pub fn ui(&mut self, ui: &mut Ui, settings: &mut AppSettings) -> Option<(Vec<PedalInstance>, PresetRef)> {
         self.poll_background(settings);
         self.handle_dropped_files(ui.ctx());
+        self.keep_looking_for_soundfont(ui.ctx());
 
         if self.tab.is_some()
             && !ui.ctx().wants_keyboard_input()
@@ -698,51 +817,107 @@ impl TabPlayerPanel {
             self.toggle_play();
         }
 
-        self.file_row(ui);
-        if let Some((text, is_error)) = &self.message {
-            let color = if *is_error { Color32::LIGHT_RED } else { ui.visuals().weak_text_color() };
-            ui.colored_label(color, text);
-        }
-        if let Some(output) = self.transcriber.ui(ui, settings) {
-            self.on_transcribed(output, settings);
-        }
         if self.tab.is_none() {
-            ui.add_space(20.0);
-            ui.label(
-                "Abra (ou arraste para a janela) um arquivo Guitar Pro: .gp3, .gp4, .gp5, .gpx ou .gp.",
-            );
+            let mut open = None;
+            egui::ScrollArea::vertical().id_salt("tab_start_scroll").auto_shrink([false, false]).show(ui, |ui| {
+                self.file_row(ui, settings);
+                self.info_row(ui);
+                self.transcriber_ui(ui, settings);
+                ui.add_space(style::space::M);
+                open = self.start.ui(ui, settings);
+            });
+            if let Some(path) = open {
+                self.load_tab(path);
+            }
             return None;
         }
-        let tone = self.tone_row(ui);
-        self.tuning_row(ui);
-        ui.separator();
         let playing = self.player.status().playing();
         if self.was_playing && !playing && self.practice_on {
             self.record_run(settings);
         }
         self.was_playing = playing;
-        self.transport_row(ui);
-        if self.practice_loop.on {
-            ui.separator();
-            self.loop_row(ui);
-        }
-        if self.practice_on {
-            ui.separator();
-            self.practice_row(ui, settings);
-        }
-        if self.show_mixer {
-            ui.separator();
-            self.mixer(ui);
-            ui.separator();
-            self.backing_section(ui, settings);
-        }
+
+        // The controls scroll on their own so the tab keeps most of the
+        // height, also on a phone with every panel open.
+        let max_controls = (ui.available_height() * 0.6).max(160.0);
+        let mut tone = None;
+        egui::ScrollArea::vertical()
+            .id_salt("tab_controls_scroll")
+            .max_height(max_controls)
+            .auto_shrink([false, true])
+            .show(ui, |ui| {
+                self.file_row(ui, settings);
+                tone = self.info_row(ui);
+                self.transcriber_ui(ui, settings);
+                ui.add_space(style::space::XS);
+                self.transport_row(ui);
+                if self.soundfont_name.is_none() && self.loading_soundfont.is_none() {
+                    ui.add_space(style::space::S);
+                    match soundfont::missing_soundfont_card(ui, self.soundfont_search.is_some()) {
+                        CardAction::Pick(path) => self.load_soundfont(path, false),
+                        #[cfg(target_os = "android")]
+                        CardAction::UsePathField => self.load_soundfont(PathBuf::from(self.path_input.trim()), false),
+                        _ => {}
+                    }
+                }
+                if self.practice_loop.on {
+                    panel_card(ui, |ui| self.loop_row(ui));
+                }
+                if self.practice_on {
+                    panel_card(ui, |ui| self.practice_row(ui, settings));
+                }
+                if self.show_mixer {
+                    panel_card(ui, |ui| {
+                        self.mixer(ui);
+                        ui.separator();
+                        self.backing_section(ui, settings);
+                    });
+                }
+            });
+        ui.add_space(style::space::XS);
         ui.separator();
         self.tab_area(ui);
         tone
     }
 
-    /// Tone suggestions for the selected track.
-    fn tone_row(&mut self, ui: &mut Ui) -> Option<(Vec<PedalInstance>, PresetRef)> {
+    /// The transcription form or progress, and what it finished.
+    fn transcriber_ui(&mut self, ui: &mut Ui, settings: &mut AppSettings) {
+        if let Some(output) = self.transcriber.ui(ui, settings) {
+            self.on_transcribed(output, settings);
+        }
+        if let Some(path) = self.transcriber.take_open_request() {
+            self.load_tab(path);
+        }
+    }
+
+    /// One wrapped row of small items under the header: the last message,
+    /// tone suggestions and the track's tuning. Returns a tone to apply.
+    fn info_row(&mut self, ui: &mut Ui) -> Option<(Vec<PedalInstance>, PresetRef)> {
+        if self.message.is_none() && self.tab.is_none() {
+            return None;
+        }
+        let palette = Palette::of(ui.ctx());
+        let mut chosen = None;
+        ui.horizontal_wrapped(|ui| {
+            let mut items = 0;
+            if let Some((text, is_error)) = &self.message {
+                let color = if *is_error { palette.danger } else { palette.text_dim };
+                ui.label(RichText::new(text).small().color(color));
+                items += 1;
+            }
+            if self.tab.is_some() {
+                chosen = self.tone_chips(ui, &mut items);
+                self.tuning_chips(ui, &mut items);
+            }
+        });
+        if chosen.is_some() {
+            self.set_message(tr("Tone applied to the pedal chain.", "Timbre aplicado à cadeia de pedais."), false);
+        }
+        chosen
+    }
+
+    /// Tone suggestions for the selected track, as chips in the info row.
+    fn tone_chips(&self, ui: &mut Ui, items: &mut usize) -> Option<(Vec<PedalInstance>, PresetRef)> {
         let tab = self.tab.as_ref()?;
         let track = tab.score.tracks.get(self.selected_track);
         let guess = track.and_then(guess_tone);
@@ -752,44 +927,76 @@ impl TabPlayerPanel {
         if guess.is_none() && presets.is_empty() {
             return None;
         }
+        if *items > 0 {
+            row_separator(ui);
+        }
+        *items += 1;
+        let palette = Palette::of(ui.ctx());
         let mut chosen = None;
-        ui.horizontal_wrapped(|ui| {
-            ui.label("💡 Timbre:")
-                .on_hover_text("Ponto de partida para o timbre. Não há como copiar o timbre exato da gravação.");
-            for (preset, path) in presets {
-                let estimated = preset.tags.iter().any(|t| t == ESTIMATED_TAG);
-                let (label, hover) = if estimated {
-                    (
-                        format!("🎛 {}", preset.name),
+        // Keep the label with (about) its first chip.
+        keep_together(ui, text_width(ui, tr("💡 Tone:", "💡 Timbre:")) + 120.0);
+        ui.add(egui::Label::new(RichText::new(tr("💡 Tone:", "💡 Timbre:")).small().color(palette.text_dim)).extend()).on_hover_text(tr(
+            "A starting point for the tone. There's no way to copy the recording's exact tone.",
+            "Ponto de partida para o timbre. Não há como copiar o timbre exato da gravação.",
+        ));
+        for (preset, path) in presets {
+            let estimated = preset.tags.iter().any(|t| t == ESTIMATED_TAG);
+            let (label, hover) = if estimated {
+                (
+                    format!("✨ {}", preset.name),
+                    tr(
+                        "Tone estimated from the recording (experimental): a starting point, adjust by ear",
                         "Timbre estimado da gravação (experimental): um ponto de partida, ajuste de ouvido",
-                    )
-                } else {
-                    (format!("⭐ {}", preset.name), "Seu preset salvo para esta música/artista")
-                };
-                if ui.button(label).on_hover_text(hover).clicked() {
-                    chosen = Some((preset.pedals.clone(), PresetRef::User(path.clone())));
-                }
+                    ),
+                )
+            } else {
+                (format!("⭐ {}", preset.name), tr("Your preset saved for this song/artist", "Seu preset salvo para esta música/artista"))
+            };
+            if chip(ui, label).on_hover_text(hover).clicked() {
+                chosen = Some((preset.pedals.clone(), PresetRef::User(path.clone())));
             }
-            if let Some(guess) = &guess {
-                let response = ui.button(format!("Aplicar \"{}\"", guess.factory_preset)).on_hover_text(guess.reason.as_str());
-                if response.clicked()
-                    && let Some(preset) = factory_presets().into_iter().find(|p| p.name == guess.factory_preset)
-                {
-                    chosen = Some((preset.pedals, PresetRef::Factory(preset.name)));
-                }
-                ui.label(RichText::new(guess.reason.as_str()).weak());
+        }
+        if let Some(guess) = &guess {
+            let response = chip(ui, trf!("Apply \"{}\"", "Aplicar \"{}\"", guess.factory_preset)).on_hover_text(guess.reason.as_str());
+            if response.clicked()
+                && let Some(preset) = factory_presets().into_iter().find(|p| p.name == guess.factory_preset)
+            {
+                chosen = Some((preset.pedals, PresetRef::Factory(preset.name)));
             }
-        });
-        if chosen.is_some() {
-            self.set_message("Timbre aplicado à cadeia de pedais.", false);
         }
         chosen
     }
 
-    fn file_row(&mut self, ui: &mut Ui) {
+    /// The selected track's tuning, with a shortcut to the tuner.
+    fn tuning_chips(&mut self, ui: &mut Ui, items: &mut usize) {
+        let Some(tuning) = self.selected_tuning().and_then(|t| Tuning::from_tab(&t)) else { return };
+        if *items > 0 {
+            row_separator(ui);
+        }
+        *items += 1;
+        let palette = Palette::of(ui.ctx());
+        let standard = tuning.strings == Tuning::standard().strings;
+        let text = if standard {
+            tr("🎸 Standard tuning (E A D G B E)", "🎸 Afinação padrão (E A D G B E)").to_string()
+        } else {
+            trf!("🎸 Tuning: {} ({})", "🎸 Afinação: {} ({})", tuning.display_name(), tuning_label(&tuning.strings))
+        };
+        let color = if standard { palette.text_dim } else { palette.warn };
+        ui.add(egui::Label::new(RichText::new(text).small().color(color)).extend());
+        if chip(ui, tr("🎵 Tune", "🎵 Afinar"))
+            .on_hover_text(tr("Opens the tuner with this track's strings", "Abre o afinador com as cordas desta faixa"))
+            .clicked()
+        {
+            self.tuner_requested = true;
+        }
+    }
+
+    fn file_row(&mut self, ui: &mut Ui, settings: &mut AppSettings) {
+        let palette = Palette::of(ui.ctx());
+        let mut close = false;
         ui.horizontal_wrapped(|ui| {
             #[cfg(not(target_os = "android"))]
-            if ui.button("📂 Abrir tab...").clicked()
+            if ui.button(tr("📂 Open tab...", "📂 Abrir tab...")).clicked()
                 && let Some(path) = rfd::FileDialog::new()
                     .add_filter("Guitar Pro", SUPPORTED_EXTENSIONS)
                     .pick_file()
@@ -798,15 +1005,18 @@ impl TabPlayerPanel {
             }
             #[cfg(target_os = "android")]
             {
-                ui.label("Arquivo:");
+                ui.label(tr("File:", "Arquivo:"));
                 ui.text_edit_singleline(&mut self.path_input);
-                if ui.button("Abrir tab").clicked() {
+                if ui.button(tr("Open tab", "Abrir tab")).clicked() {
                     self.load_tab(PathBuf::from(self.path_input.trim()));
                 }
             }
             if ui
-                .add_enabled(!self.transcriber.is_running(), egui::Button::new("⚡ Transcrever áudio..."))
-                .on_hover_text("Gera uma tab (guitarra e baixo) a partir de um arquivo de música")
+                .add_enabled(!self.transcriber.is_running(), egui::Button::new(tr("⚡ Transcribe audio...", "⚡ Transcrever áudio...")))
+                .on_hover_text(tr(
+                    "Makes a tab (guitar and bass) from a music file",
+                    "Gera uma tab (guitarra e baixo) a partir de um arquivo de música",
+                ))
                 .clicked()
             {
                 self.transcriber.show_form(None, None, None, None);
@@ -815,18 +1025,35 @@ impl TabPlayerPanel {
                 ui.spinner();
             }
             if let Some(tab) = &self.tab {
+                row_separator(ui);
                 let s = &tab.score;
-                let title = if s.title.is_empty() { "(sem título)" } else { &s.title };
-                ui.label(RichText::new(title).strong());
+                let title = if s.title.is_empty() { tr("(untitled)", "(sem título)") } else { &s.title };
+                // Whole labels move to the next row instead of breaking
+                // mid-text; only a title longer than the page is cut.
+                let row = ui.max_rect().width();
+                keep_together(ui, (text_width(ui, title) * style::text::HEADING / style::text::BODY).min(row));
+                ui.add(egui::Label::new(RichText::new(title).size(style::text::HEADING).strong().color(palette.text)).truncate());
                 if !s.artist.is_empty() {
-                    ui.label(format!("— {}", s.artist));
+                    let artist = format!("— {}", s.artist);
+                    keep_together(ui, text_width(ui, &artist).min(row));
+                    ui.add(egui::Label::new(RichText::new(artist).color(palette.text)).truncate());
                 }
-                ui.label(
-                    RichText::new(format!("{:.0} bpm · {} compassos", s.initial_tempo, s.bars.len()))
-                        .weak(),
+                ui.add(
+                    egui::Label::new(
+                        RichText::new(trf!("{:.0} bpm · {} bars", "{:.0} bpm · {} compassos", s.initial_tempo, s.bars.len()))
+                            .color(palette.text_dim),
+                    )
+                    .extend(),
                 );
+                close = ui
+                    .button("✖")
+                    .on_hover_text(tr("Close the tab (back to the list of tabs)", "Fechar a tab (volta para a lista de tabs)"))
+                    .clicked();
             }
         });
+        if close {
+            self.close_tab(settings);
+        }
     }
 
     fn transport_row(&mut self, ui: &mut Ui) {
@@ -837,12 +1064,14 @@ impl TabPlayerPanel {
         let status = player.status();
         let playing = status.playing();
         let backing_on = self.use_backing && self.backing.is_some();
+        let palette = Palette::of(ui.ctx());
         ui.horizontal_wrapped(|ui| {
-            let play_label = if playing { "⏸ Pausar" } else { "▶ Tocar" };
-            if ui.button(play_label).on_hover_text("Espaço").clicked() {
+            ui.spacing_mut().slider_width = 90.0;
+            let play_label = if playing { tr("⏸ Pause", "⏸ Pausar") } else { tr("▶ Play", "▶ Tocar") };
+            if ui.button(play_label).on_hover_text(tr("Space", "Espaço")).clicked() {
                 self.toggle_play();
             }
-            if ui.button("⏹").on_hover_text("Parar e voltar ao início").clicked() {
+            if ui.button("⏹").on_hover_text(tr("Stop and go back to the start", "Parar e voltar ao início")).clicked() {
                 self.player.stop();
             }
             ui.monospace(format!(
@@ -850,36 +1079,71 @@ impl TabPlayerPanel {
                 format_time(status.score_secs()),
                 format_time(timeline.duration_secs)
             ));
-            ui.separator();
+            row_separator(ui);
 
-            ui.label("Faixa:");
             let tracks = &score.tracks;
             let current = tracks.get(self.selected_track).map(|t| t.name.as_str()).unwrap_or("");
+            let track_label = tr("Track:", "Faixa:");
+            let combo_width = (text_width(ui, current) + 2.0 * ui.spacing().icon_width + 2.0 * ui.spacing().button_padding.x).clamp(80.0, 180.0);
+            keep_together(ui, text_width(ui, track_label) + ui.spacing().item_spacing.x + combo_width);
+            ui.label(track_label);
             egui::ComboBox::from_id_salt("tab_track_select")
                 .selected_text(current)
+                .width(combo_width)
+                .truncate()
                 .show_ui(ui, |ui| {
                     for (i, track) in tracks.iter().enumerate() {
-                        let name = if track.name.is_empty() { format!("Faixa {}", i + 1) } else { track.name.clone() };
+                        let name = if track.name.is_empty() { trf!("Track {}", "Faixa {}", i + 1) } else { track.name.clone() };
                         ui.selectable_value(&mut self.selected_track, i, name);
                     }
                 });
-            ui.checkbox(&mut self.follow_cursor, "Seguir cursor");
-            ui.separator();
 
-            let speed = ui.add_enabled(
+            let speed = labeled_slider_enabled(
+                ui,
                 !backing_on,
-                egui::Slider::new(&mut self.speed, 0.25..=1.5).text("velocidade").fixed_decimals(2),
+                egui::Slider::new(&mut self.speed, 0.25..=1.5).fixed_decimals(2),
+                tr("speed", "velocidade"),
             );
             if backing_on {
-                speed.on_disabled_hover_text("A velocidade só vale para o áudio sintetizado.");
+                speed.on_disabled_hover_text(tr(
+                    "Speed only applies to the synthesized audio.",
+                    "A velocidade só vale para o áudio sintetizado.",
+                ));
             } else if speed.changed() {
                 self.player.set_speed(self.speed as f64);
             }
+            ui.checkbox(&mut self.follow_cursor, tr("Follow cursor", "Seguir cursor"));
+
+            let count_in = match self.count_in_bars {
+                0 => tr("no count-in", "sem contagem").to_string(),
+                1 => tr("count-in: 1 bar", "contagem: 1 compasso").to_string(),
+                n => trf!("count-in: {n} bars", "contagem: {n} compassos"),
+            };
+            let count_in_width = text_width(ui, &count_in) + 2.0 * ui.spacing().icon_width + 2.0 * ui.spacing().button_padding.x;
+            keep_together(ui, count_in_width);
+            egui::ComboBox::from_id_salt("tab_count_in")
+                .selected_text(count_in)
+                .width(count_in_width)
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(&mut self.count_in_bars, 0, tr("no count-in", "sem contagem"));
+                    ui.selectable_value(&mut self.count_in_bars, 1, tr("1 bar", "1 compasso"));
+                    ui.selectable_value(&mut self.count_in_bars, 2, tr("2 bars", "2 compassos"));
+                })
+                .response
+                .on_hover_text(tr("Clicks before playback starts", "Cliques antes de começar a tocar"));
+            if status.counting_in() {
+                ui.colored_label(palette.accent, tr("counting in...", "contando..."));
+            }
+            row_separator(ui);
+
             ui.toggle_value(&mut self.show_mixer, "🔉 Mixer");
             let mut practice = self.practice_on;
             if ui
-                .toggle_value(&mut practice, "🎯 Prática")
-                .on_hover_text("Confere, nota a nota, se você tocou a faixa selecionada corretamente")
+                .toggle_value(&mut practice, tr("🎯 Practice", "🎯 Prática"))
+                .on_hover_text(tr(
+                    "Checks, note by note, whether you played the selected track right",
+                    "Confere, nota a nota, se você tocou a faixa selecionada corretamente",
+                ))
                 .changed()
             {
                 self.set_practice(practice);
@@ -887,7 +1151,10 @@ impl TabPlayerPanel {
             let mut looping = self.practice_loop.on;
             if ui
                 .toggle_value(&mut looping, "🔁 Loop")
-                .on_hover_text("Repete um trecho. Com o loop ligado, Shift+clique num compasso marca o fim.")
+                .on_hover_text(tr(
+                    "Repeats a section. With the loop on, Shift+click a bar to set its end.",
+                    "Repete um trecho. Com o loop ligado, Shift+clique num compasso marca o fim.",
+                ))
                 .changed()
             {
                 if looping {
@@ -901,44 +1168,6 @@ impl TabPlayerPanel {
                     self.apply_loop();
                 }
             }
-            egui::ComboBox::from_id_salt("tab_count_in")
-                .selected_text(match self.count_in_bars {
-                    0 => "sem contagem".to_string(),
-                    1 => "contagem: 1 compasso".to_string(),
-                    n => format!("contagem: {n} compassos"),
-                })
-                .show_ui(ui, |ui| {
-                    ui.selectable_value(&mut self.count_in_bars, 0, "sem contagem");
-                    ui.selectable_value(&mut self.count_in_bars, 1, "1 compasso");
-                    ui.selectable_value(&mut self.count_in_bars, 2, "2 compassos");
-                })
-                .response
-                .on_hover_text("Cliques antes de começar a tocar");
-            if status.counting_in() {
-                ui.colored_label(Color32::from_rgb(255, 170, 60), "contando...");
-            }
-        });
-    }
-
-    /// The selected track's tuning, with a shortcut to the tuner.
-    fn tuning_row(&mut self, ui: &mut Ui) {
-        let Some(tuning) = self.selected_tuning().and_then(|t| Tuning::from_tab(&t)) else { return };
-        let standard = tuning.strings == Tuning::standard().strings;
-        ui.horizontal_wrapped(|ui| {
-            let text = if standard {
-                "🎸 Afinação padrão (E A D G B E)".to_string()
-            } else {
-                format!("🎸 Afinação: {} ({})", tuning.name, tuning_label(&tuning.strings))
-            };
-            let color = if standard { ui.visuals().weak_text_color() } else { Color32::from_rgb(240, 200, 70) };
-            ui.label(RichText::new(text).color(color));
-            if ui
-                .small_button("🎵 Afinar")
-                .on_hover_text("Abre o afinador com as cordas desta faixa")
-                .clicked()
-            {
-                self.tuner_requested = true;
-            }
         });
     }
 
@@ -946,41 +1175,54 @@ impl TabPlayerPanel {
     fn loop_row(&mut self, ui: &mut Ui) {
         let Some(bar_count) = self.tab.as_ref().map(|t| t.score.bars.len()) else { return };
         let backing_on = self.use_backing && self.backing.is_some();
+        let palette = Palette::of(ui.ctx());
         let mut changed = false;
+        let trainer_off_hint = tr(
+            "The speed trainer only works with the synthesized audio (turn off the original audio).",
+            "O treino de velocidade só funciona com o áudio sintetizado (desligue o áudio original).",
+        );
         ui.horizontal_wrapped(|ui| {
             ui.label(RichText::new("🔁 Loop").strong());
             let (mut first, mut last) = (self.practice_loop.bars.0 + 1, self.practice_loop.bars.1 + 1);
-            ui.label("compassos");
+            ui.label(tr("bars", "compassos"));
             changed |= ui.add(egui::DragValue::new(&mut first).range(1..=bar_count)).changed();
-            ui.label("a");
+            ui.label(tr("to", "a"));
             changed |= ui.add(egui::DragValue::new(&mut last).range(1..=bar_count)).changed();
             if changed {
                 self.practice_loop.bars = (first.min(last) - 1, first.max(last) - 1);
             }
-            ui.label(RichText::new(format!("· passadas: {}", self.practice_loop.good_passes)).weak())
-                .on_hover_text("Passadas boas (com o modo prática, acima da exigência do treino)");
-            ui.separator();
-            ui.add_enabled_ui(!backing_on, |ui| {
-                let trainer = ui
-                    .checkbox(&mut self.practice_loop.trainer, "Treino de velocidade")
-                    .on_hover_text("Começa devagar e acelera a cada passada boa");
-                if trainer.changed() && self.practice_loop.trainer {
-                    self.speed = self.practice_loop.start_speed;
-                    self.player.set_speed(self.speed as f64);
-                    self.practice_loop.good_passes = 0;
-                }
-                if self.practice_loop.trainer {
-                    let pl = &mut self.practice_loop;
-                    ui.add(egui::DragValue::new(&mut pl.start_speed).range(0.25..=1.5).speed(0.01).custom_formatter(|v, _| format!("de {:.0}%", v * 100.0)));
-                    ui.add(egui::DragValue::new(&mut pl.step).range(0.01..=0.25).speed(0.005).custom_formatter(|v, _| format!("+{:.0}%", v * 100.0)));
-                    ui.add(egui::DragValue::new(&mut pl.target_speed).range(0.25..=1.5).speed(0.01).custom_formatter(|v, _| format!("até {:.0}%", v * 100.0)));
-                    ui.add(egui::DragValue::new(&mut pl.pass_accuracy).range(0.5..=1.0).speed(0.01).custom_formatter(|v, _| format!("passa com {:.0}%", v * 100.0)))
-                        .on_hover_text("Com o modo prática ligado, só acelera se a passada tiver esta precisão");
-                    ui.label(RichText::new(format!("agora {:.0}%", self.speed * 100.0)).strong());
-                }
-            })
-            .response
-            .on_disabled_hover_text("O treino de velocidade só funciona com o áudio sintetizado (desligue o áudio original).");
+            ui.label(RichText::new(trf!("· passes: {}", "· passadas: {}", self.practice_loop.good_passes)).color(palette.text_dim))
+                .on_hover_text(tr(
+                    "Good passes (with practice mode, above the trainer's pass mark)",
+                    "Passadas boas (com o modo prática, acima da exigência do treino)",
+                ));
+            row_separator(ui);
+            let trainer = ui
+                .add_enabled(!backing_on, egui::Checkbox::new(&mut self.practice_loop.trainer, tr("Speed trainer", "Treino de velocidade")))
+                .on_hover_text(tr("Starts slow and speeds up after each good pass", "Começa devagar e acelera a cada passada boa"))
+                .on_disabled_hover_text(trainer_off_hint);
+            if trainer.changed() && self.practice_loop.trainer {
+                self.speed = self.practice_loop.start_speed;
+                self.player.set_speed(self.speed as f64);
+                self.practice_loop.good_passes = 0;
+            }
+            if self.practice_loop.trainer {
+                let pl = &mut self.practice_loop;
+                let enabled = !backing_on;
+                ui.add_enabled(enabled, egui::DragValue::new(&mut pl.start_speed).range(0.25..=1.5).speed(0.01).custom_formatter(|v, _| trf!("from {:.0}%", "de {:.0}%", v * 100.0)))
+                    .on_disabled_hover_text(trainer_off_hint);
+                ui.add_enabled(enabled, egui::DragValue::new(&mut pl.step).range(0.01..=0.25).speed(0.005).custom_formatter(|v, _| format!("+{:.0}%", v * 100.0)))
+                    .on_disabled_hover_text(trainer_off_hint);
+                ui.add_enabled(enabled, egui::DragValue::new(&mut pl.target_speed).range(0.25..=1.5).speed(0.01).custom_formatter(|v, _| trf!("to {:.0}%", "até {:.0}%", v * 100.0)))
+                    .on_disabled_hover_text(trainer_off_hint);
+                ui.add_enabled(enabled, egui::DragValue::new(&mut pl.pass_accuracy).range(0.5..=1.0).speed(0.01).custom_formatter(|v, _| trf!("pass at {:.0}%", "passa com {:.0}%", v * 100.0)))
+                    .on_hover_text(tr(
+                        "With practice mode on, only speeds up if the pass reaches this accuracy",
+                        "Com o modo prática ligado, só acelera se a passada tiver esta precisão",
+                    ))
+                    .on_disabled_hover_text(trainer_off_hint);
+                ui.label(RichText::new(trf!("now {:.0}%", "agora {:.0}%", self.speed * 100.0)).strong());
+            }
         });
         if changed {
             self.apply_loop();
@@ -989,11 +1231,18 @@ impl TabPlayerPanel {
 
     fn practice_row(&mut self, ui: &mut Ui, settings: &mut AppSettings) {
         self.ensure_practice();
+        let palette = Palette::of(ui.ctx());
         let Some((_, _, session)) = &mut self.practice else { return };
         let mut prefs_changed = false;
         ui.horizontal_wrapped(|ui| {
             if session.beat_count() == 0 {
-                ui.colored_label(Color32::YELLOW, "Esta faixa não tem notas para conferir (bateria ou vazia).");
+                ui.colored_label(
+                    palette.warn,
+                    tr(
+                        "This track has no notes to check (drums or empty).",
+                        "Esta faixa não tem notas para conferir (bateria ou vazia).",
+                    ),
+                );
                 return;
             }
             let stats = session.stats();
@@ -1002,8 +1251,9 @@ impl TabPlayerPanel {
                 .map(|a| format!("{:.0}%", a * 100.0))
                 .unwrap_or_else(|| "—".to_string());
             ui.label(RichText::new(format!("🎯 {accuracy}")).strong())
-                .on_hover_text("Notas certas / notas conferidas");
-            ui.label(format!(
+                .on_hover_text(tr("Notes right / notes checked", "Notas certas / notas conferidas"));
+            ui.label(trf!(
+                "notes {}/{} · beats {}/{} · streak {} (best {})",
                 "notas {}/{} · tempos {}/{} · sequência {} (melhor {})",
                 stats.notes_hit,
                 stats.notes_judged,
@@ -1012,27 +1262,35 @@ impl TabPlayerPanel {
                 stats.streak,
                 stats.best_streak
             ));
-            if ui.button("Zerar").clicked() {
+            if ui.button(tr("Reset", "Zerar")).clicked() {
                 session.reset();
             }
-            ui.checkbox(&mut self.show_heatmap, "mapa de acertos")
-                .on_hover_text("Pinta cada compasso de vermelho (errou muito) a verde (acertou)");
-            ui.separator();
+            ui.checkbox(&mut self.show_heatmap, tr("hit map", "mapa de acertos"))
+                .on_hover_text(tr(
+                    "Colors each bar from red (many misses) to green (all right)",
+                    "Pinta cada compasso de vermelho (errou muito) a verde (acertou)",
+                ));
+            row_separator(ui);
+            ui.spacing_mut().slider_width = 100.0;
             let prefs = &mut self.practice_prefs;
+            let latency_label = tr("extra latency", "latência extra");
+            keep_together(ui, ui.spacing().interact_size.x * 1.5 + ui.spacing().item_spacing.x + text_width(ui, latency_label));
             prefs_changed |= ui
                 .add(egui::DragValue::new(&mut prefs.extra_latency_ms).range(-200.0..=500.0).suffix(" ms"))
-                .on_hover_text(
+                .on_hover_text(tr(
+                    "Extra latency, added to the audio buffer's. Raise it if notes played in time show up as wrong.",
                     "Latência extra, somada à do buffer de áudio. Aumente se notas tocadas no tempo aparecem como erradas.",
-                )
+                ))
                 .changed();
-            ui.label("latência extra");
-            prefs_changed |= ui
-                .add(egui::Slider::new(&mut prefs.tolerance_ms, 30.0..=300.0).suffix(" ms").text("tolerância"))
-                .on_hover_text("Quanto antes ou depois do tempo a nota ainda vale")
+            ui.label(latency_label);
+            prefs_changed |= labeled_slider(ui, egui::Slider::new(&mut prefs.tolerance_ms, 30.0..=300.0).suffix(" ms"), tr("tolerance", "tolerância"))
+                .on_hover_text(tr("How early or late a note still counts", "Quanto antes ou depois do tempo a nota ainda vale"))
                 .changed();
-            prefs_changed |= ui
-                .add(egui::Slider::new(&mut prefs.strictness, 0.0..=1.0).fixed_decimals(2).text("exigência"))
-                .on_hover_text("Baixe se notas certas aparecem em vermelho (ex.: muita distorção ou reverb)")
+            prefs_changed |= labeled_slider(ui, egui::Slider::new(&mut prefs.strictness, 0.0..=1.0).fixed_decimals(2), tr("strictness", "exigência"))
+                .on_hover_text(tr(
+                    "Lower it if right notes show up red (e.g. lots of distortion or reverb)",
+                    "Baixe se notas certas aparecem em vermelho (ex.: muita distorção ou reverb)",
+                ))
                 .changed();
         });
         if prefs_changed {
@@ -1045,6 +1303,7 @@ impl TabPlayerPanel {
     /// Best result so far and the bars that need work.
     fn practice_history_row(&mut self, ui: &mut Ui, settings: &AppSettings) {
         let Some(tab) = &self.tab else { return };
+        let palette = Palette::of(ui.ctx());
         let track_name = tab.score.tracks.get(self.selected_track).map(|t| t.name.clone()).unwrap_or_default();
         let record = settings.practice_log.get(&tab_key(&tab.path));
         let hardest = self
@@ -1052,27 +1311,30 @@ impl TabPlayerPanel {
             .as_ref()
             .map(|(_, _, s)| hardest_bars(&s.bar_results(), 2))
             .unwrap_or_default();
+        let weak: Vec<&(usize, f32)> = hardest.iter().filter(|(_, a)| *a < 0.9).take(4).collect();
+        if record.is_none() && weak.is_empty() {
+            return;
+        }
         let mut loop_bar = None;
         ui.horizontal_wrapped(|ui| {
             if let Some(record) = record {
                 let best = record.best_accuracy.get(&track_name).map(|a| format!("{:.0}%", a * 100.0));
                 ui.label(
-                    RichText::new(format!(
+                    RichText::new(trf!(
+                        "History: best {} · {} sessions",
                         "Histórico: melhor {} · {} sessões",
                         best.unwrap_or_else(|| "—".into()),
                         record.runs
                     ))
-                    .weak(),
+                    .color(palette.text_dim),
                 );
                 ui.separator();
             }
-            let weak: Vec<&(usize, f32)> = hardest.iter().filter(|(_, a)| *a < 0.9).take(4).collect();
             if !weak.is_empty() {
-                ui.label("Compassos mais difíceis:");
+                ui.label(tr("Hardest bars:", "Compassos mais difíceis:"));
                 for (bar, accuracy) in weak {
-                    if ui
-                        .small_button(format!("{} ({:.0}%)", bar + 1, accuracy * 100.0))
-                        .on_hover_text("Repetir este compasso em loop")
+                    if chip(ui, format!("{} ({:.0}%)", bar + 1, accuracy * 100.0))
+                        .on_hover_text(tr("Loop this bar", "Repetir este compasso em loop"))
                         .clicked()
                     {
                         loop_bar = Some(*bar);
@@ -1089,16 +1351,20 @@ impl TabPlayerPanel {
         let Some(tab) = &self.tab else { return };
         let mut tracks_changed = false;
         ui.horizontal_wrapped(|ui| {
+            let spacing = ui.spacing().clone();
+            let toggle_width = text_width(ui, "M") + 2.0 * spacing.button_padding.x;
             for (i, track) in tab.score.tracks.iter().enumerate() {
+                let name = if track.name.is_empty() { trf!("Track {}", "Faixa {}", i + 1) } else { track.name.clone() };
+                // Name, M and S in a group frame (margin 6 and stroke 1 per side).
+                keep_together(ui, text_width(ui, &name) + 2.0 * spacing.button_padding.x + 2.0 * toggle_width + 2.0 * spacing.item_spacing.x + 14.0);
                 ui.group(|ui| {
                     ui.horizontal(|ui| {
-                        let name = if track.name.is_empty() { format!("Faixa {}", i + 1) } else { track.name.clone() };
                         if ui.selectable_label(self.selected_track == i, name).clicked() {
                             self.selected_track = i;
                         }
                         tracks_changed |= ui
                             .toggle_value(&mut self.muted[i], "M")
-                            .on_hover_text("Mudo")
+                            .on_hover_text(tr("Mute", "Mudo"))
                             .changed();
                         tracks_changed |= ui
                             .toggle_value(&mut self.soloed[i], "S")
@@ -1112,31 +1378,27 @@ impl TabPlayerPanel {
             self.player.set_track_enabled(self.track_enabled());
         }
         ui.horizontal_wrapped(|ui| {
-            let synth = ui.add(egui::Slider::new(&mut self.synth_gain, 0.0..=2.0).text("volume do sintetizador"));
+            ui.spacing_mut().slider_width = 100.0;
+            let synth = labeled_slider(ui, egui::Slider::new(&mut self.synth_gain, 0.0..=2.0), tr("synth volume", "volume do sintetizador"));
             if synth.changed() {
                 self.player.set_gains(self.synth_gain, self.backing_gain);
             }
-            ui.separator();
+            row_separator(ui);
             if self.loading_soundfont.is_some() {
                 ui.spinner();
-                ui.label("Carregando SoundFont...");
+                ui.label(tr("Loading SoundFont...", "Carregando SoundFont..."));
             } else if let Some(name) = &self.soundfont_name {
                 ui.label(format!("SoundFont: {name}"));
-            } else {
-                ui.colored_label(Color32::YELLOW, "Sem SoundFont: o sintetizador está mudo.")
-                    .on_hover_text(
-                        "Escolha um arquivo .sf2 (por exemplo FluidR3_GM.sf2 ou GeneralUser GS).",
-                    );
             }
             #[cfg(not(target_os = "android"))]
-            if ui.button("Escolher SoundFont...").clicked()
+            if ui.button(tr("Choose SoundFont...", "Escolher SoundFont...")).clicked()
                 && let Some(path) = rfd::FileDialog::new().add_filter("SoundFont", &["sf2"]).pick_file()
             {
-                self.load_soundfont(path);
+                self.load_soundfont(path, false);
             }
             #[cfg(target_os = "android")]
-            if ui.button("Usar caminho como SoundFont").clicked() {
-                self.load_soundfont(PathBuf::from(self.path_input.trim()));
+            if ui.button(tr("Use path as SoundFont", "Usar caminho como SoundFont")).clicked() {
+                self.load_soundfont(PathBuf::from(self.path_input.trim()), false);
             }
         });
     }
@@ -1145,26 +1407,26 @@ impl TabPlayerPanel {
         let Some(timeline) = self.tab.as_ref().map(|t| t.timeline.clone()) else { return };
         let mut sync_changed = false;
         ui.horizontal_wrapped(|ui| {
-            ui.label(RichText::new("Áudio original:").strong());
+            ui.label(RichText::new(tr("Original audio:", "Áudio original:")).strong());
             #[cfg(not(target_os = "android"))]
-            if ui.button("🎵 Abrir áudio...").clicked()
+            if ui.button(tr("🎵 Open audio...", "🎵 Abrir áudio...")).clicked()
                 && let Some(path) = rfd::FileDialog::new()
-                    .add_filter("Áudio", AUDIO_EXTENSIONS)
+                    .add_filter(tr("Audio", "Áudio"), AUDIO_EXTENSIONS)
                     .pick_file()
             {
                 self.load_backing_file(path);
             }
             #[cfg(target_os = "android")]
-            if ui.button("Usar caminho como áudio").clicked() {
+            if ui.button(tr("Use path as audio", "Usar caminho como áudio")).clicked() {
                 self.load_backing_file(PathBuf::from(self.path_input.trim()));
             }
             if self.loading_backing.is_some() {
                 ui.spinner();
-                ui.label("Decodificando...");
+                ui.label(tr("Decoding...", "Decodificando..."));
             }
             match &self.backing {
                 None => {
-                    ui.label(RichText::new("nenhum (mp3, ogg, flac, wav, m4a)").weak());
+                    ui.label(RichText::new(tr("none (mp3, ogg, flac, wav, m4a)", "nenhum (mp3, ogg, flac, wav, m4a)")).weak());
                 }
                 Some(backing) => {
                     let name = match &backing.source {
@@ -1172,17 +1434,18 @@ impl TabPlayerPanel {
                             .file_name()
                             .map(|n| n.to_string_lossy().into_owned())
                             .unwrap_or_default(),
-                        BackingSource::Embedded => "embutido no arquivo GP".to_string(),
+                        BackingSource::Embedded => tr("embedded in the GP file", "embutido no arquivo GP").to_string(),
                     };
                     ui.label(format!("{name} ({})", format_time(backing.duration_secs)));
-                    if ui.checkbox(&mut self.use_backing, "tocar").changed() {
+                    if ui.checkbox(&mut self.use_backing, tr("play", "tocar")).changed() {
                         self.player.set_use_backing(self.use_backing);
                     }
-                    let vol = ui.add(egui::Slider::new(&mut self.backing_gain, 0.0..=2.0).text("volume"));
+                    ui.spacing_mut().slider_width = 100.0;
+                    let vol = labeled_slider(ui, egui::Slider::new(&mut self.backing_gain, 0.0..=2.0), "volume");
                     if vol.changed() {
                         self.player.set_gains(self.synth_gain, self.backing_gain);
                     }
-                    if ui.button("Remover").clicked() {
+                    if ui.button(tr("Remove", "Remover")).clicked() {
                         self.backing = None;
                         self.player.set_backing(None, SyncMap::default());
                         sync_changed = true;
@@ -1196,44 +1459,54 @@ impl TabPlayerPanel {
                 && self.file_sync.is_some();
         let transcribed_sync = matches!(&self.backing, Some(Backing { source: BackingSource::File(p), .. }) if self.sidecar_sync_for(p).is_some());
         if transcribed_sync {
-            ui.label(RichText::new("Sincronização: compassos detectados na transcrição.").weak());
+            ui.label(RichText::new(tr("Sync: bars detected by the transcription.", "Sincronização: compassos detectados na transcrição.")).weak());
         } else if self.backing.is_some() && embedded_sync {
-            ui.label(RichText::new("Sincronização: pontos de sincronia do próprio arquivo (Guitar Pro 8).").weak());
+            ui.label(RichText::new(tr(
+                "Sync: the file's own sync points (Guitar Pro 8).",
+                "Sincronização: pontos de sincronia do próprio arquivo (Guitar Pro 8).",
+            )).weak());
         } else if self.backing.is_some() {
             let player = self.player.clone();
             let status = player.status();
             ui.horizontal_wrapped(|ui| {
-                ui.label("Sincronia:");
+                ui.label(tr("Sync:", "Sincronia:"));
                 sync_changed |= ui
                     .add(egui::DragValue::new(&mut self.sync_offset).speed(0.01).range(-600.0..=600.0).suffix(" s").fixed_decimals(2))
-                    .on_hover_text("Tempo no áudio em que o compasso 1 começa")
+                    .on_hover_text(tr("Time in the audio where bar 1 starts", "Tempo no áudio em que o compasso 1 começa"))
                     .changed();
-                ui.label("tempo do áudio ×");
+                ui.label(tr("audio tempo ×", "tempo do áudio ×"));
                 sync_changed |= ui
                     .add(egui::DragValue::new(&mut self.tempo_ratio).speed(0.001).range(0.5..=2.0).fixed_decimals(3))
-                    .on_hover_text("Andamento da gravação dividido pelo andamento da tab")
+                    .on_hover_text(tr("Recording tempo divided by the tab's tempo", "Andamento da gravação dividido pelo andamento da tab"))
                     .changed();
                 if ui
-                    .button("⏮ Ouvir do início do áudio")
-                    .on_hover_text("Toca o áudio desde 0:00 para marcar onde o compasso 1 começa")
+                    .button(tr("⏮ Play from audio start", "⏮ Ouvir do início do áudio"))
+                    .on_hover_text(tr(
+                        "Plays the audio from 0:00 so you can mark where bar 1 starts",
+                        "Toca o áudio desde 0:00 para marcar onde o compasso 1 começa",
+                    ))
                     .clicked()
                 {
                     self.player.seek_audio(0.0);
                     self.player.play();
                 }
                 if ui
-                    .button("Compasso 1 começa agora")
-                    .on_hover_text("Clique no instante em que o compasso 1 começa na gravação")
+                    .button(tr("Bar 1 starts now", "Compasso 1 começa agora"))
+                    .on_hover_text(tr(
+                        "Click at the moment bar 1 starts in the recording",
+                        "Clique no instante em que o compasso 1 começa na gravação",
+                    ))
                     .clicked()
                 {
                     self.sync_offset = status.audio_secs();
                     sync_changed = true;
                 }
                 if ui
-                    .button("Ajustar andamento aqui")
-                    .on_hover_text(
+                    .button(tr("Fit tempo here", "Ajustar andamento aqui"))
+                    .on_hover_text(tr(
+                        "With bar 1 already marked: click at the start of a later bar to correct the tempo difference",
                         "Com o compasso 1 já marcado: clique no início de um compasso mais adiante para corrigir a diferença de andamento",
-                    )
+                    ))
                     .clicked()
                 {
                     let audio_now = status.audio_secs();
@@ -1253,7 +1526,7 @@ impl TabPlayerPanel {
                         sync_changed = true;
                     }
                 }
-                if ui.button("Zerar").clicked() {
+                if ui.button(tr("Reset", "Zerar")).clicked() {
                     self.sync_offset = 0.0;
                     self.tempo_ratio = 1.0;
                     sync_changed = true;

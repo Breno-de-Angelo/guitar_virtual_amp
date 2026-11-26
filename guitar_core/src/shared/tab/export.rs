@@ -15,6 +15,9 @@ use guitarpro::{
     Voice,
 };
 
+use crate::shared::i18n::tr;
+use crate::trf;
+
 use super::model::{Score, TICKS_PER_QUARTER, TabBeat, TabNote};
 
 /// GP bend of a note: up to `bend_value` quarter tones (a whole step when
@@ -100,7 +103,7 @@ fn bar_tempo(score: &Score, bar: usize) -> Option<i32> {
 
 pub fn score_to_gp5(score: &Score) -> Result<Vec<u8>, String> {
     if score.tracks.is_empty() || score.bars.is_empty() {
-        return Err("partitura vazia".into());
+        return Err(tr("empty score", "partitura vazia").into());
     }
     let mut song = Song {
         name: score.title.clone(),
@@ -270,7 +273,7 @@ pub fn score_to_gp5(score: &Score) -> Result<Vec<u8>, String> {
     }
 
     song.write((5, 1, 0), None)
-        .map_err(|e| format!("erro ao gerar o arquivo GP5: {e}"))
+        .map_err(|e| trf!("error writing the GP5 file: {e}", "erro ao gerar o arquivo GP5: {e}"))
 }
 
 #[cfg(test)]

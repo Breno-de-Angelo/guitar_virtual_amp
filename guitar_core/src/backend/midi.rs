@@ -60,7 +60,7 @@ impl MidiInputManager {
                     .ports()
                     .into_iter()
                     .find(|p| input.port_name(p).is_ok_and(|n| n == port_name))
-                    .ok_or_else(|| format!("MIDI port \"{port_name}\" not found"))?;
+                    .ok_or_else(|| crate::trf!("MIDI port \"{port_name}\" not found", "Porta MIDI \"{port_name}\" não encontrada"))?;
                 let tx = self.tx.clone();
                 input
                     .connect(
@@ -91,7 +91,7 @@ impl MidiInputManager {
         #[cfg(target_os = "android")]
         {
             let _ = port_name;
-            Err("MIDI is not supported on Android yet".into())
+            Err(crate::shared::i18n::tr("MIDI is not supported on Android yet", "MIDI ainda não é suportado no Android").into())
         }
     }
 

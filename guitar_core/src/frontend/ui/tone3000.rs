@@ -31,11 +31,13 @@ use eframe::egui::{self, Color32, RichText, Ui, Vec2};
 
 use crate::backend::pedals::nam;
 use crate::shared::config::GLOBAL_CONFIG;
+use crate::shared::i18n::tr;
 use crate::shared::pedals::Tone3000Source;
 use crate::tone3000::{
     self, BrowserFlowResult, DeviceCode, EmbeddedUser, Model, Prompt, Tone, Tone3000Client,
     Tone3000Error, ToneList, client::fetch_public_image, types::source_for,
 };
+use crate::trf;
 
 const APP_NAME: &str = "Guitar Virtual Amp";
 const T3K_ORANGE: Color32 = Color32::from_rgb(255, 92, 0);
@@ -128,14 +130,14 @@ pub fn t3k_mark(ui: &mut Ui) {
 pub fn browse_button(ui: &mut Ui) -> bool {
     ui.horizontal(|ui| {
         t3k_mark(ui);
-        ui.button("Browse TONE3000").clicked()
+        ui.button(tr("Browse TONE3000", "Explorar TONE3000")).clicked()
     })
     .inner
 }
 
 fn license_label(license: &str) -> String {
     match license {
-        "t3k" => "T3K license".into(),
+        "t3k" => tr("T3K license", "Licença T3K").into(),
         "cco" | "cc0" => "CC0".into(),
         other => other.to_uppercase().replace("CC-", "CC "),
     }
@@ -156,8 +158,9 @@ pub fn source_block(ui: &mut Ui, source: &Tone3000Source) {
                 ui.label(RichText::new(&source.model_name).small());
             }
             ui.label(
-                RichText::new(format!(
+                RichText::new(trf!(
                     "{} · {} · by {}",
+                    "{} · {} · por {}",
                     tone3000::types::gear_label(&source.gear),
                     tone3000::types::format_label(&source.format),
                     source.creator
@@ -169,7 +172,7 @@ pub fn source_block(ui: &mut Ui, source: &Tone3000Source) {
                 if !source.tone_url.is_empty() {
                     link(
                         ui,
-                        RichText::new("View on TONE3000").small(),
+                        RichText::new(tr("View on TONE3000", "Ver no TONE3000")).small(),
                         &source.tone_url,
                     );
                 }
@@ -459,8 +462,9 @@ impl Tone3000Panel {
             Ok(flow) => {
                 let url = flow.url.clone();
                 if let Err(e) = webbrowser::open(&url) {
-                    self.message = Some(format!(
-                        "Could not open the browser ({e}). Open the link below yourself."
+                    self.message = Some(trf!(
+                        "Could not open the browser ({e}). Open the link below yourself.",
+                        "Não foi possível abrir o navegador ({e}). Abra o link abaixo manualmente."
                     ));
                 }
                 self.view = View::WaitingBrowser { url };
@@ -511,8 +515,13 @@ impl Tone3000Panel {
             Tone3000Error::NotSignedIn => {
                 self.forget_user();
                 self.view = View::Splash;
-                self.message =
-                    Some("Your TONE3000 session ended. Sign in again to continue.".into());
+                self.message = Some(
+                    tr(
+                        "Your TONE3000 session ended. Sign in again to continue.",
+                        "Sua sessão no TONE3000 terminou. Entre de novo para continuar.",
+                    )
+                    .into(),
+                );
             }
             other => self.message = Some(other.to_string()),
         }
@@ -621,8 +630,8 @@ impl Tone3000Panel {
                         details.downloading = false;
                         details.outcome = Some(match &result {
                             Ok(outcome) => Ok(match &outcome.warning {
-                                Some(warning) => format!("Loaded. {warning}"),
-                                None => "Loaded into the pedal.".to_string(),
+                                Some(warning) => trf!("Loaded. {warning}", "Carregado. {warning}"),
+                                None => tr("Loaded into the pedal.", "Carregado no pedal.").to_string(),
                             }),
                             Err(e) => Err(e.to_string()),
                         });
@@ -711,19 +720,25 @@ impl Tone3000Panel {
             ui.add_space(12.0);
             tone3000_logo(ui);
             ui.add_space(8.0);
-            ui.label(format!(
+            ui.label(trf!(
                 "{APP_NAME} has partnered with TONE3000 to give you access to a massive library \
                  of Neural Amp Modeler (NAM) captures and IRs of real analog gear, created by a \
-                 global community of musicians."
+                 global community of musicians.",
+                "{APP_NAME} fez uma parceria com o TONE3000 para dar a você acesso a uma enorme \
+                 biblioteca de capturas do Neural Amp Modeler (NAM) e IRs de equipamentos \
+                 analógicos reais, criadas por uma comunidade global de músicos."
             ));
             ui.add_space(12.0);
-            if ui.button(RichText::new("Continue").strong()).clicked() {
+            if ui.button(RichText::new(tr("Continue", "Continuar")).strong()).clicked() {
                 let format = self.target.map(|(_, t)| t.format().to_string());
                 self.start_browser_flow(Prompt::SelectTone { format });
             }
             ui.add_space(6.0);
             if ui
-                .link("No browser on this device? Sign in with a code")
+                .link(tr(
+                    "No browser on this device? Sign in with a code",
+                    "Sem navegador neste dispositivo? Entre com um código",
+                ))
                 .clicked()
             {
                 self.start_device_flow();
@@ -739,14 +754,17 @@ impl Tone3000Panel {
             ui.add_space(8.0);
             ui.horizontal(|ui| {
                 ui.spinner();
-                ui.label("Finish in the browser window that just opened.");
+                ui.label(tr(
+                    "Finish in the browser window that just opened.",
+                    "Termine na janela do navegador que acabou de abrir.",
+                ));
             });
             ui.add_space(8.0);
-            if ui.button("Open the TONE3000 page again").clicked() {
+            if ui.button(tr("Open the TONE3000 page again", "Abrir a página do TONE3000 de novo")).clicked() {
                 open_external(url);
             }
             ui.add_space(4.0);
-            if ui.button("Cancel").clicked() {
+            if ui.button(tr("Cancel", "Cancelar")).clicked() {
                 self.cancel.store(true, Ordering::Relaxed);
                 self.view = if self
                     .client
@@ -770,13 +788,13 @@ impl Tone3000Panel {
                     ui.spinner();
                 }
                 Some(code) => {
-                    ui.label("On your phone or computer, go to");
+                    ui.label(tr("On your phone or computer, go to", "No celular ou computador, acesse"));
                     link(
                         ui,
                         RichText::new(&code.verification_uri).strong(),
                         &code.verification_uri,
                     );
-                    ui.label("and enter this code:");
+                    ui.label(tr("and enter this code:", "e digite este código:"));
                     ui.label(
                         RichText::new(&code.user_code)
                             .monospace()
@@ -784,17 +802,17 @@ impl Tone3000Panel {
                             .strong(),
                     );
                     if let Some(complete) = &code.verification_uri_complete
-                        && ui.button("Open on this device").clicked()
+                        && ui.button(tr("Open on this device", "Abrir neste dispositivo")).clicked()
                     {
                         open_external(complete);
                     }
                     ui.horizontal(|ui| {
                         ui.spinner();
-                        ui.label("Waiting for approval...");
+                        ui.label(tr("Waiting for approval...", "Aguardando aprovação..."));
                     });
                 }
             }
-            if ui.button("Cancel").clicked() {
+            if ui.button(tr("Cancel", "Cancelar")).clicked() {
                 self.cancel.store(true, Ordering::Relaxed);
                 self.view = View::Splash;
             }
@@ -810,7 +828,7 @@ impl Tone3000Panel {
         ui.horizontal(|ui| {
             tone3000_logo(ui);
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.small_button("Sign out").clicked() {
+                if ui.small_button(tr("Sign out", "Sair")).clicked() {
                     if let Some(client) = &self.client {
                         client.sign_out();
                     }
@@ -834,8 +852,9 @@ impl Tone3000Panel {
         let target = self.target.map(|(_, t)| t);
         if let Some(target) = target {
             ui.label(
-                RichText::new(format!(
+                RichText::new(trf!(
                     "Showing {} tones for the {} pedal.",
+                    "Mostrando timbres {} para o pedal {}.",
                     tone3000::types::format_label(target.format()),
                     target.pedal_name()
                 ))
@@ -852,7 +871,7 @@ impl Tone3000Panel {
             for list in ToneList::ALL {
                 ui.selectable_value(&mut self.tab, list, list.label());
             }
-            if ui.small_button("⟳").on_hover_text("Reload").clicked() {
+            if ui.small_button("⟳").on_hover_text(tr("Reload", "Recarregar")).clicked() {
                 self.lists.remove(&self.tab);
             }
         });
@@ -887,7 +906,7 @@ impl Tone3000Panel {
                     .auto_shrink([false, true])
                     .show(ui, |ui| {
                         if visible.is_empty() {
-                            ui.label("No tones here yet.");
+                            ui.label(tr("No tones here yet.", "Nenhum timbre aqui ainda."));
                         }
                         for tone in visible {
                             if tone_card(ui, tone) {
@@ -896,8 +915,9 @@ impl Tone3000Panel {
                         }
                         if hidden > 0 {
                             ui.label(
-                                RichText::new(format!(
-                                    "{hidden} tones in other formats are hidden."
+                                RichText::new(trf!(
+                                    "{hidden} tones in other formats are hidden.",
+                                    "{hidden} timbres em outros formatos estão ocultos."
                                 ))
                                 .small()
                                 .weak(),
@@ -909,8 +929,8 @@ impl Tone3000Panel {
 
         ui.separator();
         ui.horizontal(|ui| {
-            ui.label("Looking for more?");
-            if ui.link("Discover more on TONE3000").clicked() {
+            ui.label(tr("Looking for more?", "Quer mais?"));
+            if ui.link(tr("Discover more on TONE3000", "Descubra mais no TONE3000")).clicked() {
                 let format = target.map(|t| t.format().to_string());
                 self.start_browser_flow(Prompt::SelectTone { format });
             }
@@ -930,7 +950,7 @@ impl Tone3000Panel {
         let View::Details(details) = &mut self.view else {
             return;
         };
-        if ui.button("⬅ Back").clicked() {
+        if ui.button(tr("⬅ Back", "⬅ Voltar")).clicked() {
             back = true;
         }
 
@@ -949,7 +969,7 @@ impl Tone3000Panel {
                         creator_line(ui, &tone.user);
                         ui.label(RichText::new(license_label(&tone.license)).small());
                         if !tone.url.is_empty() {
-                            link(ui, "View on TONE3000", &tone.url);
+                            link(ui, tr("View on TONE3000", "Ver no TONE3000"), &tone.url);
                         }
                     });
                 });
@@ -964,11 +984,14 @@ impl Tone3000Panel {
                         ui.colored_label(Color32::RED, error);
                     }
                     Some(Ok(models)) if models.is_empty() => {
-                        ui.label("This tone has no models this app can load.");
+                        ui.label(tr(
+                            "This tone has no models this app can load.",
+                            "Este timbre não tem modelos que o app consiga carregar.",
+                        ));
                     }
                     Some(Ok(models)) => {
                         details.selected = details.selected.min(models.len() - 1);
-                        egui::ComboBox::from_label("Model")
+                        egui::ComboBox::new("t3k_model", tr("Model", "Modelo"))
                             .selected_text(model_label(&models[details.selected]))
                             .width(260.0)
                             .show_ui(ui, |ui| {
@@ -990,19 +1013,24 @@ impl Tone3000Panel {
                             ui.colored_label(
                                 Color32::YELLOW,
                                 match pedal {
-                                    Some(pedal) => format!(
+                                    Some(pedal) => trf!(
                                         "This is a {} tone. Open TONE3000 from a {} pedal to load it.",
+                                        "Este é um timbre {}. Abra o TONE3000 a partir de um pedal {} para carregá-lo.",
                                         tone.format_label(),
                                         pedal.pedal_name()
                                     ),
-                                    None => format!("{} tones aren't supported.", tone.format_label()),
+                                    None => trf!(
+                                        "{} tones aren't supported.",
+                                        "Timbres {} não são suportados.",
+                                        tone.format_label()
+                                    ),
                                 },
                             );
                         }
                         ui.horizontal(|ui| {
                             let enabled = compatible && !details.downloading;
                             if ui
-                                .add_enabled(enabled, egui::Button::new("Load into pedal"))
+                                .add_enabled(enabled, egui::Button::new(tr("Load into pedal", "Carregar no pedal")))
                                 .clicked()
                             {
                                 details.downloading = true;
@@ -1067,7 +1095,7 @@ fn creator_line(ui: &mut Ui, user: &EmbeddedUser) {
         }
         if user.is_verified {
             ui.label(RichText::new("✔").color(T3K_ORANGE))
-                .on_hover_text("Verified creator");
+                .on_hover_text(tr("Verified creator", "Criador verificado"));
         }
     });
 }
@@ -1106,18 +1134,26 @@ fn tone_card(ui: &mut Ui, tone: &Tone) -> bool {
 
 fn not_configured_ui(ui: &mut Ui) {
     tone3000_logo(ui);
-    ui.label("The TONE3000 integration isn't configured in this build.");
-    ui.label(
+    ui.label(tr(
+        "The TONE3000 integration isn't configured in this build.",
+        "A integração com o TONE3000 não está configurada nesta versão.",
+    ));
+    ui.label(tr(
         "Create API keys in your TONE3000 account settings, then set the publishable key in \
          the TONE3000_CLIENT_ID environment variable (at build time or when starting the app).",
-    );
+        "Crie chaves de API nos ajustes da sua conta TONE3000 e coloque a chave publicável na \
+         variável de ambiente TONE3000_CLIENT_ID (na compilação ou ao iniciar o app).",
+    ));
     link(
         ui,
-        "TONE3000 API documentation",
+        tr("TONE3000 API documentation", "Documentação da API do TONE3000"),
         "https://www.tone3000.com/api",
     );
     ui.separator();
-    ui.label("You can still load .nam and .wav files you downloaded yourself from the pedal.");
+    ui.label(tr(
+        "You can still load .nam and .wav files you downloaded yourself from the pedal.",
+        "Você ainda pode carregar no pedal arquivos .nam e .wav que você mesmo baixou.",
+    ));
 }
 
 /// Runs on a worker thread: downloads the model, then checks it loads so
@@ -1152,15 +1188,19 @@ fn download_job(
 pub fn nam_warning(info: &nam::NamInfo) -> Option<String> {
     let mut warnings = Vec::new();
     if info.sample_rate_mismatch() {
-        warnings.push(format!(
+        warnings.push(trf!(
             "This capture was made at {:.0} Hz and the app runs at {:.0} Hz, so it won't sound right.",
+            "Esta captura foi feita a {:.0} Hz e o app roda a {:.0} Hz, então não vai soar certo.",
             info.sample_rate, GLOBAL_CONFIG.sample_rate
         ));
     }
     if info.includes_cab == Some(true) {
         warnings.push(
-            "This capture already includes a cabinet; bypass the Cabinet pedal to avoid two in series."
-                .to_string(),
+            tr(
+                "This capture already includes a cabinet; bypass the Cabinet pedal to avoid two in series.",
+                "Esta captura já inclui um gabinete; deixe o pedal Cabinet em bypass para não ter dois em série.",
+            )
+            .to_string(),
         );
     }
     (!warnings.is_empty()).then(|| warnings.join(" "))
@@ -1168,12 +1208,17 @@ pub fn nam_warning(info: &nam::NamInfo) -> Option<String> {
 
 fn ir_warning(path: &Path) -> Result<Option<String>, Tone3000Error> {
     let reader = hound::WavReader::open(path)
-        .map_err(|e| Tone3000Error::Other(format!("downloaded IR isn't a readable WAV: {e}")))?;
+        .map_err(|e| Tone3000Error::Other(trf!(
+            "downloaded IR isn't a readable WAV: {e}",
+            "o IR baixado não é um WAV legível: {e}"
+        )))?;
     let rate = reader.spec().sample_rate as f32;
     Ok(((rate - GLOBAL_CONFIG.sample_rate).abs() > 1.0).then(|| {
-        format!(
+        trf!(
             "This IR is {rate:.0} Hz and the app runs at {:.0} Hz, so it will sound shifted. \
              Pick a 48 kHz version if the tone has one.",
+            "Este IR é de {rate:.0} Hz e o app roda a {:.0} Hz, então vai soar deslocado. \
+             Escolha uma versão de 48 kHz se o timbre tiver uma.",
             GLOBAL_CONFIG.sample_rate
         )
     }))

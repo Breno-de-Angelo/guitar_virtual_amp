@@ -12,6 +12,7 @@
 //! the local path (for playback sync) and a SHA-256 of the file (to skip
 //! songs already transcribed and, later, to match recordings across users).
 
+use std::collections::HashMap;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
@@ -23,6 +24,7 @@ use super::model::Score;
 use super::timeline::{SyncMap, Timeline};
 use crate::shared::paths::app_data_dir;
 use crate::shared::preset::sanitize_file_stem;
+use crate::trf;
 
 pub const SIDECAR_EXTENSION: &str = "gvtab.json";
 pub const METADATA_VERSION: u32 = 1;
@@ -121,19 +123,42 @@ pub fn file_sha256(path: &Path) -> std::io::Result<String> {
         .collect())
 }
 
-/// First tab in `dir` whose sidecar satisfies `matches`.
-fn find_tab(dir: &Path, matches: impl Fn(&TabMetadata) -> bool) -> Option<PathBuf> {
+/// Every tab in `dir` with a readable sidecar: `(tab path, metadata)`.
+fn tabs(dir: &Path) -> impl Iterator<Item = (PathBuf, TabMetadata)> + '_ {
     std::fs::read_dir(dir)
-        .ok()?
+        .into_iter()
+        .flatten()
         .flatten()
         .map(|e| e.path())
-        .find_map(|path| {
+        .filter_map(move |path| {
             let name = path.file_name()?.to_string_lossy().into_owned();
             let stem = name.strip_suffix(&format!(".{SIDECAR_EXTENSION}"))?;
             let meta: TabMetadata =
                 serde_json::from_str(&std::fs::read_to_string(&path).ok()?).ok()?;
-            matches(&meta).then(|| dir.join(format!("{stem}.gp5")))
+            Some((dir.join(format!("{stem}.gp5")), meta))
         })
+}
+
+/// First tab in `dir` whose sidecar satisfies `matches`.
+fn find_tab(dir: &Path, matches: impl Fn(&TabMetadata) -> bool) -> Option<PathBuf> {
+    tabs(dir).find_map(|(path, meta)| matches(&meta).then_some(path))
+}
+
+/// Tabs in `dir` made from YouTube videos, by video ID (one folder scan,
+/// for marking search results that already have a tab).
+pub fn youtube_tabs(dir: &Path) -> HashMap<String, PathBuf> {
+    tabs(dir)
+        .filter(|(path, _)| path.is_file())
+        .filter_map(|(path, meta)| Some((meta.source.youtube_id?, path)))
+        .collect()
+}
+
+/// Every tab in `dir` that has a sidecar and still exists, newest first
+/// (by `created_unix`, then path). Reads every sidecar: worker threads only.
+pub fn list_tabs(dir: &Path) -> Vec<(PathBuf, TabMetadata)> {
+    let mut found: Vec<(PathBuf, TabMetadata)> = tabs(dir).filter(|(path, _)| path.is_file()).collect();
+    found.sort_by(|a, b| b.1.created_unix.cmp(&a.1.created_unix).then_with(|| a.0.cmp(&b.0)));
+    found
 }
 
 /// Tab already made from audio with this hash, if any.
@@ -181,7 +206,7 @@ fn display_stem(meta: &TabMetadata) -> String {
 /// numbered file. Returns the `.gp5` path.
 pub fn save(dir: &Path, score: &Score, meta: &TabMetadata) -> Result<PathBuf, String> {
     std::fs::create_dir_all(dir)
-        .map_err(|e| format!("não foi possível criar {}: {e}", dir.display()))?;
+        .map_err(|e| trf!("couldn't create {}: {e}", "não foi possível criar {}: {e}", dir.display()))?;
     let bytes = score_to_gp5(score)?;
     let path = match find_by_audio_hash(dir, &meta.source.sha256)
         .filter(|_| !meta.source.sha256.is_empty())
@@ -200,10 +225,10 @@ pub fn save(dir: &Path, score: &Score, meta: &TabMetadata) -> Result<PathBuf, St
     };
     let json = serde_json::to_string_pretty(meta).map_err(|e| e.to_string())?;
     let temp = path.with_extension("gp5.part");
-    std::fs::write(&temp, bytes).map_err(|e| format!("erro ao gravar a tab: {e}"))?;
-    std::fs::rename(&temp, &path).map_err(|e| format!("erro ao gravar a tab: {e}"))?;
+    std::fs::write(&temp, bytes).map_err(|e| trf!("error saving the tab: {e}", "erro ao gravar a tab: {e}"))?;
+    std::fs::rename(&temp, &path).map_err(|e| trf!("error saving the tab: {e}", "erro ao gravar a tab: {e}"))?;
     std::fs::write(sidecar_path(&path), json)
-        .map_err(|e| format!("erro ao gravar os metadados: {e}"))?;
+        .map_err(|e| trf!("error saving the metadata: {e}", "erro ao gravar os metadados: {e}"))?;
     Ok(path)
 }
 
@@ -290,8 +315,33 @@ mod tests {
         let mut from_video = meta("ddd");
         from_video.source.youtube_id = Some("M4uG1MmZVl0".into());
         let third = save(&dir, &score(), &from_video).unwrap();
-        assert_eq!(find_by_youtube_id(&dir, "M4uG1MmZVl0"), Some(third));
+        assert_eq!(find_by_youtube_id(&dir, "M4uG1MmZVl0"), Some(third.clone()));
         assert_eq!(find_by_youtube_id(&dir, "xxxxxxxxxxx"), None);
+        let by_video = youtube_tabs(&dir);
+        assert_eq!(by_video.len(), 1);
+        assert_eq!(by_video.get("M4uG1MmZVl0"), Some(&third));
+        assert!(youtube_tabs(&dir.join("missing")).is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn lists_tabs_newest_first() {
+        let dir = std::env::temp_dir().join(format!("gva_repo_list_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut old = meta("old");
+        old.title = "Old".into();
+        old.created_unix = 100;
+        let mut new = meta("new");
+        new.title = "New".into();
+        new.created_unix = 200;
+        let old_path = save(&dir, &score(), &old).unwrap();
+        let new_path = save(&dir, &score(), &new).unwrap();
+        let listed: Vec<PathBuf> = list_tabs(&dir).into_iter().map(|(p, _)| p).collect();
+        assert_eq!(listed, vec![new_path.clone(), old_path]);
+        // A sidecar whose tab is gone isn't listed.
+        std::fs::remove_file(&new_path).unwrap();
+        assert_eq!(list_tabs(&dir).len(), 1);
+        assert!(list_tabs(&dir.join("missing")).is_empty());
         let _ = std::fs::remove_dir_all(&dir);
     }
 

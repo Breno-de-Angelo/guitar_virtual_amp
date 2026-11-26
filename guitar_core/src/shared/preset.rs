@@ -40,8 +40,11 @@ pub enum PresetError {
 impl fmt::Display for PresetError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            PresetError::Io(e) => write!(f, "preset I/O error: {e}"),
-            PresetError::Serde(e) => write!(f, "preset (de)serialization error: {e}"),
+            PresetError::Io(e) => f.write_str(&crate::trf!("preset I/O error: {e}", "erro de E/S do preset: {e}")),
+            PresetError::Serde(e) => f.write_str(&crate::trf!(
+                "preset (de)serialization error: {e}",
+                "erro de (de)serialização do preset: {e}"
+            )),
         }
     }
 }

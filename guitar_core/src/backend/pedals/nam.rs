@@ -71,10 +71,10 @@ fn cache() -> &'static Mutex<Cache> {
 }
 
 fn parse(path: &str) -> Result<Arc<LoadedNam>, String> {
-    let file = NamModel::from_file(path).map_err(|e| format!("could not read model: {e}"))?;
+    let file = NamModel::from_file(path).map_err(|e| crate::trf!("could not read model: {e}", "não foi possível ler o modelo: {e}"))?;
     // Build the runtime once here so unsupported architectures are reported
     // to the user instead of silently producing a pass-through pedal.
-    Model::from_nam(&file).map_err(|e| format!("unsupported model: {e}"))?;
+    Model::from_nam(&file).map_err(|e| crate::trf!("unsupported model: {e}", "modelo não suportado: {e}"))?;
     let metadata = file.metadata_typed();
     let info = NamInfo {
         name: metadata.name.clone(),

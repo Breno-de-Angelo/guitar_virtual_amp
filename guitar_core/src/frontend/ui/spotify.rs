@@ -23,10 +23,12 @@ use eframe::egui::{self, Color32, RichText, Ui, Vec2};
 
 use crate::frontend::ui::tone3000::remote_image;
 use crate::frontend::ui::transcribe::repository_dir;
+use crate::shared::i18n::tr;
 use crate::shared::settings::{AppSettings, save_settings};
 use crate::shared::tab::library::{LibraryIndex, clean_title, library_cache_path, read_tab_info, scan_library};
 use crate::spotify::types::{User, pick_image};
 use crate::spotify::{self, PlaybackState, Playlist, SpotifyClient, SpotifyError, Track};
+use crate::trf;
 
 const SPOTIFY_GREEN: Color32 = Color32::from_rgb(30, 215, 96);
 /// Playback state refresh while the page is open.
@@ -181,7 +183,7 @@ impl SpotifyPanel {
                 return;
             }
             self.forget_account();
-            self.set_message("Sessão do Spotify expirada: conecte de novo.", true);
+            self.set_message(tr("Spotify session expired: connect again.", "Sessão do Spotify expirada: conecte de novo."), true);
         } else if error != SpotifyError::Cancelled {
             self.set_message(error.to_string(), true);
         }
@@ -272,7 +274,7 @@ impl SpotifyPanel {
                     self.signing_in = None;
                     match result {
                         Ok(()) => {
-                            self.set_message("Conectado ao Spotify.", false);
+                            self.set_message(tr("Connected to Spotify.", "Conectado ao Spotify."), false);
                             self.load_account();
                         }
                         Err(e) => self.handle_error(e),
@@ -295,7 +297,10 @@ impl SpotifyPanel {
                     match result {
                         Ok(tracks) => self.tracks = Some((id, tracks)),
                         Err(SpotifyError::Api { status: 403, .. }) => self.set_message(
-                            "O Spotify só libera as faixas de playlists que você criou ou em que colabora.",
+                            tr(
+                                "Spotify only gives access to tracks of playlists you created or collaborate on.",
+                                "O Spotify só libera as faixas de playlists que você criou ou em que colabora.",
+                            ),
                             true,
                         ),
                         Err(e) => self.handle_error(e),
@@ -355,7 +360,10 @@ impl SpotifyPanel {
         ui.horizontal(|ui| {
             spotify_mark(ui);
             ui.label(
-                RichText::new("Toque músicas das suas playlists e abra a tab correspondente.")
+                RichText::new(tr(
+                    "Play songs from your playlists and open their tabs.",
+                    "Toque músicas das suas playlists e abra a tab correspondente.",
+                ))
                     .weak(),
             );
         });
@@ -414,7 +422,10 @@ impl SpotifyPanel {
         });
         ui.horizontal(|ui| {
             ui.label(
-                RichText::new("Dados, capas e reprodução fornecidos pelo")
+                RichText::new(tr(
+                    "Data, artwork and playback provided by",
+                    "Dados, capas e reprodução fornecidos pelo",
+                ))
                     .small()
                     .weak(),
             );
@@ -432,29 +443,35 @@ impl SpotifyPanel {
         if let Some((url, cancel)) = &self.signing_in {
             ui.horizontal(|ui| {
                 ui.spinner();
-                ui.label("Aguardando a autorização no navegador...");
+                ui.label(tr(
+                    "Waiting for authorization in the browser...",
+                    "Aguardando a autorização no navegador...",
+                ));
             });
             let url = url.clone();
             ui.horizontal(|ui| {
-                link(ui, "Abrir a página de login de novo", &url);
-                if ui.button("Cancelar").clicked() {
+                link(ui, tr("Open the sign-in page again", "Abrir a página de login de novo"), &url);
+                if ui.button(tr("Cancel", "Cancelar")).clicked() {
                     cancel.store(true, Ordering::Relaxed);
                 }
             });
             return;
         }
         if ui
-            .button(RichText::new("Conectar com o Spotify").strong())
+            .button(RichText::new(tr("Connect to Spotify", "Conectar com o Spotify")).strong())
             .clicked()
         {
             self.start_sign_in();
         }
         ui.add_space(6.0);
-        ui.label(RichText::new(
+        ui.label(RichText::new(tr(
+            "Opens the browser so you can authorize the app. Permissions requested: read your playlists \
+             and see/control what's playing. Playing requires Spotify Premium and the Spotify app open \
+             on some device (phone, computer, speaker).",
             "Abre o navegador para você autorizar o app. Permissões pedidas: ler suas playlists e \
              ver/controlar o que está tocando. Tocar exige Spotify Premium e o app do Spotify aberto \
              em algum aparelho (celular, computador, caixa de som).",
-        ).weak());
+        )).weak());
     }
 
     fn account_row(&mut self, ui: &mut Ui, client: &SpotifyClient) {
@@ -464,49 +481,60 @@ impl SpotifyPanel {
                 .as_ref()
                 .map(|u| u.display_name.clone().unwrap_or_else(|| u.id.clone()))
                 .unwrap_or_else(|| "...".into());
-            ui.label(format!("Conectado como {name}"));
-            if ui.button("🔄 Atualizar").clicked() {
+            ui.label(trf!("Connected as {name}", "Conectado como {name}"));
+            if ui.button(tr("🔄 Refresh", "🔄 Atualizar")).clicked() {
                 self.load_account();
                 if let Some(id) = self.selected_playlist.clone() {
                     self.load_tracks(id);
                 }
             }
             if ui
-                .button("Desconectar")
-                .on_hover_text("Apaga a sessão deste computador. Para revogar o acesso de vez: spotify.com/account/apps")
+                .button(tr("Disconnect", "Desconectar"))
+                .on_hover_text(tr(
+                    "Deletes the session from this computer. To revoke access for good: spotify.com/account/apps",
+                    "Apaga a sessão deste computador. Para revogar o acesso de vez: spotify.com/account/apps",
+                ))
                 .clicked()
             {
                 client.sign_out();
                 self.forget_account();
-                self.set_message("Desconectado do Spotify.", false);
+                self.set_message(tr("Disconnected from Spotify.", "Desconectado do Spotify."), false);
             }
         });
     }
 
     fn library_row(&mut self, ui: &mut Ui, settings: &mut AppSettings) {
         ui.horizontal_wrapped(|ui| {
-            ui.label("Pasta de tabs:");
+            ui.label(tr("Tab folder:", "Pasta de tabs:"));
             match &settings.tab_library_dir {
                 Some(dir) => {
                     ui.monospace(dir.display().to_string());
                 }
                 None => {
-                    ui.label(RichText::new("nenhuma (as tabs são procuradas pelo nome do arquivo, ex.: \"Artista - Música.gp5\")").weak());
+                    ui.label(RichText::new(tr(
+                        "none (tabs are found by file name, e.g. \"Artist - Song.gp5\")",
+                        "nenhuma (as tabs são procuradas pelo nome do arquivo, ex.: \"Artista - Música.gp5\")",
+                    )).weak());
                 }
             }
             if self.scanning {
                 ui.spinner();
             } else {
-                ui.label(RichText::new(format!("{} tabs (pasta + transcritas pelo app)", self.library.len())).weak());
+                ui.label(RichText::new(trf!(
+                    "{} tabs (folder + transcribed by the app)",
+                    "{} tabs (pasta + transcritas pelo app)",
+                    self.library.len()
+                )).weak());
             }
             #[cfg(not(target_os = "android"))]
-            if ui.button("📂 Escolher pasta...").clicked()
+            if ui.button(tr("📂 Choose folder...", "📂 Escolher pasta...")).clicked()
                 && let Some(dir) = rfd::FileDialog::new().pick_folder()
             {
                 settings.tab_library_dir = Some(dir);
                 save_settings(settings);
             }
-            if !self.scanning && ui.button("Reescanear").on_hover_text("Inclui as tabs transcritas pelo app").clicked() {
+            if !self.scanning && ui.button(tr("Rescan", "Reescanear"))
+                .on_hover_text(tr("Includes the tabs transcribed by the app", "Inclui as tabs transcritas pelo app")).clicked() {
                 self.scan_library_dirs(self.library_dirs.clone());
             }
         });
@@ -515,12 +543,15 @@ impl SpotifyPanel {
     fn now_playing(&mut self, ui: &mut Ui, settings: &AppSettings) -> Option<SpotifyAction> {
         let mut action = None;
         let Some(state) = self.playback.clone() else {
-            ui.label(RichText::new("Nada tocando no Spotify agora.").weak());
+            ui.label(RichText::new(tr("Nothing playing on Spotify right now.", "Nada tocando no Spotify agora.")).weak());
             return None;
         };
         let Some(track) = state.item.clone().filter(|t| t.kind == "track") else {
             ui.label(
-                RichText::new("Tocando algo que não é uma música (anúncio ou podcast).").weak(),
+                RichText::new(tr(
+                    "Playing something that isn't a song (ad or podcast).",
+                    "Tocando algo que não é uma música (anúncio ou podcast).",
+                )).weak(),
             );
             return None;
         };
@@ -532,7 +563,7 @@ impl SpotifyPanel {
                 ui.label(RichText::new(&track.name).strong());
                 ui.label(format!("{} · {}", track.artists_label(), track.album.name));
                 ui.horizontal(|ui| {
-                    if ui.button("⏮").on_hover_text("Anterior").clicked() {
+                    if ui.button("⏮").on_hover_text(tr("Previous", "Anterior")).clicked() {
                         self.command(|c| c.previous());
                     }
                     let playing = state.is_playing;
@@ -543,7 +574,7 @@ impl SpotifyPanel {
                             self.command(|c| c.resume());
                         }
                     }
-                    if ui.button("⏭").on_hover_text("Próxima").clicked() {
+                    if ui.button("⏭").on_hover_text(tr("Next", "Próxima")).clicked() {
                         self.command(|c| c.next());
                     }
                     let elapsed = if state.is_playing {
@@ -561,17 +592,17 @@ impl SpotifyPanel {
                         format_ms(track.duration_ms)
                     ));
                     if let Some(device) = &state.device {
-                        ui.label(RichText::new(format!("em {}", device.name)).weak());
+                        ui.label(RichText::new(trf!("on {}", "em {}", device.name)).weak());
                     }
                     if let Some(url) = &track.external_urls.spotify {
-                        link(ui, "Abrir no Spotify", url);
+                        link(ui, tr("Open in Spotify", "Abrir no Spotify"), url);
                     }
                 });
             });
             ui.separator();
             if let Some((path, _)) = self.tab_for(&track, settings) {
                 if ui
-                    .button(RichText::new("🎼 Abrir tab desta música").strong())
+                    .button(RichText::new(tr("🎼 Open this song's tab", "🎼 Abrir tab desta música")).strong())
                     .on_hover_text(path.display().to_string())
                     .clicked()
                 {
@@ -579,13 +610,16 @@ impl SpotifyPanel {
                 }
             } else {
                 if ui
-                    .button("⚡ Transcrever")
-                    .on_hover_text("Gera a tab a partir de um arquivo de áudio desta música que você tenha")
+                    .button(tr("⚡ Transcribe", "⚡ Transcrever"))
+                    .on_hover_text(tr(
+                        "Makes the tab from an audio file of this song that you have",
+                        "Gera a tab a partir de um arquivo de áudio desta música que você tenha",
+                    ))
                     .clicked()
                 {
                     action = transcribe_action(&track);
                 }
-                link(ui, "🔎 Procurar tab na web", &tab_search_url(&track));
+                link(ui, tr("🔎 Search the web for a tab", "🔎 Procurar tab na web"), &tab_search_url(&track));
             }
         });
         action
@@ -601,7 +635,7 @@ impl SpotifyPanel {
             return;
         };
         if playlists.is_empty() {
-            ui.label(RichText::new("Nenhuma playlist.").weak());
+            ui.label(RichText::new(tr("No playlists.", "Nenhuma playlist.")).weak());
             return;
         }
         let user_id = self.user.as_ref().map(|u| u.id.clone()).unwrap_or_default();
@@ -617,7 +651,10 @@ impl SpotifyPanel {
                     response
                 } else {
                     response.on_disabled_hover_text(
-                        "O Spotify só libera as faixas de playlists que você criou ou em que colabora.",
+                        tr(
+                                "Spotify only gives access to tracks of playlists you created or collaborate on.",
+                                "O Spotify só libera as faixas de playlists que você criou ou em que colabora.",
+                            ),
                     )
                 };
                 if response.clicked() {
@@ -635,7 +672,7 @@ impl SpotifyPanel {
     ) -> Option<SpotifyAction> {
         let mut action = None;
         let Some(playlist_id) = self.selected_playlist.clone() else {
-            ui.label(RichText::new("Escolha uma playlist.").weak());
+            ui.label(RichText::new(tr("Choose a playlist.", "Escolha uma playlist.")).weak());
             return None;
         };
         let playlist = self
@@ -650,11 +687,11 @@ impl SpotifyPanel {
                 }
                 ui.label(RichText::new(&p.name).strong());
                 if let Some(url) = &p.external_urls.spotify {
-                    link(ui, "Abrir no Spotify", url);
+                    link(ui, tr("Open in Spotify", "Abrir no Spotify"), url);
                 }
             }
             ui.separator();
-            ui.label("Filtrar:");
+            ui.label(tr("Filter:", "Filtrar:"));
             ui.add(egui::TextEdit::singleline(&mut self.filter).desired_width(160.0));
         });
         if self.loading_tracks {
@@ -672,7 +709,7 @@ impl SpotifyPanel {
             })
             .collect();
         if visible.is_empty() {
-            ui.label(RichText::new("Nenhuma música.").weak());
+            ui.label(RichText::new(tr("No songs.", "Nenhuma música.")).weak());
             return None;
         }
         let context_uri = playlist.map(|p| p.uri);
@@ -689,7 +726,7 @@ impl SpotifyPanel {
                 for track in &visible[range] {
                     ui.horizontal(|ui| {
                         ui.set_height(ROW_HEIGHT - 4.0);
-                        if ui.button("▶").on_hover_text("Tocar no Spotify").clicked() {
+                        if ui.button("▶").on_hover_text(tr("Play on Spotify", "Tocar no Spotify")).clicked() {
                             let context = context_uri.clone();
                             let uri = track.uri.clone();
                             self.command(move |c| c.play_track(context.as_deref(), &uri));
@@ -743,13 +780,13 @@ impl SpotifyPanel {
         #[cfg(not(target_os = "android"))]
         {
             let label = if found.is_some() {
-                "Trocar tab..."
+                tr("Change tab...", "Trocar tab...")
             } else {
-                "Associar tab..."
+                tr("Link tab...", "Associar tab...")
             };
             if ui
                 .small_button(label)
-                .on_hover_text("Escolher o arquivo Guitar Pro desta música")
+                .on_hover_text(tr("Choose this song's Guitar Pro file", "Escolher o arquivo Guitar Pro desta música"))
                 .clicked()
             {
                 let mut dialog = rfd::FileDialog::new().add_filter(
@@ -770,7 +807,7 @@ impl SpotifyPanel {
                 if manual
                     && ui
                         .small_button("✖")
-                        .on_hover_text("Remover a associação manual")
+                        .on_hover_text(tr("Remove the manual link", "Remover a associação manual"))
                         .clicked()
                 {
                     settings.spotify_tab_links.remove(&id);
@@ -781,13 +818,13 @@ impl SpotifyPanel {
                     .map(|n| n.to_string_lossy().into_owned())
                     .unwrap_or_default();
                 if ui
-                    .button("🎼 Abrir tab")
+                    .button(tr("🎼 Open tab", "🎼 Abrir tab"))
                     .on_hover_text(format!(
                         "{name}{}",
                         if manual {
-                            " (associada por você)"
+                            tr(" (linked by you)", " (associada por você)")
                         } else {
-                            " (pelo nome do arquivo)"
+                            tr(" (by file name)", " (pelo nome do arquivo)")
                         }
                     ))
                     .clicked()
@@ -798,8 +835,11 @@ impl SpotifyPanel {
             None => {
                 link(ui, "🔎", &tab_search_url(track));
                 if ui
-                    .small_button("⚡ Transcrever")
-                    .on_hover_text("Gera a tab a partir de um arquivo de áudio desta música que você tenha")
+                    .small_button(tr("⚡ Transcribe", "⚡ Transcrever"))
+                    .on_hover_text(tr(
+                        "Makes the tab from an audio file of this song that you have",
+                        "Gera a tab a partir de um arquivo de áudio desta música que você tenha",
+                    ))
                     .clicked()
                 {
                     action = transcribe_action(track);
@@ -813,25 +853,35 @@ impl SpotifyPanel {
 fn not_configured_ui(ui: &mut Ui) {
     ui.add_space(8.0);
     ui.label(
-        RichText::new("A integração com o Spotify não está configurada nesta compilação.").strong(),
+        RichText::new(tr(
+            "Spotify integration isn't configured in this build.",
+            "A integração com o Spotify não está configurada nesta compilação.",
+        )).strong(),
     );
-    ui.label("Para ativar:");
-    ui.label(format!(
+    ui.label(tr("To enable it:", "Para ativar:"));
+    ui.label(trf!(
+        "1. Create an app at {} (check \"Web API\").",
         "1. Crie um app em {} (marque \"Web API\").",
         spotify::DASHBOARD_URL
     ));
-    ui.label(format!(
+    ui.label(trf!(
+        "2. Under Redirect URIs, add exactly: {}",
         "2. Em Redirect URIs, adicione exatamente: {}",
         spotify::redirect_uri(spotify::redirect_port())
     ));
-    ui.label("3. Copie o Client ID para a variável de ambiente SPOTIFY_CLIENT_ID (ou para [env] em .cargo/config.toml) e reinicie o app.");
-    ui.label(RichText::new(
+    ui.label(tr(
+        "3. Copy the Client ID into the SPOTIFY_CLIENT_ID environment variable (or into [env] in .cargo/config.toml) and restart the app.",
+        "3. Copie o Client ID para a variável de ambiente SPOTIFY_CLIENT_ID (ou para [env] em .cargo/config.toml) e reinicie o app.",
+    ));
+    ui.label(RichText::new(tr(
+        "Don't use the Client Secret: the app uses PKCE and doesn't need it. Apps in development mode \
+         require the owner to have Premium and accept up to 5 users registered in the dashboard.",
         "Não use o Client Secret: o app usa PKCE e não precisa dele. Apps em modo de desenvolvimento \
          exigem que o dono tenha Premium e aceitam até 5 usuários cadastrados no painel.",
-    ).weak());
+    )).weak());
     link(
         ui,
-        "Abrir o painel de desenvolvedor do Spotify",
+        tr("Open the Spotify developer dashboard", "Abrir o painel de desenvolvedor do Spotify"),
         spotify::DASHBOARD_URL,
     );
 }

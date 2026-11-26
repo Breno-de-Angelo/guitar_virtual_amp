@@ -9,7 +9,9 @@ use crossbeam::channel::{Receiver, Sender, bounded};
 use eframe::egui::{self, RichText, Ui};
 
 use crate::backend::capture::{AudioSetup, INPUT_BACKLOG_SAMPLES, OutputShared, switch_input_device, switch_output_device};
-use crate::frontend::style::Palette;
+use crate::frontend::style::{self, Palette};
+use crate::shared::i18n::tr;
+use crate::trf;
 use crate::shared::config::{BUFFER_SIZE_OPTIONS_FRAMES, GLOBAL_CONFIG};
 use crate::shared::pedals::PedalInstance;
 use crate::shared::settings::{AppSettings, save_settings};
@@ -43,6 +45,125 @@ pub fn list_devices(input: bool) -> Vec<String> {
     list.sort();
     list.dedup();
     list
+}
+
+/// What the audio streams are doing, for the Settings page and the top bar.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AudioStatus {
+    /// Both streams run.
+    Running,
+    /// A device switch, buffer change or restart is in progress.
+    Starting,
+    /// Neither stream is open.
+    Stopped,
+    /// The input is open but the output isn't: nothing is processed or played.
+    NoOutput,
+    /// The output is open but the input isn't: the pedals get silence.
+    NoInput,
+}
+
+impl AudioStatus {
+    pub fn from_streams(input_open: bool, output_open: bool, busy: bool) -> Self {
+        match (input_open, output_open) {
+            _ if busy => AudioStatus::Starting,
+            (true, true) => AudioStatus::Running,
+            (false, false) => AudioStatus::Stopped,
+            (true, false) => AudioStatus::NoOutput,
+            (false, true) => AudioStatus::NoInput,
+        }
+    }
+
+    pub fn is_running(self) -> bool {
+        self == AudioStatus::Running
+    }
+
+    /// A few words for the top bar in place of the latency and DSP load;
+    /// `None` while audio runs.
+    pub fn short_label(self) -> Option<&'static str> {
+        match self {
+            AudioStatus::Running => None,
+            AudioStatus::Starting => Some(tr("starting audio…", "iniciando áudio…")),
+            AudioStatus::Stopped => Some(tr("audio off", "áudio desligado")),
+            AudioStatus::NoOutput => Some(tr("no output", "sem saída")),
+            AudioStatus::NoInput => Some(tr("no input", "sem entrada")),
+        }
+    }
+
+    /// What's wrong, as a sentence for the Settings page; `None` while audio
+    /// runs or is starting.
+    pub fn message(self) -> Option<&'static str> {
+        match self {
+            AudioStatus::Running | AudioStatus::Starting => None,
+            AudioStatus::Stopped => Some(tr(
+                "Audio stopped: no input or output device is open.",
+                "Áudio parado: nenhum dispositivo de entrada ou saída está aberto.",
+            )),
+            AudioStatus::NoOutput => Some(tr(
+                "The output device isn't open: nothing is processed or played.",
+                "O dispositivo de saída não está aberto: nada é processado nem tocado.",
+            )),
+            AudioStatus::NoInput => Some(tr(
+                "The input device isn't open: the pedals get no signal.",
+                "O dispositivo de entrada não está aberto: os pedais não recebem sinal.",
+            )),
+        }
+    }
+}
+
+/// How busy the audio callback is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LoadLevel {
+    Fine,
+    High,
+    Overloaded,
+}
+
+impl LoadLevel {
+    /// From the DSP load in % of the callback period.
+    pub fn of(cpu_percent: f64) -> Self {
+        if cpu_percent > 80.0 {
+            LoadLevel::Overloaded
+        } else if cpu_percent > 50.0 {
+            LoadLevel::High
+        } else {
+            LoadLevel::Fine
+        }
+    }
+
+    pub fn color(self, palette: &Palette) -> egui::Color32 {
+        match self {
+            LoadLevel::Fine => palette.ok,
+            LoadLevel::High => palette.warn,
+            LoadLevel::Overloaded => palette.danger,
+        }
+    }
+}
+
+/// The live latency and load line of the Settings page.
+fn load_text(buffer_ms: f32, queue_ms: f32, cpu: f64) -> String {
+    trf!(
+        "Round trip {buffer_ms:.1} ms + queue {queue_ms:.1} ms · DSP {cpu:.0}% of the budget",
+        "Ida e volta {buffer_ms:.1} ms + fila {queue_ms:.1} ms · DSP {cpu:.0}% do tempo disponível"
+    )
+}
+
+/// The error to show when `new` couldn't open a stream.
+fn startup_error(input_open: bool, output_open: bool) -> Option<&'static str> {
+    match (input_open, output_open) {
+        (true, true) => None,
+        (false, false) => Some(tr(
+            "No audio device could be opened. Check the devices below and press Retry.",
+            "Nenhum dispositivo de áudio pôde ser aberto. Confira os dispositivos abaixo e clique em Tentar de novo.",
+        )),
+        (false, true) => Some(tr(
+            "The input device couldn't be opened. Check it below and press Retry.",
+            "O dispositivo de entrada não pôde ser aberto. Confira-o abaixo e clique em Tentar de novo.",
+        )),
+        (true, false) => Some(tr(
+            "The output device couldn't be opened. Check it below and press Retry.",
+            "O dispositivo de saída não pôde ser aberto. Confira-o abaixo e clique em Tentar de novo.",
+        )),
+    }
 }
 
 fn default_device(input: bool) -> Option<String> {
@@ -95,8 +216,7 @@ impl DeviceManager {
         if !selected_output.is_empty() && !available_outputs.contains(&selected_output) {
             available_outputs.push(selected_output.clone());
         }
-        let error = (setup.input_stream.is_none() || setup.output_stream.is_none())
-            .then(|| "No audio device could be opened. Check the devices below and press Retry.".to_string());
+        let error = startup_error(setup.input_stream.is_some(), setup.output_stream.is_some()).map(str::to_string);
         Self {
             available_inputs,
             selected_input,
@@ -155,6 +275,12 @@ impl DeviceManager {
         self.input_stream.is_some() && self.output_stream.is_some()
     }
 
+    /// What the streams are doing. The top bar shows `short_label()` in
+    /// place of the latency and DSP load when it isn't `Running`.
+    pub fn status(&self) -> AudioStatus {
+        AudioStatus::from_streams(self.input_stream.is_some(), self.output_stream.is_some(), self.busy())
+    }
+
     pub fn busy(&self) -> bool {
         self.switching_input.is_some() || self.switching_output.is_some() || self.switching_buffer.is_some()
     }
@@ -170,7 +296,7 @@ impl DeviceManager {
                     self.input_stream = Some(stream);
                     self.error = None;
                 }
-                Err(e) => self.error = Some(format!("Input device: {e}")),
+                Err(e) => self.error = Some(trf!("Input device: {e}", "Dispositivo de entrada: {e}")),
             }
         }
         if let Some(rx) = &self.switching_output
@@ -182,7 +308,7 @@ impl DeviceManager {
                     self.output_stream = Some(stream);
                     self.error = None;
                 }
-                Err(e) => self.error = Some(format!("Output device: {e}")),
+                Err(e) => self.error = Some(trf!("Output device: {e}", "Dispositivo de saída: {e}")),
             }
         }
         if let Some(rx) = &self.switching_buffer
@@ -192,11 +318,11 @@ impl DeviceManager {
             self.error = None;
             match input {
                 Ok(stream) => self.input_stream = Some(stream),
-                Err(e) => self.error = Some(format!("Input device: {e}")),
+                Err(e) => self.error = Some(trf!("Input device: {e}", "Dispositivo de entrada: {e}")),
             }
             match output {
                 Ok(stream) => self.output_stream = Some(stream),
-                Err(e) => self.error = Some(format!("Output device: {e}")),
+                Err(e) => self.error = Some(trf!("Output device: {e}", "Dispositivo de saída: {e}")),
             }
         }
         if let Some(rx) = &self.refreshing_inputs
@@ -317,21 +443,52 @@ impl DeviceManager {
     /// The devices section of the Settings page.
     pub fn ui(&mut self, ui: &mut Ui, chain: &[PedalInstance], settings: &mut AppSettings) {
         let palette = Palette::of(ui.ctx());
-        if let Some(error) = &self.error {
-            ui.colored_label(palette.danger, format!("⚠ {error}"));
+        let status = self.status();
+        // Whatever stops the audio goes first, with the button that fixes it.
+        let problem = if self.busy() { None } else { self.error.clone().or(status.message().map(str::to_string)) };
+        if let Some(problem) = problem {
+            egui::Frame::new()
+                .fill(palette.danger.gamma_multiply(0.15))
+                .stroke(egui::Stroke::new(1.0_f32, palette.danger.gamma_multiply(0.6)))
+                .corner_radius(egui::CornerRadius::same(5))
+                .inner_margin(egui::Margin::same(style::space::S as i8))
+                .show(ui, |ui| {
+                    ui.set_width(ui.available_width());
+                    let text = RichText::new(format!("⚠ {problem}")).strong().color(palette.danger);
+                    let mut retry = |ui: &mut Ui| {
+                        if ui.button(tr("Retry", "Tentar de novo")).on_hover_text(tr("Reopen both devices", "Reabrir os dois dispositivos")).clicked() {
+                            self.retry(chain);
+                        }
+                    };
+                    // A wrapped label and a button in one row overlap, so
+                    // the button goes under the text on narrow windows.
+                    if ui.ctx().screen_rect().width() < style::NARROW_WIDTH {
+                        ui.label(text);
+                        retry(ui);
+                    } else {
+                        ui.horizontal_wrapped(|ui| {
+                            ui.label(text);
+                            retry(ui);
+                        });
+                    }
+                });
+            ui.add_space(style::space::XS);
         }
+        // Room for the label column, the refresh button and the spacing,
+        // so the row fits on a phone.
+        let combo_width = (ui.available_width() - 140.0).clamp(120.0, 280.0);
         egui::Grid::new("device_grid").num_columns(3).spacing([12.0, 8.0]).show(ui, |ui| {
-            ui.label("Input");
+            ui.label(tr("Input", "Entrada"));
             if self.switching_input.is_some() {
                 ui.horizontal(|ui| {
                     ui.spinner();
-                    ui.label("Connecting...");
+                    ui.label(tr("Connecting...", "Conectando..."));
                 });
             } else {
                 let mut picked = None;
                 egui::ComboBox::from_id_salt("input_device")
-                    .selected_text(if self.selected_input.is_empty() { "(none)" } else { &self.selected_input })
-                    .width(280.0)
+                    .selected_text(if self.selected_input.is_empty() { tr("(none)", "(nenhum)") } else { &self.selected_input })
+                    .width(combo_width)
                     .show_ui(ui, |ui| {
                         for name in &self.available_inputs {
                             if ui.selectable_label(*name == self.selected_input, name).clicked() {
@@ -345,22 +502,22 @@ impl DeviceManager {
             }
             if self.refreshing_inputs.is_some() {
                 ui.spinner();
-            } else if ui.button("🔄").on_hover_text("Refresh the device list").clicked() {
+            } else if ui.button("🔄").on_hover_text(tr("Refresh the device list", "Atualizar a lista de dispositivos")).clicked() {
                 self.refresh(true);
             }
             ui.end_row();
 
-            ui.label("Output");
+            ui.label(tr("Output", "Saída"));
             if self.switching_output.is_some() {
                 ui.horizontal(|ui| {
                     ui.spinner();
-                    ui.label("Connecting...");
+                    ui.label(tr("Connecting...", "Conectando..."));
                 });
             } else {
                 let mut picked = None;
                 egui::ComboBox::from_id_salt("output_device")
-                    .selected_text(if self.selected_output.is_empty() { "(none)" } else { &self.selected_output })
-                    .width(280.0)
+                    .selected_text(if self.selected_output.is_empty() { tr("(none)", "(nenhum)") } else { &self.selected_output })
+                    .width(combo_width)
                     .show_ui(ui, |ui| {
                         for name in &self.available_outputs {
                             if ui.selectable_label(*name == self.selected_output, name).clicked() {
@@ -374,7 +531,7 @@ impl DeviceManager {
             }
             if self.refreshing_outputs.is_some() {
                 ui.spinner();
-            } else if ui.button("🔄").on_hover_text("Refresh the device list").clicked() {
+            } else if ui.button("🔄").on_hover_text(tr("Refresh the device list", "Atualizar a lista de dispositivos")).clicked() {
                 self.refresh(false);
             }
             ui.end_row();
@@ -383,7 +540,7 @@ impl DeviceManager {
             if self.switching_buffer.is_some() {
                 ui.horizontal(|ui| {
                     ui.spinner();
-                    ui.label("Applying...");
+                    ui.label(tr("Applying...", "Aplicando..."));
                 });
             } else {
                 let mut selected = self.buffer_frames;
@@ -402,7 +559,10 @@ impl DeviceManager {
                         }
                     })
                     .response
-                    .on_hover_text("Smaller = less latency but more risk of crackles. The device may clamp it.");
+                    .on_hover_text(tr(
+                        "Smaller = less latency but more risk of crackles. The device may clamp it.",
+                        "Menor = menos latência, mas mais risco de estalos. O dispositivo pode limitar o valor.",
+                    ));
                 if selected != self.buffer_frames {
                     self.set_buffer_frames(selected, chain, settings);
                 }
@@ -410,23 +570,17 @@ impl DeviceManager {
             ui.label("");
             ui.end_row();
         });
-        ui.horizontal_wrapped(|ui| {
-            let (buffer_ms, queue_ms, cpu) = self.load();
-            let color = if cpu > 80.0 {
-                palette.danger
-            } else if cpu > 50.0 {
-                palette.warn
-            } else {
-                palette.ok
-            };
-            ui.colored_label(color, format!("Round trip {buffer_ms:.1} ms + queue {queue_ms:.1} ms · DSP {cpu:.0}% of the budget"));
-            if !self.busy() && ui.button("Retry / restart audio").on_hover_text("Reopen both devices").clicked() {
-                self.retry(chain);
-            }
-            if !self.audio_running() && !self.busy() {
-                ui.label(RichText::new("audio stopped").color(palette.danger));
-            }
-        });
+        // The live numbers only while both streams run; the problem box
+        // above covers the rest, and the grid's spinners a switch.
+        if status.is_running() {
+            ui.horizontal_wrapped(|ui| {
+                let (buffer_ms, queue_ms, cpu) = self.load();
+                ui.colored_label(LoadLevel::of(cpu).color(&palette), load_text(buffer_ms, queue_ms, cpu));
+                if ui.button(tr("Restart audio", "Reiniciar áudio")).on_hover_text(tr("Reopen both devices", "Reabrir os dois dispositivos")).clicked() {
+                    self.retry(chain);
+                }
+            });
+        }
     }
 }
 
@@ -441,5 +595,48 @@ mod tests {
         assert!(!is_valid_device("HDMI 0", true));
         assert!(is_valid_device("HDMI 0", false));
         assert!(!is_valid_device("JACK Audio Connection Kit", false));
+    }
+
+    #[test]
+    fn status_follows_the_streams() {
+        assert_eq!(AudioStatus::from_streams(true, true, false), AudioStatus::Running);
+        assert_eq!(AudioStatus::from_streams(false, false, false), AudioStatus::Stopped);
+        assert_eq!(AudioStatus::from_streams(true, false, false), AudioStatus::NoOutput);
+        assert_eq!(AudioStatus::from_streams(false, true, false), AudioStatus::NoInput);
+        assert_eq!(AudioStatus::from_streams(false, false, true), AudioStatus::Starting);
+        assert_eq!(AudioStatus::from_streams(true, true, true), AudioStatus::Starting);
+    }
+
+    #[test]
+    fn only_a_running_status_has_no_label() {
+        assert!(AudioStatus::Running.is_running());
+        assert_eq!(AudioStatus::Running.short_label(), None);
+        assert_eq!(AudioStatus::Running.message(), None);
+        assert_eq!(AudioStatus::Stopped.short_label(), Some("audio off"));
+        assert_eq!(AudioStatus::Starting.message(), None);
+        for status in [AudioStatus::Stopped, AudioStatus::NoOutput, AudioStatus::NoInput] {
+            assert!(!status.is_running());
+            assert!(status.short_label().is_some());
+            assert!(status.message().is_some());
+        }
+    }
+
+    #[test]
+    fn load_levels_and_text() {
+        assert_eq!(LoadLevel::of(0.0), LoadLevel::Fine);
+        assert_eq!(LoadLevel::of(50.0), LoadLevel::Fine);
+        assert_eq!(LoadLevel::of(60.0), LoadLevel::High);
+        assert_eq!(LoadLevel::of(95.0), LoadLevel::Overloaded);
+        let palette = Palette::dark();
+        assert_eq!(LoadLevel::Overloaded.color(&palette), palette.danger);
+        assert_eq!(load_text(42.66, 0.0, 3.4), "Round trip 42.7 ms + queue 0.0 ms · DSP 3% of the budget");
+    }
+
+    #[test]
+    fn startup_error_names_the_missing_side() {
+        assert_eq!(startup_error(true, true), None);
+        assert!(startup_error(false, false).unwrap().starts_with("No audio device"));
+        assert!(startup_error(false, true).unwrap().contains("input"));
+        assert!(startup_error(true, false).unwrap().contains("output"));
     }
 }

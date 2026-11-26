@@ -45,6 +45,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::backend::audio_file::decode_file;
+use crate::shared::i18n::tr;
+use crate::trf;
 use crate::shared::tab::model::Score;
 use crate::shared::tab::repository::{self, METADATA_VERSION, SourceAudio, TabMetadata, TrackInfo};
 use basic_pitch::{NoteEstimate, NoteParams};
@@ -88,15 +90,15 @@ pub enum Stage {
 impl Stage {
     pub fn label(self) -> &'static str {
         match self {
-            Stage::Downloading => "Baixando o áudio do YouTube",
-            Stage::Decoding => "Lendo o áudio",
-            Stage::Separating => "Separando instrumentos",
-            Stage::Beats => "Detectando andamento e compassos",
-            Stage::Guitar => "Transcrevendo a guitarra",
-            Stage::Techniques => "Detectando bends, slides e vibratos",
-            Stage::Bass => "Transcrevendo o baixo",
-            Stage::Saving => "Gravando a tab",
-            Stage::Tone => "Estimando o timbre da guitarra",
+            Stage::Downloading => tr("Downloading the audio from YouTube", "Baixando o áudio do YouTube"),
+            Stage::Decoding => tr("Reading the audio", "Lendo o áudio"),
+            Stage::Separating => tr("Separating instruments", "Separando instrumentos"),
+            Stage::Beats => tr("Detecting tempo and bars", "Detectando andamento e compassos"),
+            Stage::Guitar => tr("Transcribing the guitar", "Transcrevendo a guitarra"),
+            Stage::Techniques => tr("Detecting bends, slides and vibratos", "Detectando bends, slides e vibratos"),
+            Stage::Bass => tr("Transcribing the bass", "Transcrevendo o baixo"),
+            Stage::Saving => tr("Saving the tab", "Gravando a tab"),
+            Stage::Tone => tr("Estimating the guitar tone", "Estimando o timbre da guitarra"),
         }
     }
 
@@ -255,7 +257,7 @@ pub(crate) fn parallel_map<T: Send>(
     check(cancel)?;
     results
         .into_iter()
-        .map(|r| r.ok_or_else(|| "janela sem resultado".to_string()))
+        .map(|r| r.ok_or_else(|| tr("window without a result", "janela sem resultado").to_string()))
         .collect()
 }
 
@@ -708,7 +710,8 @@ pub fn run_youtube(
     progress: &mut dyn FnMut(Progress),
     cancel: &AtomicBool,
 ) -> Result<Output, String> {
-    let dir = youtube::audio_cache_dir().ok_or("sem pasta de dados para guardar o áudio")?;
+    let dir = youtube::audio_cache_dir()
+        .ok_or(tr("no data folder to keep the audio in", "sem pasta de dados para guardar o áudio"))?;
     progress(Progress {
         stage: Stage::Downloading,
         overall: 0.0,
@@ -745,7 +748,7 @@ pub fn run(
     cancel: &AtomicBool,
 ) -> Result<Output, String> {
     if !request.guitar && !request.bass {
-        return Err("escolha pelo menos um instrumento".into());
+        return Err(tr("choose at least one instrument", "escolha pelo menos um instrumento").into());
     }
     let separator = request.separate.then(separation::find_separator).flatten();
     let separating = separator.is_some();
@@ -759,7 +762,7 @@ pub fn run(
 
     report(progress, Stage::Decoding, 0.0);
     let sha256 = repository::file_sha256(&request.audio_path)
-        .map_err(|e| format!("não foi possível ler o áudio: {e}"))?;
+        .map_err(|e| trf!("couldn't read the audio: {e}", "não foi possível ler o áudio: {e}"))?;
     let replaced = repository::find_by_audio_hash(&request.output_dir, &sha256).is_some();
     let mix = Mono::load(&request.audio_path)?;
     let duration = mix.duration();
@@ -859,7 +862,7 @@ pub fn run(
         bass_notes.retain(|n| n.pitch < 48);
     }
     if guitar_notes.is_empty() && bass_notes.is_empty() {
-        return Err("nenhuma nota foi detectada no áudio".into());
+        return Err(tr("no notes were detected in the audio", "nenhuma nota foi detectada no áudio").into());
     }
 
     report(progress, Stage::Saving, 0.0);

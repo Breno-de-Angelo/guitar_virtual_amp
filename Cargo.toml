@@ -26,3 +26,13 @@ opt-level = 3
 opt-level = 3
 [profile.dev.package.tract-transformers]
 opt-level = 3
+# Same for audio decoding: a 7-minute m4a (YouTube previews, backing
+# tracks) decodes in ~1.7 s instead of ~5 s.
+[profile.dev.package.symphonia-core]
+opt-level = 3
+[profile.dev.package.symphonia-codec-aac]
+opt-level = 3
+[profile.dev.package.symphonia-bundle-mp3]
+opt-level = 3
+[profile.dev.package.symphonia-format-isomp4]
+opt-level = 3

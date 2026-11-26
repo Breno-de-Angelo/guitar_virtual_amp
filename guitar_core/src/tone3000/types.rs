@@ -8,6 +8,7 @@
 
 use serde::{Deserialize, Deserializer};
 
+use crate::shared::i18n::tr;
 use crate::shared::pedals::Tone3000Source;
 
 /// Accepts an ID sent as a JSON number or string. The API docs list IDs as
@@ -217,11 +218,11 @@ impl ToneList {
 
     pub fn label(self) -> &'static str {
         match self {
-            ToneList::Favorited => "Favorites",
-            ToneList::Created => "Created",
-            ToneList::Downloaded => "Downloaded",
-            ToneList::Trending => "Trending",
-            ToneList::Latest => "Latest",
+            ToneList::Favorited => tr("Favorites", "Favoritos"),
+            ToneList::Created => tr("Created", "Criados"),
+            ToneList::Downloaded => tr("Downloaded", "Baixados"),
+            ToneList::Trending => tr("Trending", "Em alta"),
+            ToneList::Latest => tr("Latest", "Recentes"),
         }
     }
 

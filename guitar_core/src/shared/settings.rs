@@ -74,6 +74,8 @@ pub enum ThemePref {
 #[serde(default)]
 pub struct UiPrefs {
     pub theme: ThemePref,
+    /// UI language (`shared::i18n`).
+    pub language: crate::shared::i18n::LanguagePref,
     /// UI scale (egui zoom factor).
     pub zoom: f32,
     pub output_volume_db: f32,
@@ -94,7 +96,7 @@ pub struct UiPrefs {
     /// The tuner, practice mode and analyzer hear the guitar before the
     /// pedals (effects confuse pitch detection).
     pub analysis_dry: bool,
-    /// Page shown at launch (`frontend::gui::Page::label`).
+    /// Page shown at launch (`frontend::gui::Page::key`).
     pub last_page: Option<String>,
     /// Presets in performance order, for next/previous switching and MIDI
     /// program changes. Empty = every preset, user ones first.
@@ -106,6 +108,7 @@ impl Default for UiPrefs {
     fn default() -> Self {
         Self {
             theme: ThemePref::Dark,
+            language: Default::default(),
             zoom: 1.0,
             output_volume_db: 0.0,
             input_gain_db: 0.0,
@@ -152,6 +155,9 @@ pub struct AppSettings {
     pub soundfont_path: Option<PathBuf>,
     /// Last tab opened in the tab player, reopened on launch.
     pub last_tab: Option<PathBuf>,
+    /// Tabs opened in the tab player, most recent first (at most 10, see
+    /// `frontend::ui::tab_start::push_recent`).
+    pub recent_tabs: Vec<PathBuf>,
     /// Keyed by the tab file's path.
     pub tab_sync: BTreeMap<String, TabSyncSettings>,
     pub practice: PracticePrefs,
@@ -237,6 +243,7 @@ mod tests {
             buffer_frames: Some(256),
             soundfont_path: Some(PathBuf::from("/sf/FluidR3_GM.sf2")),
             last_tab: Some(PathBuf::from("/tabs/song.gp5")),
+            recent_tabs: vec![PathBuf::from("/tabs/song.gp5"), PathBuf::from("/tabs/other.gp")],
             tab_sync: BTreeMap::from([(
                 "/tabs/song.gp5".to_string(),
                 TabSyncSettings {
@@ -268,6 +275,7 @@ mod tests {
         assert_eq!(restored.input_device.as_deref(), Some("Mic"));
         assert_eq!(restored.buffer_frames, Some(128));
         assert!(restored.tab_sync.is_empty());
+        assert!(restored.recent_tabs.is_empty());
         assert_eq!(restored.practice, PracticePrefs::default());
         assert_eq!(restored.transcription_guitar_model, GuitarModel::Gaps);
         assert_eq!(restored.transcription_fingering, Fingering::Learned);

@@ -11,7 +11,9 @@
 
 use super::library::words;
 use super::model::ScoreTrack;
+use crate::shared::i18n::tr;
 use crate::shared::preset::Preset;
+use crate::trf;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct ToneGuess {
@@ -52,34 +54,38 @@ pub fn guess_tone(track: &ScoreTrack) -> Option<ToneGuess> {
     let lowest = track.tuning.iter().copied().min().unwrap_or(40);
     let palm_muted = palm_mute_ratio(track);
     let label = if track.name.is_empty() {
-        "sem nome".to_string()
+        tr("unnamed", "sem nome").to_string()
     } else {
         track.name.clone()
     };
 
     let (preset, why) =
         if track.program <= 25 || has(&["acoustic", "acústic", "nylon", "violão", "violao"]) {
-            ("Acoustic Simulation", "violão / guitarra acústica")
+            ("Acoustic Simulation", tr("acoustic guitar", "violão / guitarra acústica"))
         } else if track.program == 26 || has(&["jazz"]) {
-            ("Clean Jazz", "guitarra jazz")
+            ("Clean Jazz", tr("jazz guitar", "guitarra jazz"))
         } else if has(&["funk", "wah"]) {
-            ("Funk Wah", "guitarra funk / wah")
+            ("Funk Wah", tr("funk / wah guitar", "guitarra funk / wah"))
         } else if track.program == 27 || has(&["clean", "limpa", "limpo"]) {
-            ("Pop Clean", "timbre limpo")
+            ("Pop Clean", tr("clean tone", "timbre limpo"))
         } else if has(&["lead", "solo"]) || track.program == 31 {
-            ("Rock Lead", "guitarra solo")
+            ("Rock Lead", tr("lead guitar", "guitarra solo"))
         } else if track.program == 30 || has(&["dist", "metal", "heavy", "high gain"]) {
             if lowest < 40 {
-                ("Metal Djent", "distorção com afinação baixa")
+                ("Metal Djent", tr("distortion with low tuning", "distorção com afinação baixa"))
             } else {
-                ("Metal High Gain", "distorção pesada")
+                ("Metal High Gain", tr("heavy distortion", "distorção pesada"))
             }
         } else if palm_muted > 0.3 {
-            ("Classic Rock Rhythm", "base com muito palm mute")
+            ("Classic Rock Rhythm", tr("rhythm with lots of palm mute", "base com muito palm mute"))
         } else {
-            ("Blues Crunch", "overdrive leve")
+            ("Blues Crunch", tr("light overdrive", "overdrive leve"))
         };
-    let reason = format!("faixa \"{label}\": {why} (programa GM {})", track.program);
+    let reason = trf!(
+        "track \"{label}\": {why} (GM program {})",
+        "faixa \"{label}\": {why} (programa GM {})",
+        track.program
+    );
     Some(ToneGuess {
         factory_preset: preset,
         reason,

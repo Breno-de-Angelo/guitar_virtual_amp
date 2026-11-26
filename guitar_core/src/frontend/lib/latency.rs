@@ -12,6 +12,8 @@ use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
 use crate::backend::controls::AudioControls;
+use crate::shared::i18n::tr;
+use crate::trf;
 
 /// Pulses per measurement.
 const PULSES: usize = 6;
@@ -147,7 +149,13 @@ impl LatencyProbe {
                 self.pending = Some(sent);
             } else if self.requested_at.elapsed() > Duration::from_secs(2) {
                 self.running = false;
-                self.state = ProbeState::Failed("The audio output isn't running, so no pulse was played.".into());
+                self.state = ProbeState::Failed(
+                    tr(
+                        "The audio output isn't running, so no pulse was played.",
+                        "A saída de áudio não está ativa, então nenhum pulso foi tocado.",
+                    )
+                    .into(),
+                );
                 return;
             }
         }
@@ -180,9 +188,11 @@ impl LatencyProbe {
         let heard = self.hits.len();
         self.state = match median(&mut self.hits) {
             Some(latency_secs) if heard * 2 >= PULSES => ProbeState::Done { latency_secs, heard },
-            _ => ProbeState::Failed(format!(
+            _ => ProbeState::Failed(trf!(
                 "Heard {heard} of {PULSES} pulses. Turn the speakers up, hold the microphone near them (or \
-                 connect the output to the input with a cable) and try again."
+                 connect the output to the input with a cable) and try again.",
+                "{heard} de {PULSES} pulsos ouvidos. Aumente o volume, aproxime o microfone das caixas (ou \
+                 ligue a saída na entrada com um cabo) e tente de novo."
             )),
         };
     }

@@ -6,8 +6,10 @@ use eframe::egui::{self, RichText, Sense, Ui, vec2};
 use crate::backend::controls::AudioControls;
 use crate::frontend::lib::metronome::Metronome;
 use crate::frontend::style::{self, Palette};
+use crate::shared::i18n::tr;
 use crate::shared::pedals::{PedalDescription, PedalInstance};
 use crate::shared::settings::UiPrefs;
+use crate::trf;
 
 /// UI wrapper around `Metronome`: big BPM readout, tap tempo, start/stop,
 /// beats per bar (the first beat is accented), click volume, beat lights,
@@ -76,16 +78,20 @@ impl MetronomePanel {
         self.sync_audio();
     }
 
-    /// A small "● 120" indicator for the top bar: flashes on every click.
-    pub fn compact_indicator(&mut self, ui: &mut Ui) -> egui::Response {
+    /// The top bar's metronome button, "♩ 120 BPM": a click starts or stops
+    /// it, and while it runs the note flashes on every click. `compact`
+    /// drops the "BPM" (phones).
+    pub fn compact_indicator(&mut self, ui: &mut Ui, compact: bool) -> egui::Response {
         let palette = Palette::of(ui.ctx());
         self.poll_clicks(ui.ctx());
-        let color = if self.metronome.running {
-            palette.accent.gamma_multiply(0.35 + 0.65 * self.flash)
-        } else {
-            palette.text_dim.gamma_multiply(0.5)
-        };
-        ui.label(RichText::new(format!("⚫ {:.0}", self.metronome.bpm)).color(color))
+        let running = self.metronome.running;
+        let note_color = if running { palette.accent.gamma_multiply(0.35 + 0.65 * self.flash) } else { palette.text_dim };
+        let mut job = egui::text::LayoutJob::default();
+        let font = egui::FontId::proportional(style::text::BODY);
+        job.append("♩ ", 0.0, egui::TextFormat::simple(font.clone(), note_color));
+        let bpm = if compact { format!("{:.0}", self.metronome.bpm) } else { format!("{:.0} BPM", self.metronome.bpm) };
+        job.append(&bpm, 0.0, egui::TextFormat::simple(font, if running { palette.text } else { palette.text_dim }));
+        ui.add(egui::Button::new(job).selected(running))
     }
 
     fn poll_clicks(&mut self, ctx: &egui::Context) {
@@ -144,32 +150,34 @@ impl MetronomePanel {
         ui.add_space(style::space::S);
 
         ui.horizontal_wrapped(|ui| {
-            let label = if self.metronome.running { "⏹ Stop" } else { "▶ Start" };
+            let label = if self.metronome.running { tr("⏹ Stop", "⏹ Parar") } else { tr("▶ Start", "▶ Iniciar") };
             if ui.add(egui::Button::new(RichText::new(label).strong()).min_size(vec2(90.0, 0.0))).clicked() {
                 self.toggle();
             }
-            if ui.button("👆 Tap").on_hover_text("Tap a few times in tempo (key: T)").clicked() {
+            if ui.button(tr("👆 Tap", "👆 Marcar")).on_hover_text(tr("Tap a few times in tempo (key: T)", "Toque algumas vezes no tempo (tecla: T)")).clicked() {
                 self.metronome.tap();
             }
             ui.separator();
-            ui.label("Beats per bar:");
+            ui.label(tr("Beats per bar:", "Tempos por compasso:"));
             egui::ComboBox::from_id_salt("metronome_beats")
                 .selected_text(if prefs.metronome_beats_per_bar <= 1 {
-                    "no accent".to_string()
+                    tr("no accent", "sem acento").to_string()
                 } else {
                     prefs.metronome_beats_per_bar.to_string()
                 })
                 .width(90.0)
                 .show_ui(ui, |ui| {
-                    prefs_changed |= ui.selectable_value(&mut prefs.metronome_beats_per_bar, 0, "no accent").changed();
+                    prefs_changed |= ui.selectable_value(&mut prefs.metronome_beats_per_bar, 0, tr("no accent", "sem acento")).changed();
                     for n in 2..=12 {
                         prefs_changed |= ui.selectable_value(&mut prefs.metronome_beats_per_bar, n, n.to_string()).changed();
                     }
                 });
-            ui.separator();
-            prefs_changed |= ui
-                .add(egui::Slider::new(&mut prefs.metronome_volume, 0.0..=2.0).text("click volume").fixed_decimals(1))
-                .changed();
+        });
+        // Its own row: a slider is a group, which a wrapped row can't move to the next line.
+        ui.horizontal(|ui| {
+            ui.label(tr("Click volume:", "Volume do clique:"));
+            ui.spacing_mut().slider_width = (ui.available_width() - 60.0).clamp(60.0, 200.0);
+            prefs_changed |= ui.add(egui::Slider::new(&mut prefs.metronome_volume, 0.0..=2.0).fixed_decimals(1)).changed();
         });
         if prefs_changed {
             self.controls.set_metronome_beats_per_bar(prefs.metronome_beats_per_bar);
@@ -190,9 +198,10 @@ impl MetronomePanel {
             let quarter_ms = 60_000.0 / self.metronome.bpm;
             for (label, factor) in [("♩", 1.0), ("♪", 0.5), ("♪.", 0.75), ("♪³", 1.0 / 3.0)] {
                 if ui
-                    .button(format!("Sync delays to {label}"))
-                    .on_hover_text(format!(
+                    .button(trf!("Sync delays to {label}", "Sincronizar delays a {label}"))
+                    .on_hover_text(trf!(
                         "Delay time {:.0} ms, tremolo rate in the same note value",
+                        "Tempo do delay {:.0} ms, velocidade do tremolo na mesma figura",
                         quarter_ms * factor
                     ))
                     .clicked()

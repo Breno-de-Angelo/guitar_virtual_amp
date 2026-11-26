@@ -12,6 +12,9 @@ use symphonia::core::io::{MediaSource, MediaSourceStream};
 use symphonia::core::meta::MetadataOptions;
 use symphonia::core::probe::Hint;
 
+use crate::shared::i18n::tr;
+use crate::trf;
+
 /// File extensions offered in the backing-track file picker.
 pub const AUDIO_EXTENSIONS: &[&str] = &["mp3", "ogg", "flac", "wav", "m4a", "aac"];
 
@@ -44,7 +47,7 @@ impl DecodedAudio {
 }
 
 pub fn decode_file(path: &Path) -> Result<DecodedAudio, String> {
-    let file = std::fs::File::open(path).map_err(|e| format!("Não foi possível abrir o áudio: {e}"))?;
+    let file = std::fs::File::open(path).map_err(|e| trf!("Couldn't open the audio: {e}", "Não foi possível abrir o áudio: {e}"))?;
     let mut hint = Hint::new();
     if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
         hint.with_extension(ext);
@@ -66,7 +69,7 @@ pub struct DecodedStereo {
 /// Like [`decode_file`], keeping the first two channels apart.
 pub fn decode_file_stereo(path: &Path) -> Result<DecodedStereo, String> {
     let file =
-        std::fs::File::open(path).map_err(|e| format!("Não foi possível abrir o áudio: {e}"))?;
+        std::fs::File::open(path).map_err(|e| trf!("Couldn't open the audio: {e}", "Não foi possível abrir o áudio: {e}"))?;
     let mut hint = Hint::new();
     if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
         hint.with_extension(ext);
@@ -109,18 +112,18 @@ fn decode_source(
     let stream = MediaSourceStream::new(source, Default::default());
     let probed = symphonia::default::get_probe()
         .format(&hint, stream, &FormatOptions::default(), &MetadataOptions::default())
-        .map_err(|e| format!("Formato de áudio não suportado: {e}"))?;
+        .map_err(|e| trf!("Unsupported audio format: {e}", "Formato de áudio não suportado: {e}"))?;
     let mut format = probed.format;
     let track = format
         .tracks()
         .iter()
         .find(|t| t.codec_params.codec != CODEC_TYPE_NULL)
-        .ok_or("O arquivo não tem nenhuma faixa de áudio")?;
+        .ok_or(tr("The file has no audio track", "O arquivo não tem nenhuma faixa de áudio"))?;
     let track_id = track.id;
     let mut sample_rate = track.codec_params.sample_rate.unwrap_or(0);
     let mut decoder = symphonia::default::get_codecs()
         .make(&track.codec_params, &DecoderOptions::default())
-        .map_err(|e| format!("Codec não suportado: {e}"))?;
+        .map_err(|e| trf!("Unsupported codec: {e}", "Codec não suportado: {e}"))?;
 
     let mut samples = Vec::new();
     let mut second: Vec<f32> = Vec::new();
@@ -132,7 +135,7 @@ fn decode_source(
             Ok(p) => p,
             Err(SymphoniaError::IoError(e)) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
             Err(SymphoniaError::ResetRequired) => break,
-            Err(e) => return Err(format!("Erro ao ler o áudio: {e}")),
+            Err(e) => return Err(trf!("Error reading the audio: {e}", "Erro ao ler o áudio: {e}")),
         };
         if packet.track_id() != track_id {
             continue;
@@ -141,7 +144,7 @@ fn decode_source(
             Ok(d) => d,
             // Corrupt frames are skipped rather than aborting the whole file.
             Err(SymphoniaError::DecodeError(_)) => continue,
-            Err(e) => return Err(format!("Erro ao decodificar o áudio: {e}")),
+            Err(e) => return Err(trf!("Error decoding the audio: {e}", "Erro ao decodificar o áudio: {e}")),
         };
         let spec = *decoded.spec();
         sample_rate = spec.rate;
@@ -168,7 +171,7 @@ fn decode_source(
         }
     }
     if samples.is_empty() || sample_rate == 0 {
-        return Err("Nenhum áudio decodificado".to_string());
+        return Err(tr("No audio could be decoded", "Nenhum áudio decodificado").to_string());
     }
     let second = (second.len() == samples.len()).then_some(second);
     Ok((

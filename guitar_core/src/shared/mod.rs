@@ -1,5 +1,6 @@
 pub mod config;
 pub mod factory_presets;
+pub mod i18n;
 pub mod paths;
 pub mod midi;
 pub mod pedals;

@@ -22,6 +22,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use crate::shared::paths::app_data_dir;
+use crate::trf;
 
 pub const MODEL: &str = "htdemucs_6s";
 
@@ -211,7 +212,7 @@ pub fn separate(
 ) -> Result<Stems, String> {
     let label = separator.label();
     std::fs::create_dir_all(work_dir)
-        .map_err(|e| format!("não foi possível criar {}: {e}", work_dir.display()))?;
+        .map_err(|e| trf!("couldn't create {}: {e}", "não foi possível criar {}: {e}", work_dir.display()))?;
     let stems = Stems {
         dir: work_dir.join(separator.stem_dir()),
     };
@@ -247,7 +248,8 @@ pub fn separate(
     }
     for stem in ["guitar", "bass", "drums"] {
         if !stems.path(stem).is_file() {
-            return Err(format!(
+            return Err(trf!(
+                "{label} didn't produce {}",
                 "o {label} não gerou {}",
                 stems.path(stem).display()
             ));
@@ -320,7 +322,7 @@ fn write_stereo_wav(input: &Path, output: &Path, rate: u32) -> Result<(), String
         bits_per_sample: 32,
         sample_format: hound::SampleFormat::Float,
     };
-    let error = |e: hound::Error| format!("não foi possível gravar {}: {e}", output.display());
+    let error = |e: hound::Error| trf!("couldn't write {}: {e}", "não foi possível gravar {}: {e}", output.display());
     let mut writer = hound::WavWriter::create(output, spec).map_err(error)?;
     for (l, r) in left.iter().zip(&right) {
         writer.write_sample(*l).map_err(error)?;
@@ -339,7 +341,7 @@ fn is_gpu_out_of_memory(log: &str) -> bool {
 fn failure(label: &str, log: &str) -> String {
     let tail: Vec<&str> = log.lines().rev().take(6).collect();
     let tail: Vec<&str> = tail.into_iter().rev().collect();
-    format!("o {label} falhou:\n{}", tail.join("\n"))
+    trf!("{label} failed:\n{}", "o {label} falhou:\n{}", tail.join("\n"))
 }
 
 /// Runs a separator to the end, reading tqdm progress from its stderr. On
@@ -355,7 +357,8 @@ fn run_tool(
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|e| {
-            format!(
+            trf!(
+                "couldn't start {label} ({}): {e}",
                 "não foi possível iniciar o {label} ({}): {e}",
                 command.get_program().to_string_lossy()
             )
@@ -364,7 +367,7 @@ fn run_tool(
     let mut stderr = child
         .stderr
         .take()
-        .ok_or_else(|| format!("sem stderr do {label}"))?;
+        .ok_or_else(|| trf!("no stderr from {label}", "sem stderr do {label}"))?;
     let (tx, rx) = crossbeam::channel::unbounded::<String>();
     let reader = std::thread::spawn(move || {
         let mut buf = [0u8; 4096];
@@ -391,7 +394,7 @@ fn run_tool(
         match child.try_wait() {
             Ok(Some(status)) => break status,
             Ok(None) => std::thread::sleep(Duration::from_millis(100)),
-            Err(e) => return Err(format!("erro esperando o {label}: {e}")),
+            Err(e) => return Err(trf!("error waiting for {label}: {e}", "erro esperando o {label}: {e}")),
         }
     };
     let _ = reader.join();

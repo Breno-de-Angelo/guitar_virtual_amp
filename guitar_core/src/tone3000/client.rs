@@ -22,6 +22,8 @@ use sha2::{Digest, Sha256};
 use super::storage;
 use super::types::{EmbeddedUser, Model, Page, Tone, ToneList};
 use super::{API_BASE, Tone3000Error};
+use crate::shared::i18n::tr;
+use crate::trf;
 
 /// Largest model file accepted. Standard `.nam` captures are well under
 /// 10 MB; this leaves room for A2 multi-size files and long IRs.
@@ -162,7 +164,7 @@ pub(crate) struct Pkce {
 
 pub(crate) fn random_token(bytes: usize) -> Result<String, Tone3000Error> {
     let mut buf = vec![0u8; bytes];
-    getrandom::fill(&mut buf).map_err(|e| Tone3000Error::Other(format!("no randomness: {e}")))?;
+    getrandom::fill(&mut buf).map_err(|e| Tone3000Error::Other(trf!("no randomness: {e}", "sem fonte de aleatoriedade: {e}")))?;
     Ok(base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(buf))
 }
 
@@ -282,10 +284,14 @@ impl PendingBrowserFlow {
         client: &Tone3000Client,
         cancel: &AtomicBool,
     ) -> Result<BrowserFlowResult, Tone3000Error> {
-        let params = wait_for_callback(&self.listener, cancel, CALLBACK_PAGE)?;
+        let params = wait_for_callback(&self.listener, cancel, callback_page())?;
         if params.state.as_deref() != Some(self.state.as_str()) {
             return Err(Tone3000Error::OAuth(
-                "sign-in response did not match this request (state mismatch)".into(),
+                tr(
+                    "sign-in response did not match this request (state mismatch)",
+                    "a resposta do login não corresponde a este pedido (state mismatch)",
+                )
+                .into(),
             ));
         }
         if let Some(error) = params.error {
@@ -295,7 +301,7 @@ impl PendingBrowserFlow {
             client.exchange_code(&code, &self.pkce.verifier, &self.redirect_uri)?;
         } else if !params.canceled {
             return Err(Tone3000Error::OAuth(
-                "no authorization code returned".into(),
+                tr("no authorization code returned", "nenhum código de autorização recebido").into(),
             ));
         }
         Ok(BrowserFlowResult {
@@ -305,9 +311,16 @@ impl PendingBrowserFlow {
     }
 }
 
-const CALLBACK_PAGE: &str = "<!doctype html><html><head><meta charset=\"utf-8\"><title>TONE3000</title></head>\
+fn callback_page() -> &'static str {
+    tr(
+        "<!doctype html><html><head><meta charset=\"utf-8\"><title>TONE3000</title></head>\
 <body style=\"font-family:sans-serif;text-align:center;padding-top:15vh\">\
-<h2>Done</h2><p>You can close this tab and go back to Guitar Virtual Amp.</p></body></html>";
+<h2>Done</h2><p>You can close this tab and go back to Guitar Virtual Amp.</p></body></html>",
+        "<!doctype html><html><head><meta charset=\"utf-8\"><title>TONE3000</title></head>\
+<body style=\"font-family:sans-serif;text-align:center;padding-top:15vh\">\
+<h2>Pronto</h2><p>Você pode fechar esta aba e voltar ao Guitar Virtual Amp.</p></body></html>",
+    )
+}
 
 fn respond(stream: &mut TcpStream, status: &str, body: &str) {
     let response = format!(
@@ -335,7 +348,7 @@ pub(crate) fn wait_for_callback(
         }
         if Instant::now() > deadline {
             return Err(Tone3000Error::OAuth(
-                "timed out waiting for the browser".into(),
+                tr("timed out waiting for the browser", "tempo esgotado esperando o navegador").into(),
             ));
         }
         match listener.accept() {
@@ -452,8 +465,9 @@ impl Tone3000Client {
                     std::thread::sleep(Duration::from_millis(50));
                 }
                 Err(e) => {
-                    return Err(Tone3000Error::Io(format!(
+                    return Err(Tone3000Error::Io(trf!(
                         "could not listen on 127.0.0.1:{} for the sign-in redirect: {e}",
+                        "não foi possível escutar em 127.0.0.1:{} para o retorno do login: {e}",
                         self.inner.redirect_port
                     )));
                 }
@@ -490,8 +504,9 @@ impl Tone3000Client {
         let status = response.status();
         match response.body_mut().read_json::<OAuthErrorBody>() {
             Ok(body) => Err(TokenFailure::OAuth(body)),
-            Err(_) => Err(TokenFailure::Other(Tone3000Error::Http(format!(
-                "token request failed ({status})"
+            Err(_) => Err(TokenFailure::Other(Tone3000Error::Http(trf!(
+                "token request failed ({status})",
+                "falha ao pedir o token ({status})"
             )))),
         }
     }
@@ -537,8 +552,9 @@ impl Tone3000Client {
             let body: Result<OAuthErrorBody, _> = response.body_mut().read_json();
             return Err(match body {
                 Ok(err) => Tone3000Error::OAuth(err.error_description.unwrap_or(err.error)),
-                Err(_) => Tone3000Error::Http(format!(
+                Err(_) => Tone3000Error::Http(trf!(
                     "device code request failed ({})",
+                    "falha ao pedir o código do dispositivo ({})",
                     response.status()
                 )),
             });
@@ -566,7 +582,7 @@ impl Tone3000Client {
             }
             if Instant::now() > deadline {
                 return Err(Tone3000Error::OAuth(
-                    "the code expired; request a new one".into(),
+                    tr("the code expired; request a new one", "o código expirou; peça um novo").into(),
                 ));
             }
             let result = self.post_token_raw(&[
@@ -584,11 +600,14 @@ impl Tone3000Client {
                     "authorization_pending" => {}
                     "slow_down" => interval += 5,
                     "access_denied" => {
-                        return Err(Tone3000Error::OAuth("sign-in was declined".into()));
+                        return Err(Tone3000Error::OAuth(
+                            tr("sign-in was declined", "o login foi recusado").into(),
+                        ));
                     }
                     "expired_token" => {
                         return Err(Tone3000Error::OAuth(
-                            "the code expired; request a new one".into(),
+                            tr("the code expired; request a new one", "o código expirou; peça um novo")
+                                .into(),
                         ));
                     }
                     _ => {
@@ -662,12 +681,17 @@ impl Tone3000Client {
                 401 => return Err(Tone3000Error::NotSignedIn),
                 429 => {
                     return Err(Tone3000Error::Http(
-                        "TONE3000 rate limit reached; try again in a minute".into(),
+                        tr(
+                            "TONE3000 rate limit reached; try again in a minute",
+                            "limite de pedidos do TONE3000 atingido; tente de novo em um minuto",
+                        )
+                        .into(),
                     ));
                 }
                 status => {
-                    return Err(Tone3000Error::Http(format!(
-                        "{path} returned HTTP {status}"
+                    return Err(Tone3000Error::Http(trf!(
+                        "{path} returned HTTP {status}",
+                        "{path} retornou HTTP {status}"
                     )));
                 }
             }
@@ -721,11 +745,19 @@ impl Tone3000Client {
     pub fn download_model(&self, tone: &Tone, model: &Model) -> Result<PathBuf, Tone3000Error> {
         if model.model_url.is_empty() {
             return Err(Tone3000Error::Other(
-                "this model has no download URL".into(),
+                tr("this model has no download URL", "este modelo não tem URL de download").into(),
             ));
         }
         let path = storage::model_file_path(tone, model)
-            .ok_or_else(|| Tone3000Error::Io("no writable data directory on this device".into()))?;
+            .ok_or_else(|| {
+                Tone3000Error::Io(
+                    tr(
+                        "no writable data directory on this device",
+                        "nenhuma pasta de dados gravável neste dispositivo",
+                    )
+                    .into(),
+                )
+            })?;
 
         let mut request = self.inner.agent.get(&model.model_url);
         if is_tone3000_url(&model.model_url) {
@@ -734,8 +766,9 @@ impl Tone3000Client {
         }
         let mut response = request.call().map_err(http_error)?;
         if !response.status().is_success() {
-            return Err(Tone3000Error::Http(format!(
+            return Err(Tone3000Error::Http(trf!(
                 "download failed (HTTP {})",
+                "falha no download (HTTP {})",
                 response.status()
             )));
         }

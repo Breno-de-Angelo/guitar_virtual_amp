@@ -143,6 +143,12 @@ impl Palette {
     }
 }
 
+/// Fill of text fields: darker than both the page background and the cards,
+/// so a field reads as a slot on either.
+fn text_field_fill(palette: &Palette) -> Color32 {
+    if palette.dark { Color32::from_rgb(12, 12, 14) } else { Color32::from_rgb(232, 230, 226) }
+}
+
 fn visuals(palette: &Palette) -> egui::Visuals {
     let mut v = if palette.dark { egui::Visuals::dark() } else { egui::Visuals::light() };
     v.panel_fill = palette.background;
@@ -169,6 +175,12 @@ fn visuals(palette: &Palette) -> egui::Visuals {
     }
     v.widgets.inactive.weak_bg_fill = palette.control;
     v.widgets.inactive.bg_fill = palette.control;
+    // Text fields are drawn with the inactive `bg_stroke` around a
+    // `text_edit_bg_color` fill. A 1 px card-colored border makes them
+    // visible on cards and on the page; on buttons the same stroke stays
+    // close to their `control` fill, so they don't look heavier.
+    v.widgets.inactive.bg_stroke = Stroke::new(1.0_f32, palette.card_stroke);
+    v.text_edit_bg_color = Some(text_field_fill(palette));
     v.widgets.hovered.bg_stroke = Stroke::new(1.0_f32, palette.accent.gamma_multiply(0.7));
     v.widgets.active.bg_stroke = Stroke::new(1.0_f32, palette.accent);
     v.widgets.noninteractive.bg_stroke = Stroke::new(1.0_f32, palette.card_stroke);
@@ -287,6 +299,18 @@ mod tests {
         apply(&ctx, &prefs, true, &mut last);
         assert!(ctx.style().visuals.dark_mode);
         assert_eq!(ctx.style().spacing.interact_size.y, TOUCH_TARGET);
+    }
+
+    #[test]
+    fn text_fields_stand_out_from_page_and_cards() {
+        let gray = |c: Color32| (c.r() as i32 + c.g() as i32 + c.b() as i32) / 3;
+        for palette in [Palette::dark(), Palette::light()] {
+            let v = visuals(&palette);
+            let fill = gray(v.text_edit_bg_color());
+            assert!((fill - gray(palette.background)).abs() >= 10, "dark: {}", palette.dark);
+            assert!((fill - gray(palette.card)).abs() >= 10, "dark: {}", palette.dark);
+            assert_eq!(v.widgets.inactive.bg_stroke, Stroke::new(1.0_f32, palette.card_stroke));
+        }
     }
 
     #[test]

@@ -180,10 +180,13 @@ downloaded only when you ask for one, and none are bundled with the app.
 **🤖 Transcrever áudio...** on the Tabs page (or **🤖 Transcrever** next to a Spotify track
 without a tab) turns a recording into a tab with a guitar and a bass track. The audio comes from
 a file (mp3, flac, ogg, wav, m4a) or from **YouTube**: search by artist and song (or paste a
-link), pick a result, and the app downloads the audio track with
-[yt-dlp](https://github.com/yt-dlp/yt-dlp). From a Spotify track the search starts by itself and
-the result whose length matches the Spotify track best is preselected (official "Artist - Topic"
-audio ranks first; live, cover, karaoke and lesson videos last). Downloads are kept in
+link), press ▶ on a result to listen to it right in the app (with a seek bar) before choosing it,
+load more results if needed, and the app downloads the audio track with
+[yt-dlp](https://github.com/yt-dlp/yt-dlp). Results show the channel (✔ verified), length and
+views; the label's official audio is tagged and ranked first, and videos you already made a tab
+from are marked with an "Abrir tab" button. From a Spotify track the search starts by itself and
+the result whose length matches the Spotify track best is preselected (live, cover, karaoke and
+lesson videos rank last). Downloads are kept in
 `<data dir>/guitar_virtual_amp/youtube_audio/` for playback in sync with the tab, never in the
 repository. YouTube's Terms of Service only allow downloading where YouTube offers it or with
 permission from YouTube and the rights holders: use it for content you have the right to

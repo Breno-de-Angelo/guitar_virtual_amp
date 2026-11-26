@@ -43,12 +43,17 @@ use crate::{
         midi::{MidiAction, MidiTrigger},
         pedals::{CabinetParams, NamParams, PedalDescription, PedalInstance},
         preset,
+        i18n::{self, LanguagePref, tr},
         settings::{AppSettings, PresetRef, save_settings},
     },
+    trf,
 };
 
 /// Guitar samples kept for the tuner, analyzer and oscilloscope (~85 ms).
 const SAMPLE_WINDOW: usize = 4096;
+
+/// Page width from which the tuner and the metronome sit side by side.
+const TUNER_SIDE_BY_SIDE_WIDTH: f32 = 1000.0;
 
 /// Capacity of the `audio_rx` channel the entry points create. The audio
 /// thread drops samples when it's full, so it holds about a second: tab
@@ -83,11 +88,9 @@ impl Page {
         }
     }
 
-    pub fn from_label(label: &str) -> Option<Page> {
-        Page::ALL.into_iter().find(|p| p.label() == label)
-    }
-
-    pub fn label(self) -> &'static str {
+    /// The page's name in the settings file (`UiPrefs::last_page`); never
+    /// translated.
+    pub fn key(self) -> &'static str {
         match self {
             Page::Pedalboard => "Pedals",
             Page::Presets => "Presets",
@@ -98,6 +101,68 @@ impl Page {
             Page::Settings => "Settings",
         }
     }
+
+    pub fn from_key(key: &str) -> Option<Page> {
+        Page::ALL.into_iter().find(|p| p.key() == key)
+    }
+
+    /// The name shown in the navigation, in the UI language.
+    pub fn label(self) -> &'static str {
+        match self {
+            Page::Pedalboard => tr("Pedals", "Pedais"),
+            Page::Presets => "Presets",
+            Page::Tuner => tr("Tuner", "Afinador"),
+            Page::Tabs => "Tabs",
+            Page::Spotify => "Spotify",
+            Page::Analyzer => tr("Analyzer", "Analisador"),
+            Page::Settings => tr("Settings", "Ajustes"),
+        }
+    }
+}
+
+/// One navigation entry: the page's icon above its name, both centered.
+/// `bottom` is the phone bottom bar (accent text and a line on top for the
+/// current page); otherwise the rail (an accent-filled tile).
+fn nav_item(ui: &mut egui::Ui, page: Page, selected: bool, size: egui::Vec2, bottom: bool) -> egui::Response {
+    let palette = Palette::of(ui.ctx());
+    let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
+    response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, selected, page.label()));
+    if ui.is_rect_visible(rect) {
+        let painter = ui.painter();
+        let color = match (selected, bottom) {
+            (true, false) => palette.on_accent,
+            (true, true) => palette.accent,
+            (false, _) if response.hovered() => palette.text,
+            (false, false) => palette.text,
+            (false, true) => palette.text_dim,
+        };
+        if selected && !bottom {
+            painter.rect_filled(rect, egui::CornerRadius::same(6), palette.accent);
+        } else if response.hovered() && !bottom {
+            painter.rect_filled(rect, egui::CornerRadius::same(6), ui.visuals().widgets.hovered.weak_bg_fill);
+        }
+        if selected && bottom {
+            let line = egui::Rect::from_min_size(rect.center_top() - vec2(14.0, 0.0), vec2(28.0, 3.0));
+            painter.rect_filled(line, egui::CornerRadius::same(1), palette.accent);
+        }
+        let (icon_size, label_size) = if bottom { (18.0, 10.5) } else { (20.0, 12.0) };
+        let middle = rect.center().y;
+        painter.text(
+            egui::pos2(rect.center().x, middle - label_size * 0.45),
+            egui::Align2::CENTER_BOTTOM,
+            page.icon(),
+            egui::FontId::proportional(icon_size),
+            color,
+        );
+        painter.text(
+            egui::pos2(rect.center().x, middle + label_size * 0.35),
+            egui::Align2::CENTER_TOP,
+            page.label(),
+            egui::FontId::proportional(label_size),
+            color,
+        );
+    }
+    response
 }
 
 /// Parses every NAM model the chain uses into the model cache, on the UI
@@ -185,6 +250,8 @@ pub struct AudioApp {
     toast: Option<Toast>,
     show_shortcuts: bool,
     applied_style: Option<AppliedStyle>,
+    /// Language choice last applied with `i18n::set_language`.
+    applied_language: LanguagePref,
     /// Analysis samples drained since launch (see `lib::latency`).
     received_total: u64,
     latency_probe: LatencyProbe,
@@ -202,6 +269,7 @@ pub struct AudioApp {
 
 impl AudioApp {
     pub fn new(audio_rx: Receiver<i16>, mut setup: AudioSetup, settings: AppSettings) -> Self {
+        i18n::set_language(settings.ui.language.resolve());
         let devices = DeviceManager::new(&mut setup, &settings);
         let controls = setup.controls.clone();
         controls.set_input_gain(db_to_gain(settings.ui.input_gain_db));
@@ -254,7 +322,7 @@ impl AudioApp {
                 .ui
                 .last_page
                 .as_deref()
-                .and_then(Page::from_label)
+                .and_then(Page::from_key)
                 .unwrap_or(if settings.last_tab.is_some() { Page::Tabs } else { Page::Pedalboard }),
             current_preset,
             user_muted: false,
@@ -263,6 +331,7 @@ impl AudioApp {
             toast: None,
             show_shortcuts: false,
             applied_style: None,
+            applied_language: settings.ui.language,
             received_total: 0,
             latency_probe: LatencyProbe::new(crate::shared::config::GLOBAL_CONFIG.sample_rate as f64),
             warned_clipping: false,
@@ -277,6 +346,12 @@ impl AudioApp {
     /// Shows `page` (e.g. to open the app on a given page).
     pub fn set_page(&mut self, page: Page) {
         self.page = page;
+    }
+
+    /// Hides the "no audio device" banner, for offscreen renders that drive
+    /// the audio themselves (`backend::capture::OfflineOutput`).
+    pub fn clear_device_error(&mut self) {
+        self.devices.error = None;
     }
 
     /// Saves the settings soon (debounced, for continuous controls).
@@ -304,7 +379,7 @@ impl AudioApp {
     fn load_preset_ref(&mut self, preset_ref: PresetRef) {
         match load_preset_ref(&preset_ref) {
             Some(p) => self.load_preset(LoadedPreset { pedals: p.pedals, preset_ref, name: p.name }),
-            None => self.toast(format!("Preset not found: {}", preset_ref_name(&preset_ref)), true),
+            None => self.toast(trf!("Preset not found: {}", "Preset não encontrado: {}", preset_ref_name(&preset_ref)), true),
         }
     }
 
@@ -357,22 +432,23 @@ impl AudioApp {
                                 current.pedals = self.pedal_chain.clone();
                             }
                             self.preset_panel.refresh();
-                            self.toast(format!("Saved \"{}\"", existing.name), false);
+                            self.toast(trf!("Saved \"{}\"", "\"{}\" salvo", existing.name), false);
                         }
-                        Err(e) => self.toast(format!("Save failed: {e}"), true),
+                        Err(e) => self.toast(trf!("Save failed: {e}", "Falha ao salvar: {e}"), true),
                     }
                 }
-                Err(e) => self.toast(format!("Save failed: {e}"), true),
+                Err(e) => self.toast(trf!("Save failed: {e}", "Falha ao salvar: {e}"), true),
             }
         } else {
             self.page = Page::Presets;
-            self.toast("Name the preset and press Save", false);
+            self.preset_panel.open_save_form();
+            self.toast(tr("Name the preset and press Save", "Dê um nome ao preset e clique em Salvar"), false);
         }
     }
 
     fn set_muted(&mut self, muted: bool) {
         self.user_muted = muted;
-        self.toast(if muted { "Output muted (M)" } else { "Output on" }, false);
+        self.toast(if muted { tr("Output muted (M)", "Saída muda (M)") } else { tr("Output on", "Saída ligada") }, false);
     }
 
     fn apply_levels(&self) {
@@ -385,25 +461,25 @@ impl AudioApp {
             match self.recorder.stop() {
                 Some(Ok(path)) => {
                     let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-                    self.toast(format!("Recording saved: {name}"), false);
+                    self.toast(trf!("Recording saved: {name}", "Gravação salva: {name}"), false);
                 }
-                Some(Err(e)) => self.toast(format!("Recording failed: {e}"), true),
+                Some(Err(e)) => self.toast(trf!("Recording failed: {e}", "Falha na gravação: {e}"), true),
                 None => {}
             }
             self.settings_page.invalidate_recordings();
             return;
         }
         if !self.devices.audio_running() {
-            self.toast("Audio isn't running: nothing to record", true);
+            self.toast(tr("Audio isn't running: nothing to record", "O áudio está parado: não há o que gravar"), true);
             return;
         }
         let Some(dir) = recordings_dir() else {
-            self.toast("No folder to save recordings in", true);
+            self.toast(tr("No folder to save recordings in", "Não há pasta para salvar as gravações"), true);
             return;
         };
         let source = if self.settings.ui.record_mix { RecordSource::Mix } else { RecordSource::Guitar };
         match self.recorder.start(&dir, source, self.devices.output_rate()) {
-            Ok(_) => self.toast("Recording… (Ctrl+R or ⏹ to stop)", false),
+            Ok(_) => self.toast(tr("Recording… (Ctrl+R or ⏹ to stop)", "Gravando… (Ctrl+R ou ⏹ para parar)"), false),
             Err(e) => self.toast(e, true),
         }
     }
@@ -427,23 +503,29 @@ impl AudioApp {
                         self.load_preset(LoadedPreset { pedals: p.pedals, preset_ref: PresetRef::User(path), name: p.name });
                         changed = true;
                     }
-                    Err(e) => self.toast(format!("Not a preset: {e}"), true),
+                    Err(e) => self.toast(trf!("Not a preset: {e}", "Não é um preset: {e}"), true),
                 },
                 "nam" => {
                     self.pedal_chain.push(PedalInstance::new(PedalDescription::Nam(NamParams {
                         model_path: Some(path.display().to_string()),
                         ..Default::default()
                     })));
-                    self.toast("Added a NAM Model pedal", false);
+                    self.toast(tr("Added a NAM Model pedal", "Pedal NAM Model adicionado"), false);
                 }
                 "wav" => {
                     self.pedal_chain.push(PedalInstance::new(PedalDescription::Cabinet(CabinetParams {
                         ir_path: Some(path.display().to_string()),
                         ..Default::default()
                     })));
-                    self.toast("Added a Cabinet pedal with this IR", false);
+                    self.toast(tr("Added a Cabinet pedal with this IR", "Pedal Cabinet adicionado com este IR"), false);
                 }
-                _ => self.toast("Drop a preset (.json), a NAM capture (.nam) or an IR (.wav) here; tabs go on the Tabs page", true),
+                _ => self.toast(
+                    tr(
+                        "Drop a preset (.json), a NAM capture (.nam) or an IR (.wav) here; tabs go on the Tabs page",
+                        "Solte aqui um preset (.json), uma captura NAM (.nam) ou um IR (.wav); tabs vão na página Tabs",
+                    ),
+                    true,
+                ),
             }
             changed |= self.pedal_chain != before;
         }
@@ -457,14 +539,14 @@ impl AudioApp {
                 return true;
             }
         }
-        self.toast("Add a Looper pedal first", true);
+        self.toast(tr("Add a Looper pedal first", "Adicione um pedal Looper antes"), true);
         false
     }
 
     fn toggle_pedal(&mut self, index: usize) -> bool {
         let Some(pedal) = self.pedal_chain.get_mut(index) else { return false };
         pedal.enabled = !pedal.enabled;
-        let text = format!("{} {}", pedal.description.name(), if pedal.enabled { "on" } else { "bypassed" });
+        let text = format!("{} {}", pedal.description.name(), if pedal.enabled { tr("on", "ligado") } else { tr("bypassed", "em bypass") });
         self.toast(text, false);
         true
     }
@@ -567,145 +649,223 @@ impl AudioApp {
         changed
     }
 
-    fn top_bar(&mut self, ui: &mut egui::Ui, narrow: bool) -> bool {
+    fn top_bar(&mut self, ui: &mut egui::Ui, narrow: bool) {
         let palette = Palette::of(ui.ctx());
-        let mut chain_changed = false;
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing.x = 6.0;
-            // Preset switcher.
-            if ui.button("◀").on_hover_text("Previous preset (PageUp)").clicked() {
-                self.step_preset(-1);
-            }
-            let dirty = self.preset_dirty();
-            let name = self.current_preset.as_ref().map(|c| c.name.clone()).unwrap_or_else(|| "No preset".into());
-            let label = RichText::new(format!("{name}{}", if dirty { " •" } else { "" })).strong();
-            let label = if self.current_preset.is_some() { label.color(palette.accent) } else { label.color(palette.text_dim) };
-            let hover = if dirty { "Edited since loaded (Ctrl+S saves a user preset)" } else { "Open the Presets page" };
-            if ui.add(egui::Button::new(label).min_size(vec2(if narrow { 110.0 } else { 160.0 }, 0.0))).on_hover_text(hover).clicked() {
-                self.page = Page::Presets;
-            }
-            if ui.button("▶").on_hover_text("Next preset (PageDown)").clicked() {
-                self.step_preset(1);
-            }
-            if dirty
-                && matches!(self.current_preset, Some(CurrentPreset { preset_ref: PresetRef::User(_), .. }))
-                && ui.button("💾").on_hover_text("Save changes to this preset (Ctrl+S)").clicked()
-            {
-                self.save_current_preset();
-            }
+            self.preset_switcher(ui, narrow, &palette);
             ui.separator();
 
-            // Meters.
-            let meter = vec2(if narrow { 60.0 } else { 90.0 }, 12.0);
-            level_meter(ui, &self.in_meter, meter, "IN");
-            level_meter(ui, &self.out_meter, meter, "OUT");
-
-            // Volume and mute.
-            // On phones the master volume lives on the Settings page only.
-            if !narrow {
-                let mut db = self.settings.ui.output_volume_db;
-                let slider = ui.add_sized(vec2(100.0, 18.0), egui::Slider::new(&mut db, -60.0..=12.0).show_value(false));
-                if slider.changed() {
-                    self.settings.ui.output_volume_db = db;
-                    self.apply_levels();
-                }
-                if slider.changed() || slider.drag_stopped() {
-                    self.save_soon();
-                }
-                if slider.double_clicked() {
-                    self.settings.ui.output_volume_db = 0.0;
-                    self.apply_levels();
-                    save_settings(&self.settings);
-                }
-                slider.on_hover_text(format!("Master volume {db:+.1} dB (double-click: 0 dB)"));
-            }
-            let muted = self.controls.muted();
-            let mute_text = if muted { RichText::new("🔇").color(palette.danger) } else { RichText::new("🔊") };
-            if ui.add(egui::Button::new(mute_text).selected(muted)).on_hover_text("Mute (M)").clicked() {
-                self.set_muted(!self.user_muted);
+            // Meters. IN/OUT in both languages, like the jacks on real gear.
+            if narrow {
+                // Stacked, to leave room on a phone's single row.
+                ui.vertical(|ui| {
+                    ui.spacing_mut().item_spacing.y = 3.0;
+                    level_meter(ui, &self.in_meter, vec2(64.0, 10.0), "IN");
+                    level_meter(ui, &self.out_meter, vec2(64.0, 10.0), "OUT");
+                });
+            } else {
+                level_meter(ui, &self.in_meter, vec2(90.0, 12.0), "IN");
+                level_meter(ui, &self.out_meter, vec2(90.0, 12.0), "OUT");
             }
 
-            // Recorder.
-            let rec_text = match self.recorder.elapsed_secs() {
-                Some(secs) => RichText::new(format!("⏹ {}:{:02}", secs as u64 / 60, secs as u64 % 60)).color(palette.danger),
-                None => RichText::new("⏺"),
-            };
-            let source = if self.settings.ui.record_mix { "everything you hear" } else { "the guitar only" };
-            let rec = ui
-                .add(egui::Button::new(rec_text).selected(self.recorder.is_recording()))
-                .on_hover_text(format!("Record {source} to a WAV file (Ctrl+R). Right-click for options."));
-            if rec.clicked() {
-                self.toggle_recording();
-            }
-            rec.context_menu(|ui| {
-                if ui.radio_value(&mut self.settings.ui.record_mix, false, "Record the guitar only").changed()
-                    || ui.radio_value(&mut self.settings.ui.record_mix, true, "Record everything (guitar, click, song)").changed()
+            self.mute_button(ui, &palette);
+            if narrow {
+                // A running recording stays in sight; everything else is in the menu.
+                if self.recorder.is_recording() {
+                    self.record_button(ui, &palette);
+                }
+                if self.metronome_panel.running()
+                    && self.metronome_panel.compact_indicator(ui, true).clicked()
                 {
-                    save_settings(&self.settings);
+                    self.metronome_panel.toggle();
                 }
-                #[cfg(not(target_os = "android"))]
-                if let Some(dir) = recordings_dir()
-                    && ui.button("📂 Open recordings folder").clicked()
-                {
-                    crate::frontend::ui::settings_page::open_folder(&dir);
-                    ui.close();
-                }
-            });
+                self.top_bar_menu(ui, &palette);
+                return;
+            }
 
-            // Metronome.
-            if self.metronome_panel.compact_indicator(ui).interact(egui::Sense::click()).on_hover_text("Metronome (K starts/stops, T taps)").clicked() {
+            self.volume_slider(ui, &palette);
+            ui.separator();
+            self.record_button(ui, &palette);
+            if self
+                .metronome_panel
+                .compact_indicator(ui, false)
+                .on_hover_text(tr("Metronome: click to start/stop (K; T taps the tempo)", "Metrônomo: clique para ligar/desligar (K; T marca o tempo)"))
+                .clicked()
+            {
                 self.metronome_panel.toggle();
             }
-
-            if !narrow {
-                ui.separator();
-                if ui.add_enabled(self.pedalboard.history.can_undo(), egui::Button::new("⟲")).on_hover_text("Undo (Ctrl+Z)").clicked() {
-                    chain_changed |= self.pedalboard.undo(&mut self.pedal_chain);
-                }
-                if ui.add_enabled(self.pedalboard.history.can_redo(), egui::Button::new("⟳")).on_hover_text("Redo (Ctrl+Shift+Z)").clicked() {
-                    chain_changed |= self.pedalboard.redo(&mut self.pedal_chain);
-                }
-                let (buffer_ms, _, cpu) = self.devices.load();
-                let color = if cpu > 80.0 { palette.danger } else if cpu > 50.0 { palette.warn } else { palette.text_dim };
-                ui.label(RichText::new(format!("{buffer_ms:.1} ms · DSP {cpu:.0}%")).small().color(color))
-                    .on_hover_text("Round-trip buffer latency, and how much of each audio callback the pedals use");
-                if ui.small_button("?").on_hover_text("Keyboard shortcuts (F1)").clicked() {
-                    self.show_shortcuts = true;
-                }
+            ui.separator();
+            self.audio_status_label(ui, &palette);
+            if ui.small_button("?").on_hover_text(tr("Keyboard shortcuts (F1)", "Atalhos de teclado (F1)")).clicked() {
+                self.show_shortcuts = true;
             }
         });
-        chain_changed
+    }
+
+    /// ◀ preset ▶ (and 💾 when a user preset was edited).
+    fn preset_switcher(&mut self, ui: &mut egui::Ui, narrow: bool, palette: &Palette) {
+        if ui.button("◀").on_hover_text(tr("Previous preset (PageUp)", "Preset anterior (PageUp)")).clicked() {
+            self.step_preset(-1);
+        }
+        let dirty = self.preset_dirty();
+        let name = self.current_preset.as_ref().map(|c| c.name.clone()).unwrap_or_else(|| tr("No preset", "Nenhum preset").into());
+        let label = RichText::new(format!("{name}{}", if dirty { " •" } else { "" })).strong();
+        let label = if self.current_preset.is_some() { label.color(palette.accent) } else { label.color(palette.text_dim) };
+        let hover = if dirty {
+            tr("Edited since loaded (Ctrl+S saves a user preset)", "Alterado desde que foi carregado (Ctrl+S salva um preset seu)")
+        } else {
+            tr("Open the Presets page", "Abrir a página de presets")
+        };
+        let width = if narrow { 110.0 } else { 160.0 };
+        if ui.add(egui::Button::new(label).truncate().min_size(vec2(width, 0.0))).on_hover_text(hover).clicked() {
+            self.page = Page::Presets;
+        }
+        if ui.button("▶").on_hover_text(tr("Next preset (PageDown)", "Próximo preset (PageDown)")).clicked() {
+            self.step_preset(1);
+        }
+        if dirty
+            && matches!(self.current_preset, Some(CurrentPreset { preset_ref: PresetRef::User(_), .. }))
+            && ui.button("💾").on_hover_text(tr("Save changes to this preset (Ctrl+S)", "Salvar as alterações neste preset (Ctrl+S)")).clicked()
+        {
+            self.save_current_preset();
+        }
+    }
+
+    fn mute_button(&mut self, ui: &mut egui::Ui, palette: &Palette) {
+        let muted = self.controls.muted();
+        let mute_text = if muted { RichText::new("🔇").color(palette.danger) } else { RichText::new("🔊") };
+        let hover = if muted { tr("Muted: click to unmute (M)", "Mudo: clique para reativar (M)") } else { tr("Mute (M)", "Silenciar (M)") };
+        if ui.add(egui::Button::new(mute_text).selected(muted)).on_hover_text(hover).clicked() {
+            self.set_muted(!self.user_muted);
+        }
+    }
+
+    /// Master volume slider with its value next to it.
+    fn volume_slider(&mut self, ui: &mut egui::Ui, palette: &Palette) {
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 4.0;
+            let mut db = self.settings.ui.output_volume_db;
+            let slider = ui.add_sized(vec2(100.0, 18.0), egui::Slider::new(&mut db, -60.0..=12.0).show_value(false));
+            if slider.changed() {
+                self.settings.ui.output_volume_db = db;
+                self.apply_levels();
+            }
+            if slider.changed() || slider.drag_stopped() {
+                self.save_soon();
+            }
+            if slider.double_clicked() {
+                self.settings.ui.output_volume_db = 0.0;
+                self.apply_levels();
+                save_settings(&self.settings);
+            }
+            slider.on_hover_text(tr("Master volume (double-click: 0 dB)", "Volume geral (clique duplo: 0 dB)"));
+            let db = self.settings.ui.output_volume_db;
+            let value = format!("{db:+.0} dB");
+            ui.add_sized(vec2(44.0, 18.0), egui::Label::new(RichText::new(value).small().color(palette.text_dim)));
+        });
+    }
+
+    fn record_button(&mut self, ui: &mut egui::Ui, palette: &Palette) {
+        let rec_text = match self.recorder.elapsed_secs() {
+            Some(secs) => RichText::new(format!("⏹ {}:{:02}", secs as u64 / 60, secs as u64 % 60)).color(palette.danger),
+            None => RichText::new("⏺"),
+        };
+        let source = if self.settings.ui.record_mix { tr("everything you hear", "tudo o que você ouve") } else { tr("the guitar only", "só a guitarra") };
+        let rec = ui
+            .add(egui::Button::new(rec_text).selected(self.recorder.is_recording()))
+            .on_hover_text(trf!(
+                "Record {source} to a WAV file (Ctrl+R). Right-click for options.",
+                "Gravar {source} num arquivo WAV (Ctrl+R). Clique com o botão direito para opções."
+            ));
+        if rec.clicked() {
+            self.toggle_recording();
+        }
+        rec.context_menu(|ui| self.record_options(ui));
+    }
+
+    /// What to record, and the recordings folder.
+    fn record_options(&mut self, ui: &mut egui::Ui) {
+        if ui.radio_value(&mut self.settings.ui.record_mix, false, tr("Record the guitar only", "Gravar só a guitarra")).changed()
+            || ui.radio_value(&mut self.settings.ui.record_mix, true, tr("Record everything (guitar, click, song)", "Gravar tudo (guitarra, clique, música)")).changed()
+        {
+            save_settings(&self.settings);
+        }
+        #[cfg(not(target_os = "android"))]
+        if let Some(dir) = recordings_dir()
+            && ui.button(tr("📂 Open recordings folder", "📂 Abrir a pasta de gravações")).clicked()
+        {
+            crate::frontend::ui::settings_page::open_folder(&dir);
+            ui.close();
+        }
+    }
+
+    /// "42.7 ms · DSP 3%" while audio runs, else what's wrong.
+    fn audio_status_label(&mut self, ui: &mut egui::Ui, palette: &Palette) {
+        let status = self.devices.status();
+        match status.short_label() {
+            Some(text) => {
+                let color = if status == crate::frontend::devices::AudioStatus::Starting { palette.text_dim } else { palette.danger };
+                let label = ui.add(egui::Label::new(RichText::new(text).small().color(color)).sense(egui::Sense::click()));
+                if label.on_hover_text(tr("Open the audio settings", "Abrir os ajustes de áudio")).clicked() {
+                    self.page = Page::Settings;
+                }
+            }
+            None => {
+                let (buffer_ms, _, cpu) = self.devices.load();
+                let color = if cpu > 80.0 { palette.danger } else if cpu > 50.0 { palette.warn } else { palette.text_dim };
+                ui.label(RichText::new(format!("{buffer_ms:.1} ms · DSP {cpu:.0}%")).small().color(color)).on_hover_text(tr(
+                    "Round-trip buffer latency, and how much of each audio callback the pedals use",
+                    "Latência de ida e volta dos buffers, e quanto de cada ciclo de áudio os pedais usam",
+                ));
+            }
+        }
+    }
+
+    /// Phones: the "…" menu with what doesn't fit the top bar.
+    fn top_bar_menu(&mut self, ui: &mut egui::Ui, palette: &Palette) {
+        ui.menu_button(RichText::new("…").strong(), |ui| {
+            ui.set_min_width(240.0);
+            let rec = if self.recorder.is_recording() { tr("⏹ Stop recording", "⏹ Parar a gravação") } else { tr("⏺ Record", "⏺ Gravar") };
+            if ui.button(rec).clicked() {
+                self.toggle_recording();
+                ui.close();
+            }
+            self.record_options(ui);
+            ui.separator();
+            let metronome = if self.metronome_panel.running() {
+                trf!("♩ Stop the metronome ({:.0} BPM)", "♩ Parar o metrônomo ({:.0} BPM)", self.settings.ui.metronome_bpm)
+            } else {
+                trf!("♩ Start the metronome ({:.0} BPM)", "♩ Ligar o metrônomo ({:.0} BPM)", self.settings.ui.metronome_bpm)
+            };
+            if ui.button(metronome).clicked() {
+                self.metronome_panel.toggle();
+                ui.close();
+            }
+            ui.separator();
+            ui.label(RichText::new(tr("Master volume", "Volume geral")).small().color(palette.text_dim));
+            self.volume_slider(ui, palette);
+            ui.separator();
+            self.audio_status_label(ui, palette);
+        });
     }
 
     fn nav_rail(&mut self, ui: &mut egui::Ui) {
-        let palette = Palette::of(ui.ctx());
         ui.add_space(style::space::S);
+        ui.spacing_mut().item_spacing.y = style::space::XS;
         for page in Page::ALL {
-            let selected = self.page == page;
-            let text = RichText::new(format!("{}\n{}", page.icon(), page.label()))
-                .size(13.0)
-                .color(if selected { palette.on_accent } else { palette.text });
-            let button = egui::Button::new(text)
-                .fill(if selected { palette.accent } else { egui::Color32::TRANSPARENT })
-                .min_size(vec2(ui.available_width(), 50.0));
-            if ui.add(button).clicked() {
+            if nav_item(ui, page, self.page == page, vec2(ui.available_width(), 58.0), false).clicked() {
                 self.page = page;
             }
         }
     }
 
     fn bottom_bar(&mut self, ui: &mut egui::Ui) {
-        let palette = Palette::of(ui.ctx());
         let width = ui.available_width() / Page::ALL.len() as f32;
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 0.0;
             for page in Page::ALL {
-                let selected = self.page == page;
-                let text = RichText::new(format!("{}\n{}", page.icon(), page.label()))
-                    .size(11.0)
-                    .color(if selected { palette.accent } else { palette.text_dim });
-                let button = egui::Button::new(text).frame(false).min_size(vec2(width, style::TOUCH_TARGET + 6.0));
-                if ui.add(button).clicked() {
+                if nav_item(ui, page, self.page == page, vec2(width, style::TOUCH_TARGET + 8.0), true).clicked() {
                     self.page = page;
                 }
             }
@@ -714,13 +874,13 @@ impl AudioApp {
 
     fn page_title(&self, ui: &mut egui::Ui) {
         let title = match self.page {
-            Page::Pedalboard => "Pedalboard",
+            Page::Pedalboard => tr("Pedalboard", "Pedaleira"),
             Page::Presets => "Presets",
-            Page::Tuner => "Tuner & metronome",
+            Page::Tuner => tr("Tuner & metronome", "Afinador e metrônomo"),
             Page::Tabs => "Tabs",
             Page::Spotify => "Spotify",
-            Page::Analyzer => "Analyzer",
-            Page::Settings => "Settings",
+            Page::Analyzer => tr("Analyzer", "Analisador"),
+            Page::Settings => tr("Settings", "Ajustes"),
         };
         ui.label(RichText::new(title).size(style::text::HEADING + 2.0).strong());
         ui.add_space(style::space::XS);
@@ -771,25 +931,46 @@ impl AudioApp {
                 egui::ScrollArea::vertical().id_salt("tuner_scroll").auto_shrink([false, false]).show(ui, |ui| {
                     let palette = Palette::of(ui.ctx());
                     let mut save = false;
-                    style::card_frame(&palette).show(ui, |ui| {
-                        ui.set_width(ui.available_width());
-                        save |= self.tuner.ui(ui, &self.buffer, &mut self.settings.ui, tab_tuning);
-                    });
-                    ui.add_space(style::space::M);
-                    style::card_frame(&palette).show(ui, |ui| {
-                        ui.set_width(ui.available_width());
-                        style::section_title(ui, "Metronome");
-                        let (pedals, prefs) = self.metronome_panel.ui(ui, &mut self.pedal_chain, &mut self.settings.ui);
-                        chain_changed |= pedals;
-                        save |= prefs;
-                    });
-                    if save {
+                    let mut tuner_card = |ui: &mut egui::Ui, app: &mut Self| {
+                        style::card_frame(&palette).show(ui, |ui| {
+                            ui.set_width(ui.available_width());
+                            save |= app.tuner.ui(ui, &app.buffer, &mut app.settings.ui, tab_tuning.clone());
+                        });
+                    };
+                    let metronome_card = |ui: &mut egui::Ui, app: &mut Self| {
+                        let mut out = (false, false);
+                        style::card_frame(&palette).show(ui, |ui| {
+                            ui.set_width(ui.available_width());
+                            style::section_title(ui, tr("Metronome", "Metrônomo"));
+                            out = app.metronome_panel.ui(ui, &mut app.pedal_chain, &mut app.settings.ui);
+                        });
+                        out
+                    };
+                    // Side by side when both fit, so the metronome isn't below the fold.
+                    let (pedals, prefs) = if ui.available_width() >= TUNER_SIDE_BY_SIDE_WIDTH {
+                        let mut out = (false, false);
+                        ui.columns(2, |columns| {
+                            tuner_card(&mut columns[0], self);
+                            out = metronome_card(&mut columns[1], self);
+                        });
+                        out
+                    } else {
+                        tuner_card(ui, self);
+                        ui.add_space(style::space::M);
+                        metronome_card(ui, self)
+                    };
+                    chain_changed |= pedals;
+                    if save || prefs {
                         self.save_soon();
                     }
                 });
             }
             Page::Tabs => {
-                if let Some((pedals, preset_ref)) = self.tab_panel.ui(ui, &mut self.settings) {
+                let loaded = self.tab_panel.ui(ui, &mut self.settings);
+                if let Some(notice) = self.tab_panel.take_notice() {
+                    self.toast(notice, false);
+                }
+                if let Some((pedals, preset_ref)) = loaded {
                     let name = preset_ref_name(&preset_ref);
                     self.load_preset(LoadedPreset { pedals, preset_ref, name });
                     chain_changed = true;
@@ -852,7 +1033,7 @@ impl AudioApp {
                     self.settings.practice.extra_latency_ms = extra.round();
                     self.tab_panel.set_practice_prefs(&self.settings.practice);
                     save_settings(&self.settings);
-                    self.toast(format!("Practice extra latency set to {:+.0} ms", extra), false);
+                    self.toast(trf!("Practice extra latency set to {:+.0} ms", "Latência extra da prática: {:+.0} ms", extra), false);
                 }
             }
         }
@@ -881,6 +1062,10 @@ impl eframe::App for AudioApp {
         self.latency_probe.feed(&fresh, &self.controls);
         self.devices.poll();
 
+        if self.settings.ui.language != self.applied_language {
+            self.applied_language = self.settings.ui.language;
+            i18n::set_language(self.applied_language.resolve());
+        }
         let narrow = ctx.screen_rect().width() < style::NARROW_WIDTH;
         style::apply(ctx, &self.settings.ui, narrow, &mut self.applied_style);
         let palette = Palette::of(ctx);
@@ -890,7 +1075,13 @@ impl eframe::App for AudioApp {
         self.out_meter.update(self.controls.take_output_peak(), dt);
         if self.in_meter.clip_secs > 0.0 && !self.warned_clipping {
             self.warned_clipping = true;
-            self.toast("The input is clipping: turn the interface gain (or the input gain in Settings) down", true);
+            self.toast(
+                tr(
+                    "The input is clipping: turn the interface gain (or the input gain in Settings) down",
+                    "A entrada está saturando: baixe o ganho da interface (ou o ganho de entrada em Ajustes)",
+                ),
+                true,
+            );
         }
 
         let mut chain_changed = false;
@@ -903,9 +1094,10 @@ impl eframe::App for AudioApp {
         egui::TopBottomPanel::top("top_bar")
             .frame(egui::Frame::new().fill(palette.panel).inner_margin(egui::Margin::symmetric(10, 6)))
             .show(ctx, |ui| {
-                chain_changed |= self.top_bar(ui, narrow);
+                self.top_bar(ui, narrow);
             });
-        if let Some(error) = self.devices.error.clone() {
+        // The Settings page shows the error itself, next to the devices.
+        if let Some(error) = self.devices.error.clone().filter(|_| self.page != Page::Settings) {
             egui::TopBottomPanel::top("audio_error")
                 .frame(
                     egui::Frame::new()
@@ -914,11 +1106,18 @@ impl eframe::App for AudioApp {
                 )
                 .show(ctx, |ui| {
                     ui.horizontal_wrapped(|ui| {
-                        ui.colored_label(palette.danger, format!("⚠ {error}"));
-                        if ui.button("Retry").clicked() {
+                        if narrow {
+                            // One line on phones; the Settings page has the full message.
+                            let short = self.devices.status().short_label().unwrap_or(tr("audio problem", "problema no áudio"));
+                            ui.colored_label(palette.danger, format!("⚠ {short}"));
+                        } else {
+                            ui.colored_label(palette.danger, format!("⚠ {error}"));
+                        }
+                        if ui.button(tr("Retry", "Tentar de novo")).clicked() {
                             self.devices.retry(&self.pedal_chain);
                         }
-                        if ui.button("Audio settings").clicked() {
+                        let settings = if narrow { tr("Settings", "Ajustes") } else { tr("Audio settings", "Ajustes de áudio") };
+                        if ui.button(settings).clicked() {
                             self.page = Page::Settings;
                         }
                     });
@@ -948,7 +1147,8 @@ impl eframe::App for AudioApp {
 
         if self.show_shortcuts {
             let mut open = true;
-            egui::Window::new("Keyboard shortcuts").open(&mut open).collapsible(false).resizable(false).show(ctx, |ui| {
+            egui::Window::new(tr("Keyboard shortcuts", "Atalhos de teclado"))
+                .id(egui::Id::new("shortcuts_window")).open(&mut open).collapsible(false).resizable(false).show(ctx, |ui| {
                 shortcuts_grid(ui);
             });
             self.show_shortcuts = open;
@@ -985,7 +1185,7 @@ impl eframe::App for AudioApp {
         }
         if self.saved_page != Some(self.page) {
             if self.saved_page.is_some() {
-                self.settings.ui.last_page = Some(self.page.label().to_string());
+                self.settings.ui.last_page = Some(self.page.key().to_string());
                 save_settings(&self.settings);
             }
             self.saved_page = Some(self.page);
@@ -1111,11 +1311,11 @@ mod tests {
     }
 
     #[test]
-    fn pages_round_trip_through_their_labels() {
+    fn pages_round_trip_through_their_keys() {
         for page in Page::ALL {
-            assert_eq!(Page::from_label(page.label()), Some(page));
+            assert_eq!(Page::from_key(page.key()), Some(page));
         }
-        assert_eq!(Page::from_label("nope"), None);
+        assert_eq!(Page::from_key("nope"), None);
         let (audio_tx, audio_rx) = crossbeam::channel::bounded(16);
         let mut settings = AppSettings::default();
         settings.ui.last_page = Some("Tuner".into());

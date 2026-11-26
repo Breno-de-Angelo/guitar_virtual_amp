@@ -27,6 +27,9 @@ pub mod types;
 
 use std::fmt;
 
+use crate::shared::i18n::tr;
+use crate::trf;
+
 pub use client::{PendingSignIn, SpotifyClient};
 pub use types::{Device, PlaybackState, Playlist, Track};
 
@@ -96,39 +99,45 @@ impl SpotifyError {
 impl fmt::Display for SpotifyError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            SpotifyError::NotSignedIn => write!(f, "não conectado ao Spotify"),
-            SpotifyError::Cancelled => write!(f, "cancelado"),
-            SpotifyError::OAuth(message) => write!(f, "falha ao conectar: {message}"),
+            SpotifyError::NotSignedIn => f.write_str(tr("not connected to Spotify", "não conectado ao Spotify")),
+            SpotifyError::Cancelled => f.write_str(tr("cancelled", "cancelado")),
+            SpotifyError::OAuth(message) => {
+                f.write_str(&trf!("could not connect: {message}", "falha ao conectar: {message}"))
+            }
             SpotifyError::Api {
                 reason: Some(reason),
                 ..
-            } if reason == "PREMIUM_REQUIRED" => {
-                write!(f, "controlar a reprodução exige Spotify Premium")
-            }
-            error @ SpotifyError::Api { .. } if error.is_no_active_device() => write!(
-                f,
-                "nenhum aparelho com Spotify ativo: abra o Spotify (celular, computador...) e toque algo uma vez"
-            ),
+            } if reason == "PREMIUM_REQUIRED" => f.write_str(tr(
+                "controlling playback requires Spotify Premium",
+                "controlar a reprodução exige Spotify Premium",
+            )),
+            error @ SpotifyError::Api { .. } if error.is_no_active_device() => f.write_str(tr(
+                "no active Spotify device: open Spotify (phone, computer...) and play something once",
+                "nenhum aparelho com Spotify ativo: abra o Spotify (celular, computador...) e toque algo uma vez",
+            )),
             SpotifyError::Api {
                 status: 403,
                 message,
                 ..
-            } => {
-                write!(f, "o Spotify recusou o pedido (403): {message}")
-            }
+            } => f.write_str(&trf!(
+                "Spotify refused the request (403): {message}",
+                "o Spotify recusou o pedido (403): {message}"
+            )),
             SpotifyError::Api {
                 status, message, ..
-            } => write!(f, "erro do Spotify ({status}): {message}"),
-            SpotifyError::RateLimited { retry_after_secs } => {
-                write!(
-                    f,
-                    "limite de pedidos do Spotify atingido; tente de novo em {retry_after_secs} s"
-                )
+            } => f.write_str(&trf!(
+                "Spotify error ({status}): {message}",
+                "erro do Spotify ({status}): {message}"
+            )),
+            SpotifyError::RateLimited { retry_after_secs } => f.write_str(&trf!(
+                "Spotify request limit reached; try again in {retry_after_secs} s",
+                "limite de pedidos do Spotify atingido; tente de novo em {retry_after_secs} s"
+            )),
+            SpotifyError::Http(message) => {
+                f.write_str(&trf!("network error: {message}", "erro de rede: {message}"))
             }
-            SpotifyError::Http(message) => write!(f, "erro de rede: {message}"),
             SpotifyError::Other(message) => write!(f, "{message}"),
         }
     }
 }
-
 impl std::error::Error for SpotifyError {}

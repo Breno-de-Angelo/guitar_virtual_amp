@@ -4,6 +4,9 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::shared::i18n::tr;
+use crate::trf;
+
 /// The part of a MIDI message a binding listens for. Channels are 0-15.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum MidiTrigger {
@@ -16,9 +19,9 @@ pub enum MidiTrigger {
 impl MidiTrigger {
     pub fn label(&self) -> String {
         match self {
-            MidiTrigger::ControlChange { channel, controller } => format!("CC {controller} (ch {})", channel + 1),
-            MidiTrigger::Note { channel, note } => format!("Note {note} (ch {})", channel + 1),
-            MidiTrigger::ProgramChange { channel } => format!("Program change (ch {})", channel + 1),
+            MidiTrigger::ControlChange { channel, controller } => trf!("CC {controller} (ch {})", "CC {controller} (canal {})", channel + 1),
+            MidiTrigger::Note { channel, note } => trf!("Note {note} (ch {})", "Nota {note} (canal {})", channel + 1),
+            MidiTrigger::ProgramChange { channel } => trf!("Program change (ch {})", "Program change (canal {})", channel + 1),
         }
     }
 }
@@ -44,15 +47,15 @@ pub enum MidiAction {
 impl MidiAction {
     pub fn label(&self) -> String {
         match self {
-            MidiAction::TogglePedal(i) => format!("Toggle pedal #{}", i + 1),
-            MidiAction::NextPreset => "Next preset".into(),
-            MidiAction::PreviousPreset => "Previous preset".into(),
-            MidiAction::SetlistSlot => "Load setlist slot (program number)".into(),
-            MidiAction::ToggleMute => "Mute / unmute".into(),
-            MidiAction::TapTempo => "Tap tempo".into(),
-            MidiAction::ToggleMetronome => "Start / stop metronome".into(),
-            MidiAction::OutputVolume => "Master volume (expression pedal)".into(),
-            MidiAction::LooperCycle => "Looper: record / play / overdub".into(),
+            MidiAction::TogglePedal(i) => trf!("Toggle pedal #{}", "Ligar/desligar pedal #{}", i + 1),
+            MidiAction::NextPreset => tr("Next preset", "Próximo preset").into(),
+            MidiAction::PreviousPreset => tr("Previous preset", "Preset anterior").into(),
+            MidiAction::SetlistSlot => tr("Load setlist slot (program number)", "Carregar item da setlist (nº do programa)").into(),
+            MidiAction::ToggleMute => tr("Mute / unmute", "Silenciar / reativar").into(),
+            MidiAction::TapTempo => tr("Tap tempo", "Marcar o tempo (tap)").into(),
+            MidiAction::ToggleMetronome => tr("Start / stop metronome", "Iniciar / parar metrônomo").into(),
+            MidiAction::OutputVolume => tr("Master volume (expression pedal)", "Volume geral (pedal de expressão)").into(),
+            MidiAction::LooperCycle => tr("Looper: record / play / overdub", "Looper: gravar / tocar / sobrepor").into(),
         }
     }
 

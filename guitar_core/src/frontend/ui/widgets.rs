@@ -9,6 +9,8 @@ use eframe::egui::{
 };
 
 use crate::frontend::style::{self, Palette};
+use crate::shared::i18n::tr;
+use crate::trf;
 
 /// Knob sweep: from 7:30 to 4:30 o'clock, like a real pot.
 const SWEEP_START: f32 = -225.0_f32;
@@ -137,7 +139,7 @@ impl Widget for Knob<'_> {
                 .max_decimals(self.decimals.max(1));
             ui.add(drag);
             if let Some(default) = self.default
-                && ui.button("Reset").clicked()
+                && ui.button(tr("Reset", "Redefinir")).clicked()
             {
                 typed = default;
                 ui.close();
@@ -209,8 +211,9 @@ impl Widget for Knob<'_> {
         let value_text = format_value(*self.value, self.decimals, self.suffix);
         let (value, label) = (*self.value as f64, self.label.to_string());
         response.widget_info(|| egui::WidgetInfo::slider(true, value, label.clone()));
-        response.on_hover_text(format!(
+        response.on_hover_text(trf!(
             "{}: {value_text}\nDrag to turn (Shift: fine), double-click to reset, right-click to type",
+            "{}: {value_text}\nArraste para girar (Shift: fino), clique duplo para redefinir, botão direito para digitar",
             self.label
         ))
     }
@@ -359,8 +362,8 @@ pub fn level_meter(ui: &mut Ui, state: &MeterState, size: Vec2, label: &str) -> 
         }
     }
     let db = to_db(state.hold);
-    let text = if state.hold < 1e-5 { "silence".to_string() } else { format!("peak {db:.1} dBFS") };
-    let clip_text = if state.clip_secs > 0.0 { " · CLIPPING" } else { "" };
+    let text = if state.hold < 1e-5 { tr("silence", "silêncio").to_string() } else { trf!("peak {db:.1} dBFS", "pico {db:.1} dBFS") };
+    let clip_text = if state.clip_secs > 0.0 { tr(" · CLIPPING", " · CLIPANDO") } else { "" };
     response.on_hover_text(format!("{label} {text}{clip_text}"))
 }
 

@@ -17,7 +17,9 @@ use std::time::Duration;
 
 use serde::Deserialize;
 
+use crate::shared::i18n::tr;
 use crate::shared::paths::app_data_dir;
+use crate::trf;
 use crate::shared::tab::library::{clean_title, words};
 
 /// The `yt-dlp` executable: `GVA_YTDLP`, else the app's own environment
@@ -54,6 +56,42 @@ pub fn audio_cache_dir() -> Option<PathBuf> {
     app_data_dir().map(|d| d.join("youtube_audio"))
 }
 
+/// Audio downloaded only to listen to a search result before choosing it:
+/// a subfolder of the cache, emptied by [`clear_previews`].
+pub fn preview_dir(cache: &Path) -> PathBuf {
+    cache.join("preview")
+}
+
+/// The downloaded audio of video `id` in `cache` (a transcription's, or a
+/// preview's), if any.
+pub fn cached_audio(cache: &Path, id: &str) -> Option<PathBuf> {
+    if !is_valid_id(id) {
+        return None;
+    }
+    let name = format!("{id}.m4a");
+    [cache.join(&name), preview_dir(cache).join(&name)]
+        .into_iter()
+        .find(|p| p.is_file())
+}
+
+/// Moves a previewed video's audio into the main cache, where
+/// [`download_audio`] finds it, so transcribing it doesn't download again.
+pub fn keep_preview(cache: &Path, id: &str) {
+    if !is_valid_id(id) {
+        return;
+    }
+    let name = format!("{id}.m4a");
+    let (from, to) = (preview_dir(cache).join(&name), cache.join(&name));
+    if from.is_file() && !to.exists() {
+        let _ = std::fs::rename(from, to);
+    }
+}
+
+/// Deletes the preview downloads (and any partial download left there).
+pub fn clear_previews(cache: &Path) {
+    let _ = std::fs::remove_dir_all(preview_dir(cache));
+}
+
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
 pub struct Thumbnail {
     pub url: String,
@@ -74,6 +112,13 @@ pub struct Video {
     pub thumbnails: Vec<Thumbnail>,
     #[serde(default)]
     pub live_status: Option<String>,
+    #[serde(default)]
+    pub view_count: Option<u64>,
+    #[serde(default)]
+    pub channel_is_verified: Option<bool>,
+    /// The start of the description (search results only carry a snippet).
+    #[serde(default)]
+    pub description: Option<String>,
 }
 
 impl Video {
@@ -88,6 +133,21 @@ impl Video {
 
     pub fn channel_name(&self) -> &str {
         self.channel.as_deref().unwrap_or("")
+    }
+
+    /// The label's own upload of the studio recording: YouTube Music's
+    /// auto-generated "Provided to YouTube by <label>" videos, which search
+    /// now lists under the artist's name instead of "Artist - Topic".
+    pub fn is_official_audio(&self) -> bool {
+        self.channel_name().ends_with(" - Topic")
+            || self
+                .description
+                .as_deref()
+                .is_some_and(|d| d.trim_start().starts_with("Provided to YouTube by"))
+    }
+
+    pub fn is_verified(&self) -> bool {
+        self.channel_is_verified == Some(true)
     }
 
     fn is_live(&self) -> bool {
@@ -188,7 +248,7 @@ fn run_quick(mut cmd: Command, timeout: Duration) -> Result<String, String> {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .map_err(|e| format!("não foi possível iniciar o yt-dlp: {e}"))?;
+        .map_err(|e| trf!("couldn't start yt-dlp: {e}", "não foi possível iniciar o yt-dlp: {e}"))?;
     let drain = |pipe: Option<Box<dyn std::io::Read + Send>>| {
         std::thread::spawn(move || {
             let mut bytes = Vec::new();
@@ -217,7 +277,11 @@ fn run_quick(mut cmd: Command, timeout: Duration) -> Result<String, String> {
             Ok(None) if std::time::Instant::now() > deadline => {
                 let _ = child.kill();
                 let _ = child.wait();
-                return Err("o YouTube demorou demais para responder (verifique a conexão)".into());
+                return Err(tr(
+                    "YouTube took too long to answer (check the connection)",
+                    "o YouTube demorou demais para responder (verifique a conexão)",
+                )
+                .into());
             }
             Ok(None) => std::thread::sleep(Duration::from_millis(50)),
             Err(e) => return Err(e.to_string()),
@@ -238,7 +302,8 @@ fn run_quick(mut cmd: Command, timeout: Duration) -> Result<String, String> {
 
 /// Only the fields `Video` reads, as one JSON object per line (a full
 /// `--dump-json` of one video is over 100 KB of formats and thumbnails).
-const VIDEO_FIELDS: &str = "%(.{id,title,channel,duration,live_status})j";
+const VIDEO_FIELDS: &str =
+    "%(.{id,title,channel,duration,live_status,view_count,channel_is_verified,description})j";
 
 fn parse_videos(json_lines: &str) -> Vec<Video> {
     json_lines
@@ -250,22 +315,53 @@ fn parse_videos(json_lines: &str) -> Vec<Video> {
 
 /// Up to `count` videos for `query` (no API key; yt-dlp's `ytsearch`).
 pub fn search(ytdlp: &Path, query: &str, count: usize) -> Result<Vec<Video>, String> {
+    search_page(ytdlp, query, 0, count)
+}
+
+/// Most search results one query can page through.
+pub const MAX_SEARCH_RESULTS: usize = 100;
+
+/// Search results `skip + 1 ..= skip + count` (the next page after `skip`).
+pub fn search_page(
+    ytdlp: &Path,
+    query: &str,
+    skip: usize,
+    count: usize,
+) -> Result<Vec<Video>, String> {
     let query = query.trim();
     if query.is_empty() {
-        return Err("digite o que procurar".into());
+        return Err(tr("type what to search for", "digite o que procurar").into());
     }
-    let mut cmd = command(ytdlp);
-    cmd.arg("--flat-playlist")
-        .arg("--print")
-        .arg(VIDEO_FIELDS)
-        .arg(format!("ytsearch{}:{query}", count.clamp(1, 30)));
-    Ok(parse_videos(&run_quick(cmd, Duration::from_secs(60))?))
+    let skip = skip.min(MAX_SEARCH_RESULTS - 1);
+    let end = (skip + count.clamp(1, 30)).min(MAX_SEARCH_RESULTS);
+    let run = || -> Result<Vec<Video>, String> {
+        let mut cmd = command(ytdlp);
+        cmd.arg("--flat-playlist");
+        if skip > 0 {
+            cmd.arg("--playlist-start").arg((skip + 1).to_string());
+        }
+        cmd.arg("--print")
+            .arg(VIDEO_FIELDS)
+            .arg(format!("ytsearch{end}:{query}"));
+        Ok(parse_videos(&run_quick(cmd, Duration::from_secs(60))?))
+    };
+    let videos = run()?;
+    // Now and then YouTube answers with a page layout that lists only IDs,
+    // titles and durations; ranking needs the channels, so ask once more.
+    if !videos.is_empty()
+        && videos.iter().all(|v| v.channel.is_none())
+        && let Ok(again) = run()
+        && again.iter().any(|v| v.channel.is_some())
+    {
+        return Ok(again);
+    }
+    Ok(videos)
 }
 
 /// Details of one video (for a pasted link).
 pub fn video_info(ytdlp: &Path, id: &str) -> Result<Video, String> {
     if !is_valid_id(id) {
-        return Err("link do YouTube inválido".into());
+        return Err(tr("invalid YouTube link", "link do YouTube inválido").into());
     }
     let mut cmd = command(ytdlp);
     cmd.arg("--skip-download")
@@ -275,7 +371,7 @@ pub fn video_info(ytdlp: &Path, id: &str) -> Result<Video, String> {
     parse_videos(&run_quick(cmd, Duration::from_secs(60))?)
         .into_iter()
         .next()
-        .ok_or_else(|| "vídeo não encontrado ou ao vivo".into())
+        .ok_or_else(|| tr("video not found or live", "vídeo não encontrado ou ao vivo").into())
 }
 
 /// How likely `video` is the studio recording of the song, higher first.
@@ -290,11 +386,24 @@ pub fn match_score(video: &Video, title: &str, artist: &str, duration_hint: Opti
         }
     };
     let mut score = 2.0 * share(&clean_title(title)) + share(artist);
-    if video.channel_name().ends_with(" - Topic") {
-        score += 1.0; // YouTube Music's official audio
+    if video.is_official_audio() {
+        // The studio recording with no intro or outro: what tabs follow.
+        score += 1.0;
+    } else if video.is_verified() {
+        score += 0.25;
+    }
+    if let Some(views) = video.view_count {
+        // A tiebreaker: the well-known upload over an obscure re-upload.
+        score += 0.05 * (views as f64 + 1.0).log10();
     }
     let lower = video.title.to_lowercase();
-    let wanted = format!("{title} {artist}").to_lowercase();
+    // Whole words: "live" must not match "Alive".
+    let title_words = words(&video.title);
+    let wanted = words(&format!("{title} {artist}"));
+    let has = |haystack: &[String], phrase: &str| {
+        let phrase = words(phrase);
+        haystack.windows(phrase.len()).any(|w| w == phrase.as_slice())
+    };
     for bad in [
         "live",
         "ao vivo",
@@ -313,7 +422,7 @@ pub fn match_score(video: &Video, title: &str, artist: &str, duration_hint: Opti
         "instrumental",
         "backing track",
     ] {
-        if lower.contains(bad) && !wanted.contains(bad) {
+        if has(&title_words, bad) && !has(&wanted, bad) {
             score -= 2.5;
         }
     }
@@ -334,13 +443,28 @@ pub fn match_score(video: &Video, title: &str, artist: &str, duration_hint: Opti
     score
 }
 
-/// Videos sorted by [`match_score`].
+/// Lowest [`match_score`] (without a duration) of an official audio upload
+/// trusted to be the song itself.
+const TRUSTED_OFFICIAL_SCORE: f64 = 3.0;
+
+/// Videos sorted by [`match_score`]. Without a `duration_hint`, the length
+/// of the best official audio upload among them stands in for it, so
+/// concert videos (often not titled "live") drop below the studio take.
 pub fn rank(
     mut videos: Vec<Video>,
     title: &str,
     artist: &str,
     duration_hint: Option<f64>,
 ) -> Vec<Video> {
+    let duration_hint = duration_hint.or_else(|| {
+        videos
+            .iter()
+            .filter(|v| v.is_official_audio())
+            .map(|v| (match_score(v, title, artist, None), v.duration))
+            .filter(|(score, _)| *score >= TRUSTED_OFFICIAL_SCORE)
+            .max_by(|a, b| a.0.total_cmp(&b.0))
+            .and_then(|(_, duration)| duration)
+    });
     videos.sort_by(|a, b| {
         match_score(b, title, artist, duration_hint).total_cmp(&match_score(
             a,
@@ -372,7 +496,7 @@ pub fn download_audio(
     cancel: &AtomicBool,
 ) -> Result<PathBuf, String> {
     if !is_valid_id(id) {
-        return Err("link do YouTube inválido".into());
+        return Err(tr("invalid YouTube link", "link do YouTube inválido").into());
     }
     let target = dir.join(format!("{id}.m4a"));
     if target.is_file() {
@@ -380,7 +504,7 @@ pub fn download_audio(
         return Ok(target);
     }
     std::fs::create_dir_all(dir)
-        .map_err(|e| format!("não foi possível criar {}: {e}", dir.display()))?;
+        .map_err(|e| trf!("couldn't create {}: {e}", "não foi possível criar {}: {e}", dir.display()))?;
     let mut child = command(ytdlp)
         .arg("--newline")
         .arg("--progress")
@@ -397,9 +521,9 @@ pub fn download_audio(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .map_err(|e| format!("não foi possível iniciar o yt-dlp: {e}"))?;
-    let stdout = child.stdout.take().ok_or("sem saída do yt-dlp")?;
-    let mut stderr = child.stderr.take().ok_or("sem saída do yt-dlp")?;
+        .map_err(|e| trf!("couldn't start yt-dlp: {e}", "não foi possível iniciar o yt-dlp: {e}"))?;
+    let stdout = child.stdout.take().ok_or(tr("no output from yt-dlp", "sem saída do yt-dlp"))?;
+    let mut stderr = child.stderr.take().ok_or(tr("no output from yt-dlp", "sem saída do yt-dlp"))?;
     let (tx, rx) = crossbeam::channel::unbounded::<String>();
     let reader = std::thread::spawn(move || {
         for line in BufReader::new(stdout).lines().map_while(Result::ok) {
@@ -444,12 +568,16 @@ pub fn download_audio(
             .rev()
             .find(|l| l.contains("ERROR"))
             .unwrap_or(errors.trim());
-        return Err(format!("o download falhou: {}", line.trim()));
+        return Err(trf!("the download failed: {}", "o download falhou: {}", line.trim()));
     }
     let path = PathBuf::from(last_line.trim());
     let path = if path.is_file() { path } else { target };
     if !path.is_file() {
-        return Err("o yt-dlp terminou mas o arquivo de áudio não apareceu".into());
+        return Err(tr(
+            "yt-dlp finished but the audio file didn't appear",
+            "o yt-dlp terminou mas o arquivo de áudio não apareceu",
+        )
+        .into());
     }
     progress(1.0);
     Ok(path)
@@ -458,6 +586,11 @@ pub fn download_audio(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Writing an executable while another test thread forks can leave it
+    /// open in that child ("Text file busy"): the fake yt-dlp tests take turns.
+    #[cfg(unix)]
+    static FAKE_YTDLP: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     fn video(title: &str, channel: &str, duration: f64) -> Video {
         Video {
@@ -560,6 +693,13 @@ mod tests {
             bottom.contains(&"Fulano") && bottom.contains(&"Musicalidade"),
             "{bottom:?}"
         );
+        // Penalties match whole words ("Alive" isn't live).
+        let alive = video("Pearl Jam - Alive (Official Video)", "Pearl Jam", 340.0);
+        let unplugged = video("Alive (Live) - MTV Unplugged - Pearl Jam", "Pearl Jam", 340.0);
+        assert!(
+            match_score(&alive, "Alive", "Pearl Jam", None)
+                > match_score(&unplugged, "Alive", "Pearl Jam", None) + 2.0
+        );
         // Asking for the live version keeps it in the running.
         let live = video("Legião Urbana - Tempo Perdido (Ao Vivo)", "x", 235.0);
         assert!(
@@ -574,6 +714,7 @@ mod tests {
     #[test]
     fn large_outputs_do_not_block_the_process() {
         use std::os::unix::fs::PermissionsExt;
+        let _turn = FAKE_YTDLP.lock().unwrap_or_else(|e| e.into_inner());
         let dir = std::env::temp_dir().join(format!("gva_fake_ytdlp_{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let fake = dir.join("yt-dlp");
@@ -592,6 +733,49 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
+    /// A stand-in yt-dlp that echoes its arguments as the title, and lists
+    /// only bare results (no channel) on its first call.
+    #[cfg(unix)]
+    #[test]
+    fn search_pages_and_retries_results_without_channels() {
+        use std::os::unix::fs::PermissionsExt;
+        let _turn = FAKE_YTDLP.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = std::env::temp_dir().join(format!("gva_fake_search_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let fake = dir.join("yt-dlp");
+        let calls = dir.join("calls");
+        std::fs::write(
+            &fake,
+            format!(
+                "#!/bin/sh\necho x >> '{calls}'\nargs=$(echo \"$*\" | tr -d '\"')\n\
+                 if [ $(wc -l < '{calls}') -eq 1 ]; then\n\
+                 echo \"{{\\\"id\\\": \\\"M4uG1MmZVl0\\\", \\\"title\\\": \\\"$args\\\", \\\"duration\\\": 303}}\"\n\
+                 else\n\
+                 echo \"{{\\\"id\\\": \\\"M4uG1MmZVl0\\\", \\\"title\\\": \\\"$args\\\", \\\"channel\\\": \\\"Legião Urbana\\\", \\\"duration\\\": 303}}\"\n\
+                 fi\n",
+                calls = calls.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let videos = search_page(&fake, "tempo perdido", 10, 10).unwrap();
+        assert_eq!(videos.len(), 1);
+        assert_eq!(videos[0].channel_name(), "Legião Urbana", "asked again");
+        assert!(
+            videos[0].title.contains("--playlist-start 11")
+                && videos[0].title.ends_with("ytsearch20:tempo perdido"),
+            "{}",
+            videos[0].title
+        );
+        // The first page doesn't skip anything; complete results aren't retried.
+        let first = search_page(&fake, "tempo perdido", 0, 10).unwrap();
+        assert!(!first[0].title.contains("--playlist-start"));
+        assert!(first[0].title.ends_with("ytsearch10:tempo perdido"));
+        assert_eq!(std::fs::read_to_string(&calls).unwrap().lines().count(), 3);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
     #[test]
     fn parses_download_progress_lines() {
         assert_eq!(
@@ -607,6 +791,89 @@ mod tests {
             None
         );
         assert_eq!(parse_download_progress("/home/x/abc.m4a"), None);
+    }
+
+    #[test]
+    fn previews_are_found_kept_for_transcription_or_cleared() {
+        let cache = std::env::temp_dir().join(format!("gva_yt_preview_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&cache);
+        std::fs::create_dir_all(preview_dir(&cache)).unwrap();
+        std::fs::write(preview_dir(&cache).join("abcdefghijk.m4a"), b"x").unwrap();
+        std::fs::write(preview_dir(&cache).join("zzzzzzzzzzz.m4a"), b"y").unwrap();
+        assert_eq!(
+            cached_audio(&cache, "abcdefghijk"),
+            Some(preview_dir(&cache).join("abcdefghijk.m4a"))
+        );
+        assert_eq!(cached_audio(&cache, "../preview/x"), None);
+        assert_eq!(cached_audio(&cache, "nothinghere"), None);
+        keep_preview(&cache, "abcdefghijk");
+        assert_eq!(
+            cached_audio(&cache, "abcdefghijk"),
+            Some(cache.join("abcdefghijk.m4a"))
+        );
+        clear_previews(&cache);
+        assert!(cache.join("abcdefghijk.m4a").is_file());
+        assert_eq!(cached_audio(&cache, "zzzzzzzzzzz"), None);
+        let _ = std::fs::remove_dir_all(&cache);
+    }
+
+    #[test]
+    fn official_audio_and_popularity_raise_the_score() {
+        let mut label_upload = video("One (Remastered)", "Metallica", 447.0);
+        label_upload.description =
+            Some("Provided to YouTube by Blackened Recordings One (Remastered)".into());
+        let mut music_video = video("Metallica: One (Official Music Video)", "Metallica", 465.0);
+        music_video.channel_is_verified = Some(true);
+        music_video.view_count = Some(394_000_000);
+        let reupload = video("Metallica - One", "fan uploads", 446.0);
+        assert!(label_upload.is_official_audio() && !music_video.is_official_audio());
+        let ranked = rank(
+            vec![reupload.clone(), music_video.clone(), label_upload],
+            "One",
+            "Metallica",
+            None,
+        );
+        let order: Vec<&str> = ranked.iter().map(|v| v.title.as_str()).collect();
+        // The music video (film inserts, 18 s longer) goes below a re-upload
+        // of the studio take: the official audio's length is the reference.
+        assert_eq!(
+            order,
+            ["One (Remastered)", "Metallica - One", "Metallica: One (Official Music Video)"]
+        );
+        // With the Spotify length it's the same.
+        assert_eq!(rank(ranked.clone(), "One", "Metallica", Some(447.0))[1].title, "Metallica - One");
+        // Popularity and the verified channel decide between equal fits.
+        let mut same_length = music_video.clone();
+        same_length.duration = Some(446.0);
+        assert!(
+            match_score(&same_length, "One", "Metallica", None)
+                > match_score(&reupload, "One", "Metallica", None)
+        );
+        // Without a Spotify length, the official audio's length is the
+        // reference: a concert not titled "live" falls behind a re-upload.
+        let mut concert = video("Metallica: One (Slane Castle, 2019)", "Metallica", 527.0);
+        concert.channel_is_verified = Some(true);
+        concert.view_count = Some(12_000_000);
+        let mut official = video("One (Remastered)", "Metallica", 447.0);
+        official.description = Some("Provided to YouTube by Blackened Recordings".into());
+        let ranked = rank(
+            vec![concert.clone(), reupload.clone(), official],
+            "metallica one",
+            "",
+            None,
+        );
+        let order: Vec<&str> = ranked.iter().map(|v| v.title.as_str()).collect();
+        assert_eq!(
+            order,
+            ["One (Remastered)", "Metallica - One", "Metallica: One (Slane Castle, 2019)"]
+        );
+        // Views only break ties: they can't lift a live version over the song.
+        let mut live = video("Metallica - One (Live)", "Metallica", 520.0);
+        live.view_count = Some(2_000_000_000);
+        assert!(
+            match_score(&live, "One", "Metallica", None)
+                < match_score(&reupload, "One", "Metallica", None)
+        );
     }
 
     #[test]

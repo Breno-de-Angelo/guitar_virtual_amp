@@ -11,6 +11,8 @@ use crate::frontend::ui::tone3000::{
     Tone3000Request, ToneTarget, browse_button, nam_warning, source_block,
 };
 use crate::frontend::ui::widgets::{Knob, footswitch, knob_usize, led};
+use crate::shared::i18n::tr;
+use crate::trf;
 use crate::shared::pedals::{
     AmpParams, AmpVoicing, CabinetParams, ChorusParams, CompressorParams, DelayParams,
     DistortionParams, EqParams, FlangerParams, LooperCommand, LooperParams, LowPassParams,
@@ -38,19 +40,32 @@ pub struct PedalCard {
     pub handle: Response,
     /// The whole card, for drop targets.
     pub rect: egui::Rect,
+    /// Height of the header and controls as drawn without padding, from
+    /// the card's top to the footswitch (0 when collapsed). The pedalboard
+    /// passes the tallest of a row back as `body_height` next frame.
+    pub body_height: f32,
 }
 
 /// Draws one pedal card. `index`/`count` place it in the chain (for the
 /// move buttons and the collapse state).
 /// `width` is the card's outer width (`style::PEDAL_CARD_WIDTH` on the
-/// grid, the screen width on phones).
-pub fn pedal_card(ui: &mut Ui, index: usize, count: usize, instance: &mut PedalInstance, width: f32) -> PedalCard {
+/// grid, the screen width on phones). `body_height` pads the controls so
+/// the footswitch sits that far down (cards in a row line up); 0 for none.
+pub fn pedal_card(
+    ui: &mut Ui,
+    index: usize,
+    count: usize,
+    instance: &mut PedalInstance,
+    width: f32,
+    body_height: f32,
+) -> PedalCard {
     let palette = Palette::of(ui.ctx());
     let stripe = palette.category(instance.description.category());
     let collapsed_id = ui.id().with(("pedal_collapsed", index));
     let mut collapsed = ui.data(|d| d.get_temp::<bool>(collapsed_id)).unwrap_or(false);
     let mut action = PedalAction::None;
     let mut handle = None;
+    let mut natural_body = 0.0;
 
     let frame = style::card_frame(&palette)
         .inner_margin(egui::Margin { left: 10, right: 10, top: 12, bottom: 8 })
@@ -59,14 +74,19 @@ pub fn pedal_card(ui: &mut Ui, index: usize, count: usize, instance: &mut PedalI
         ui.set_width(width - 22.0);
         ui.set_max_width(width - 22.0);
         ui.vertical(|ui| {
+        let top = ui.cursor().top();
         ui.horizontal(|ui| {
             let h = ui
                 .add(egui::Label::new(RichText::new("☰").color(palette.text_dim)).sense(Sense::drag()))
                 .on_hover_cursor(egui::CursorIcon::Grab)
-                .on_hover_text("Drag to reorder");
+                .on_hover_text(tr("Drag to reorder", "Arraste para reordenar"));
             handle = Some(h);
             if led(ui, instance.enabled, 13.0, palette.led_on)
-                .on_hover_text(if instance.enabled { "On (click to bypass)" } else { "Bypassed (click to turn on)" })
+                .on_hover_text(if instance.enabled {
+                    tr("On (click to bypass)", "Ligado (clique para desligar)")
+                } else {
+                    tr("Bypassed (click to turn on)", "Em bypass (clique para ligar)")
+                })
                 .clicked()
             {
                 instance.enabled = !instance.enabled;
@@ -74,35 +94,42 @@ pub fn pedal_card(ui: &mut Ui, index: usize, count: usize, instance: &mut PedalI
             }
             let title = ui
                 .add(egui::Label::new(RichText::new(instance.description.name()).strong().color(palette.text)).sense(Sense::click()))
-                .on_hover_text(format!("{}\nClick to {} the knobs", instance.description.blurb(), if collapsed { "show" } else { "hide" }));
+                .on_hover_text({
+                    let blurb = instance.description.blurb();
+                    if collapsed {
+                        trf!("{blurb}\nClick to show the knobs", "{blurb}\nClique para mostrar os controles")
+                    } else {
+                        trf!("{blurb}\nClick to hide the knobs", "{blurb}\nClique para ocultar os controles")
+                    }
+                });
             if title.clicked() {
                 collapsed = !collapsed;
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.menu_button("…", |ui| {
-                    if ui.add_enabled(index > 0, egui::Button::new("◀ Move earlier")).clicked() {
+                    if ui.add_enabled(index > 0, egui::Button::new(tr("◀ Move earlier", "◀ Mover para antes"))).clicked() {
                         action = PedalAction::Move(-1);
                     }
-                    if ui.add_enabled(index + 1 < count, egui::Button::new("▶ Move later")).clicked() {
+                    if ui.add_enabled(index + 1 < count, egui::Button::new(tr("▶ Move later", "▶ Mover para depois"))).clicked() {
                         action = PedalAction::Move(1);
                     }
-                    if ui.button("📋 Duplicate").clicked() {
+                    if ui.button(tr("📋 Duplicate", "📋 Duplicar")).clicked() {
                         action = PedalAction::Duplicate;
                     }
-                    if ui.button("↺ Reset to defaults").clicked() {
+                    if ui.button(tr("↺ Reset to defaults", "↺ Redefinir padrões")).clicked() {
                         reset_to_defaults(&mut instance.description);
                         action = PedalAction::Updated;
                     }
-                    if ui.button(if collapsed { "⏷ Expand" } else { "⏶ Collapse" }).clicked() {
+                    if ui.button(if collapsed { tr("⏷ Expand", "⏷ Expandir") } else { tr("⏶ Collapse", "⏶ Recolher") }).clicked() {
                         collapsed = !collapsed;
                     }
                     ui.separator();
-                    if ui.button(RichText::new("🗑 Remove").color(palette.danger)).clicked() {
+                    if ui.button(RichText::new(tr("🗑 Remove", "🗑 Remover")).color(palette.danger)).clicked() {
                         action = PedalAction::Deleted;
                     }
                 })
                 .response
-                .on_hover_text("Pedal options");
+                .on_hover_text(tr("Pedal options", "Opções do pedal"));
             });
         });
 
@@ -115,9 +142,18 @@ pub fn pedal_card(ui: &mut Ui, index: usize, count: usize, instance: &mut PedalI
                 action = PedalAction::Updated;
             }
             ui.add_space(style::space::XS);
+            natural_body = ui.cursor().top() - top;
+            let padding = body_height - natural_body;
+            if padding > 0.0 {
+                ui.add_space(padding);
+            }
             ui.vertical_centered(|ui| {
                 if footswitch(ui, instance.enabled)
-                    .on_hover_text(if instance.enabled { "Stomp to bypass" } else { "Stomp to turn on" })
+                    .on_hover_text(if instance.enabled {
+                        tr("Stomp to bypass", "Pise para desligar")
+                    } else {
+                        tr("Stomp to turn on", "Pise para ligar")
+                    })
                     .clicked()
                 {
                     instance.enabled = !instance.enabled;
@@ -138,13 +174,13 @@ pub fn pedal_card(ui: &mut Ui, index: usize, count: usize, instance: &mut PedalI
         if instance.enabled { stripe } else { stripe.gamma_multiply(0.35) },
     );
 
-    PedalCard { action, handle: handle.expect("drawn above"), rect }
+    PedalCard { action, handle: handle.expect("drawn above"), rect, body_height: natural_body }
 }
 
 /// One pedal card on its own (outside a chain), returning only the action.
 #[cfg(test)]
 pub fn render_pedal_ui(ui: &mut Ui, instance: &mut PedalInstance) -> PedalAction {
-    pedal_card(ui, 0, 1, instance, style::PEDAL_CARD_WIDTH).action
+    pedal_card(ui, 0, 1, instance, style::PEDAL_CARD_WIDTH, 0.0).action
 }
 
 /// Puts the pedal's parameters back to their defaults, keeping loaded files
@@ -362,7 +398,7 @@ fn pitch_shifter_ui(ui: &mut Ui, params: &mut PitchShifterParams, color: Color32
     });
     ui.horizontal(|ui| {
         for (label, st) in [("-12", -12.0), ("-5", -5.0), ("+5", 5.0), ("+7", 7.0), ("+12", 12.0)] {
-            if ui.small_button(label).on_hover_text("Set the interval in semitones").clicked() {
+            if ui.small_button(label).on_hover_text(tr("Set the interval in semitones", "Definir o intervalo em semitons")).clicked() {
                 params.semitones = st;
                 changed = true;
             }
@@ -485,20 +521,20 @@ fn looper_ui(ui: &mut Ui, params: &mut LooperParams, color: Color32) -> bool {
     let palette = Palette::of(ui.ctx());
     let mut changed = false;
     let (status, status_color) = match params.command {
-        LooperCommand::Idle | LooperCommand::Clear => ("Empty", palette.text_dim),
-        LooperCommand::Record => ("⏺ Recording", palette.danger),
-        LooperCommand::Play => ("▶ Playing", palette.ok),
-        LooperCommand::Overdub => ("⏺ Overdubbing", palette.warn),
-        LooperCommand::Stop => ("■ Stopped", palette.text_dim),
+        LooperCommand::Idle | LooperCommand::Clear => (tr("Empty", "Vazio"), palette.text_dim),
+        LooperCommand::Record => (tr("⏺ Recording", "⏺ Gravando"), palette.danger),
+        LooperCommand::Play => (tr("▶ Playing", "▶ Tocando"), palette.ok),
+        LooperCommand::Overdub => (tr("⏺ Overdubbing", "⏺ Gravando por cima"), palette.warn),
+        LooperCommand::Stop => (tr("■ Stopped", "■ Parado"), palette.text_dim),
     };
     ui.label(RichText::new(status).color(status_color).strong());
     ui.horizontal_wrapped(|ui| {
         let buttons = [
-            ("⏺", LooperCommand::Record, "Record"),
-            ("▶", LooperCommand::Play, "Play"),
-            ("⏺+", LooperCommand::Overdub, "Overdub"),
-            ("⏹", LooperCommand::Stop, "Stop"),
-            ("🗑", LooperCommand::Clear, "Clear the loop"),
+            ("⏺", LooperCommand::Record, tr("Record", "Gravar")),
+            ("▶", LooperCommand::Play, tr("Play", "Tocar")),
+            ("⏺+", LooperCommand::Overdub, tr("Overdub", "Gravar por cima")),
+            ("⏹", LooperCommand::Stop, tr("Stop", "Parar")),
+            ("🗑", LooperCommand::Clear, tr("Clear the loop", "Apagar o loop")),
         ];
         for (label, command, hover) in buttons {
             let selected = params.command == command;
@@ -540,6 +576,12 @@ fn file_name(path: &str) -> String {
         .unwrap_or_else(|| path.to_string())
 }
 
+/// Whether `path` names a file that exists (the DSP passes the sound
+/// through when it doesn't).
+fn file_exists(path: Option<&str>) -> bool {
+    path.is_some_and(|path| std::path::Path::new(path).exists())
+}
+
 /// Shows the loaded file, or a "download again" button when the file is
 /// gone but the pedal remembers which TONE3000 tone it came from.
 fn loaded_file_ui(
@@ -561,10 +603,10 @@ fn loaded_file_ui(
         ui.add(egui::Label::new(RichText::new(file_name(path)).small()).truncate()).on_hover_text(path);
         return None;
     }
-    ui.colored_label(palette.danger, format!("File not found: {}", file_name(path)))
+    ui.colored_label(palette.danger, trf!("File not found: {}", "Arquivo não encontrado: {}", file_name(path)))
         .on_hover_text(path);
     let source = source?;
-    ui.button("Download again from TONE3000")
+    ui.button(tr("Download again from TONE3000", "Baixar de novo do TONE3000"))
         .clicked()
         .then_some(Tone3000Request::Reload {
             target,
@@ -585,7 +627,7 @@ fn cabinet_ui(ui: &mut Ui, params: &mut CabinetParams, color: Color32) -> (bool,
         // `rfd` (native file picker) has no Android backend, so Android
         // falls back to a plain text field below.
         #[cfg(not(target_os = "android"))]
-        if ui.button("Load IR...").clicked()
+        if ui.button(tr("Load IR...", "Carregar IR...")).clicked()
             && let Some(path) = rfd::FileDialog::new()
                 .add_filter("WAV", &["wav"])
                 .pick_file()
@@ -602,7 +644,7 @@ fn cabinet_ui(ui: &mut Ui, params: &mut CabinetParams, color: Color32) -> (bool,
     #[cfg(target_os = "android")]
     {
         let mut path = params.ir_path.clone().unwrap_or_default();
-        ui.label("IR file path:");
+        ui.label(tr("IR file path:", "Caminho do arquivo IR:"));
         if ui.text_edit_singleline(&mut path).changed() {
             params.ir_path = if path.is_empty() { None } else { Some(path) };
             params.source = None;
@@ -615,12 +657,18 @@ fn cabinet_ui(ui: &mut Ui, params: &mut CabinetParams, color: Color32) -> (bool,
         params.ir_path.as_deref(),
         params.source.as_ref(),
         ToneTarget::Ir,
-        "No IR loaded",
+        tr(
+            "No IR loaded: the sound passes through unchanged. Load a speaker IR (.wav) or browse TONE3000.",
+            "Nenhuma IR carregada: o som passa sem alteração. Carregue uma IR de caixa (.wav) ou explore o TONE3000.",
+        ),
     ));
 
+    // Without a readable IR the DSP passes the signal through untouched,
+    // so Mix does nothing.
     let d = CabinetParams::default();
     let k = K { color };
-    changed |= knobs(ui, |ui| k.unit(ui, &mut params.mix, "Mix", d.mix));
+    let active = file_exists(params.ir_path.as_deref());
+    changed |= ui.add_enabled_ui(active, |ui| knobs(ui, |ui| k.unit(ui, &mut params.mix, "Mix", d.mix))).inner;
 
     (changed, request)
 }
@@ -636,9 +684,9 @@ fn nam_ui(ui: &mut Ui, params: &mut NamParams, color: Color32) -> (bool, Option<
 
     ui.vertical(|ui| {
         #[cfg(not(target_os = "android"))]
-        if ui.button("Load .nam...").clicked()
+        if ui.button(tr("Load .nam...", "Carregar .nam...")).clicked()
             && let Some(path) = rfd::FileDialog::new()
-                .add_filter("NAM model", &["nam"])
+                .add_filter(tr("NAM model", "Modelo NAM"), &["nam"])
                 .pick_file()
         {
             params.model_path = Some(path.display().to_string());
@@ -653,7 +701,7 @@ fn nam_ui(ui: &mut Ui, params: &mut NamParams, color: Color32) -> (bool, Option<
     #[cfg(target_os = "android")]
     {
         let mut path = params.model_path.clone().unwrap_or_default();
-        ui.label(".nam file path:");
+        ui.label(tr(".nam file path:", "Caminho do arquivo .nam:"));
         if ui.text_edit_singleline(&mut path).changed() {
             params.model_path = if path.is_empty() { None } else { Some(path) };
             params.source = None;
@@ -666,8 +714,14 @@ fn nam_ui(ui: &mut Ui, params: &mut NamParams, color: Color32) -> (bool, Option<
         params.model_path.as_deref(),
         params.source.as_ref(),
         ToneTarget::Nam,
-        "No model loaded",
+        tr(
+            "No model loaded: the sound passes through unchanged. Load a .nam model or browse TONE3000.",
+            "Nenhum modelo carregado: o som passa sem alteração. Carregue um modelo .nam ou explore o TONE3000.",
+        ),
     ));
+    // Without a model (or with one that failed to load) the DSP passes the
+    // signal through untouched, so the gains do nothing.
+    let mut active = file_exists(params.model_path.as_deref());
 
     // Filled in by `nam::preload`, which the app runs before sending a
     // chain to the audio thread.
@@ -682,6 +736,7 @@ fn nam_ui(ui: &mut Ui, params: &mut NamParams, color: Color32) -> (bool, Option<
             }
             Some(Err(error)) if std::path::Path::new(path).exists() => {
                 ui.colored_label(palette.danger, error);
+                active = false;
             }
             _ => {}
         }
@@ -689,15 +744,23 @@ fn nam_ui(ui: &mut Ui, params: &mut NamParams, color: Color32) -> (bool, Option<
 
     let d = NamParams::default();
     let k = K { color };
-    changed |= knobs(ui, |ui| {
-        let mut c = k.db(ui, &mut params.input_gain_db, -24.0..=24.0, "Input", d.input_gain_db);
-        c |= k.db(ui, &mut params.output_gain_db, -24.0..=24.0, "Output", d.output_gain_db);
-        c
-    });
     changed |= ui
-        .checkbox(&mut params.normalize, "Normalize loudness")
-        .on_hover_text("Play every model at a similar level, using the loudness stored in the file")
-        .changed();
+        .add_enabled_ui(active, |ui| {
+            let mut c = knobs(ui, |ui| {
+                let mut c = k.db(ui, &mut params.input_gain_db, -24.0..=24.0, "Input", d.input_gain_db);
+                c |= k.db(ui, &mut params.output_gain_db, -24.0..=24.0, "Output", d.output_gain_db);
+                c
+            });
+            c |= ui
+                .checkbox(&mut params.normalize, tr("Normalize loudness", "Normalizar volume"))
+                .on_hover_text(tr(
+                    "Play every model at a similar level, using the loudness stored in the file",
+                    "Tocar todos os modelos num volume parecido, usando a loudness salva no arquivo",
+                ))
+                .changed();
+            c
+        })
+        .inner;
 
     (changed, request)
 }
@@ -715,7 +778,7 @@ mod tests {
         let _ = ctx.run(egui::RawInput::default(), |ctx| {
             egui::CentralPanel::default().show(ctx, |ui| {
                 for (i, pedal) in chain.iter_mut().enumerate() {
-                    let card = pedal_card(ui, i, count, pedal, style::PEDAL_CARD_WIDTH);
+                    let card = pedal_card(ui, i, count, pedal, style::PEDAL_CARD_WIDTH, 0.0);
                     assert_eq!(card.action, PedalAction::None);
                 }
             });
@@ -740,6 +803,16 @@ mod tests {
         let mut delay = PedalDescription::Delay(DelayParams { delay_ms: 10.0, ..Default::default() });
         reset_to_defaults(&mut delay);
         assert_eq!(delay, PedalDescription::Delay(DelayParams::default()));
+    }
+
+    #[test]
+    fn missing_files_count_as_not_loaded() {
+        assert!(!file_exists(None));
+        assert!(!file_exists(Some("/nonexistent/ir.wav")));
+        let path = std::env::temp_dir().join("gva_pedals_file_exists.wav");
+        std::fs::write(&path, b"x").unwrap();
+        assert!(file_exists(path.to_str()));
+        let _ = std::fs::remove_file(path);
     }
 
     #[test]

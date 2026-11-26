@@ -408,7 +408,7 @@ fn build_converted_input_stream(
         F::F32 => build_typed_input_stream::<f32>(device, config, channels, input_tx)?,
         F::F64 => build_typed_input_stream::<f64>(device, config, channels, input_tx)?,
         other => {
-            return Err(format!("Formato de amostra de entrada não suportado: {other:?}").into());
+            return Err(crate::trf!("Unsupported input sample format: {other:?}", "Formato de amostra de entrada não suportado: {other:?}").into());
         }
     };
     Ok(stream)
@@ -553,7 +553,7 @@ pub fn start_audio_processing_with_devices(
                 .and_then(|mut devs| devs.find(|d| d.to_string() == name))
         })
         .or_else(|| host.default_input_device())
-        .ok_or("Nenhum dispositivo de entrada de áudio encontrado")?;
+        .ok_or(crate::shared::i18n::tr("No audio input device found", "Nenhum dispositivo de entrada de áudio encontrado"))?;
     let output_device = preferred_output_name
         .and_then(|name| {
             host.output_devices()
@@ -561,7 +561,7 @@ pub fn start_audio_processing_with_devices(
                 .and_then(|mut devs| devs.find(|d| d.to_string() == name))
         })
         .or_else(|| host.default_output_device())
-        .ok_or("Nenhum dispositivo de saída de áudio encontrado")?;
+        .ok_or(crate::shared::i18n::tr("No audio output device found", "Nenhum dispositivo de saída de áudio encontrado"))?;
 
     println!("Dispositivo de Entrada Inicial: {:?}", input_device.to_string());
     println!("Dispositivo de Saída: {:?}", output_device.to_string());
@@ -753,10 +753,58 @@ fn build_output_stream(
             |err| eprintln!("Erro no output stream (F32): {}", err),
             None,
         )?,
-        _ => return Err("Formato de amostra de saída não suportado pelo CPAL".into()),
+        _ => return Err(crate::shared::i18n::tr("Output sample format not supported by CPAL", "Formato de amostra de saída não suportado pelo CPAL").into()),
     };
 
     Ok((stream, effective_frames))
+}
+
+/// The output stream's processing without a device, run on demand: for
+/// offscreen tools (`tools/promo_video`) that drive an
+/// [`AudioSetup::without_audio`] app with recorded guitar. Push samples into
+/// the setup's `input_tx`, call [`OfflineOutput::render`], and the app sees
+/// what a live stream would give it: chain updates applied, meters, the
+/// analysis tap, metronome clicks, tab playback and recording.
+pub struct OfflineOutput {
+    renderer: OutputRenderer,
+    shared: OutputShared,
+    song_buffer: Vec<f32>,
+    out: Vec<f32>,
+}
+
+impl OfflineOutput {
+    pub fn new(setup: &AudioSetup, initial_pedals: Vec<PedalInstance>) -> Self {
+        let shared = setup.output_shared();
+        shared.song_player.set_output_rate(GLOBAL_CONFIG.sample_rate as u32);
+        let metronome_click =
+            MetronomeClick::new(shared.metronome_running.clone(), shared.metronome_bpm.clone(), shared.controls.clone());
+        let renderer =
+            OutputRenderer::new(PedalChain::from_description(initial_pedals), metronome_click, shared.controls.clone());
+        Self { renderer, shared, song_buffer: Vec::new(), out: Vec::new() }
+    }
+
+    /// Renders `frames` mono samples of what the speakers get (-1..1), as
+    /// one output callback would.
+    pub fn render(&mut self, frames: usize) -> &[f32] {
+        let OutputShared { input_rx, audio_tx, pedal_rx, song_player, controls, record_tx, .. } = &self.shared;
+        let song = render_song_block(song_player, &mut self.song_buffer, frames);
+        let volume = controls.effective_volume();
+        let record = controls.record_source();
+        self.out.clear();
+        self.out.resize(frames, 0.0);
+        let out = &mut self.out;
+        let mut peak = 0.0f32;
+        self.renderer.render(frames, pedal_rx, input_rx, audio_tx, |i, guitar, click| {
+            let (sample, recorded) = mix_frame(guitar, click, song[i], volume, record);
+            peak = peak.max(sample.abs());
+            if record.is_some() {
+                let _ = record_tx.try_send(recorded);
+            }
+            out[i] = sample;
+        });
+        controls.record_output_peak(peak);
+        &self.out
+    }
 }
 
 /// Renders `frames` frames of tab-player audio into `buffer` (growing it if
@@ -789,7 +837,7 @@ pub fn switch_output_device(
         .into_iter()
         .find(|d| d.to_string() == device_name)
         .or_else(|| device_name.is_empty().then(|| host.default_output_device()).flatten())
-        .ok_or_else(|| "Dispositivo de saída não encontrado".to_string())?;
+        .ok_or_else(|| crate::shared::i18n::tr("Output device not found", "Dispositivo de saída não encontrado").to_string())?;
 
     let target_sample_rate = GLOBAL_CONFIG.sample_rate as u32;
     let config = find_best_config(&device, target_sample_rate, false).map_err(|e| e.to_string())?;
@@ -818,7 +866,7 @@ pub fn switch_input_device(
         .into_iter()
         .find(|d| d.to_string() == device_name)
         .or_else(|| device_name.is_empty().then(|| host.default_input_device()).flatten())
-        .ok_or_else(|| "Dispositivo de entrada não encontrado".to_string())?;
+        .ok_or_else(|| crate::shared::i18n::tr("Input device not found", "Dispositivo de entrada não encontrado").to_string())?;
 
     let target_sample_rate = GLOBAL_CONFIG.sample_rate as u32;
     let config = find_best_config(&device, target_sample_rate, true).map_err(|e| e.to_string())?;
@@ -908,9 +956,9 @@ pub fn start_audio_processing_multi(
     let host = cpal::default_host();
 
     let input_device = host.default_input_device()
-        .ok_or("Nenhum dispositivo de entrada de áudio encontrado")?;
+        .ok_or(crate::shared::i18n::tr("No audio input device found", "Nenhum dispositivo de entrada de áudio encontrado"))?;
     let output_device = host.default_output_device()
-        .ok_or("Nenhum dispositivo de saída de áudio encontrado")?;
+        .ok_or(crate::shared::i18n::tr("No audio output device found", "Nenhum dispositivo de saída de áudio encontrado"))?;
 
     let target_sample_rate = GLOBAL_CONFIG.sample_rate as u32;
 
@@ -955,7 +1003,7 @@ pub fn start_audio_processing_multi(
             |err| eprintln!("Erro no input stream (F32): {}", err),
             None
         )?,
-        _ => return Err("Formato de amostra de entrada não suportado pelo CPAL".into()),
+        _ => return Err(crate::shared::i18n::tr("Input sample format not supported by CPAL", "Formato de amostra de entrada não suportado pelo CPAL").into()),
     };
 
     input_stream.play()?;
@@ -1062,7 +1110,7 @@ fn build_multi_channel_output_stream(
             |err| eprintln!("Erro no output stream (F32): {}", err),
             None
         )?,
-        _ => return Err("Formato de amostra de saída não suportado pelo CPAL".into()),
+        _ => return Err(crate::shared::i18n::tr("Output sample format not supported by CPAL", "Formato de amostra de saída não suportado pelo CPAL").into()),
     };
 
     Ok(stream)
@@ -1125,6 +1173,24 @@ mod tests {
         });
         assert_eq!(out, [10, 20, 30, 0, 0]);
         assert!((controls.take_input_peak() - 30.0 / i16::MAX as f32).abs() < 1e-6);
+    }
+
+    #[test]
+    fn offline_output_runs_the_stream_pipeline() {
+        let (audio_tx, audio_rx) = bounded::<i16>(64);
+        let setup = AudioSetup::without_audio(audio_tx);
+        let mut output = OfflineOutput::new(&setup, Vec::new());
+        for s in [1000i16, -2000, 3000] {
+            setup.input_tx.send(s).unwrap();
+        }
+        let out = output.render(4).to_vec();
+        let expected = [1000.0, -2000.0, 3000.0, 0.0].map(|s: f32| s / i16::MAX as f32);
+        for (o, e) in out.iter().zip(expected) {
+            assert!((o - e).abs() < 1e-6, "{out:?}");
+        }
+        assert_eq!(audio_rx.try_iter().collect::<Vec<_>>(), [1000, -2000, 3000, 0]);
+        assert!((setup.controls.take_input_peak() - 3000.0 / i16::MAX as f32).abs() < 1e-6);
+        assert!((setup.controls.take_output_peak() - 3000.0 / i16::MAX as f32).abs() < 1e-6);
     }
 
     #[test]

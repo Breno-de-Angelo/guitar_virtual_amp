@@ -14,7 +14,9 @@ use std::time::{Duration, Instant};
 use crossbeam::channel::{bounded, Receiver, RecvTimeoutError, Sender};
 
 use crate::backend::controls::{AudioControls, RecordSource};
+use crate::shared::i18n::tr;
 use crate::shared::paths;
+use crate::trf;
 
 /// Two seconds at 48 kHz: the worker only has to wake up a few times per
 /// second to keep up.
@@ -124,9 +126,9 @@ impl Recorder {
     /// Starts recording `source` into a new file in `dir`.
     pub fn start(&mut self, dir: &Path, source: RecordSource, sample_rate: u32) -> Result<PathBuf, String> {
         if self.active.is_some() {
-            return Err("Already recording".into());
+            return Err(tr("Already recording", "Já está gravando").into());
         }
-        std::fs::create_dir_all(dir).map_err(|e| format!("Can't create {}: {e}", dir.display()))?;
+        std::fs::create_dir_all(dir).map_err(|e| trf!("Can't create {}: {e}", "Não foi possível criar {}: {e}", dir.display()))?;
         let name = file_name_for_now();
         let mut path = dir.join(&name);
         let mut n = 2;
@@ -141,7 +143,7 @@ impl Recorder {
             sample_format: hound::SampleFormat::Int,
         };
         let mut writer =
-            hound::WavWriter::create(&path, spec).map_err(|e| format!("Can't create {}: {e}", path.display()))?;
+            hound::WavWriter::create(&path, spec).map_err(|e| trf!("Can't create {}: {e}", "Não foi possível criar {}: {e}", path.display()))?;
         // Samples left over from an earlier recording.
         while self.rx.try_recv().is_ok() {}
         let stop = Arc::new(AtomicBool::new(false));
@@ -183,7 +185,7 @@ impl Recorder {
         Some(match active.worker.join() {
             Ok(Ok(_frames)) => Ok(active.path),
             Ok(Err(e)) => Err(e),
-            Err(_) => Err("The recording thread crashed".into()),
+            Err(_) => Err(tr("The recording thread crashed", "A thread de gravação travou").into()),
         })
     }
 }

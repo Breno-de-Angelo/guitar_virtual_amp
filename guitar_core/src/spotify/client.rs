@@ -23,12 +23,14 @@ use super::types::{
     Track, User,
 };
 use super::{ACCOUNTS_BASE, API_BASE, SCOPES, SpotifyError, redirect_uri};
+use crate::shared::i18n::tr;
 use crate::shared::paths::app_data_dir;
 use crate::tone3000::Tone3000Error;
 use crate::tone3000::client::{
     Pkce, Session, new_pkce, random_token, url_encode, wait_for_callback,
 };
 use crate::tone3000::storage::{load_session, save_session};
+use crate::trf;
 
 const EXPIRY_MARGIN_SECS: u64 = 60;
 /// Longest `Retry-After` the client sleeps through before giving up.
@@ -39,7 +41,10 @@ const MAX_PLAYLISTS: u32 = 1000;
 const MAX_PLAYLIST_TRACKS: u32 = 2000;
 const MAX_RESPONSE_BYTES: u64 = 16 * 1024 * 1024;
 
-const CALLBACK_PAGE: &str = "<!doctype html><html><head><meta charset=\"utf-8\"><title>Spotify</title></head>\
+const CALLBACK_PAGE_EN: &str = "<!doctype html><html><head><meta charset=\"utf-8\"><title>Spotify</title></head>\
+<body style=\"font-family:sans-serif;text-align:center;padding-top:15vh\">\
+<h2>Done</h2><p>You can close this tab and go back to Guitar Virtual Amp.</p></body></html>";
+const CALLBACK_PAGE_PT: &str = "<!doctype html><html><head><meta charset=\"utf-8\"><title>Spotify</title></head>\
 <body style=\"font-family:sans-serif;text-align:center;padding-top:15vh\">\
 <h2>Pronto</h2><p>Pode fechar esta aba e voltar ao Guitar Virtual Amp.</p></body></html>";
 
@@ -149,21 +154,29 @@ impl PendingSignIn {
     /// Blocks until Spotify redirects back (or `cancel` is set / timeout).
     pub fn wait(self, client: &SpotifyClient, cancel: &AtomicBool) -> Result<(), SpotifyError> {
         let params =
-            wait_for_callback(&self.listener, cancel, CALLBACK_PAGE).map_err(from_tone3000)?;
+            wait_for_callback(&self.listener, cancel, tr(CALLBACK_PAGE_EN, CALLBACK_PAGE_PT)).map_err(from_tone3000)?;
         if params.state.as_deref() != Some(self.state.as_str()) {
             return Err(SpotifyError::OAuth(
-                "a resposta não corresponde a este pedido (state)".into(),
+                tr(
+                    "the response doesn't match this request (state)",
+                    "a resposta não corresponde a este pedido (state)",
+                )
+                .into(),
             ));
         }
         if let Some(error) = params.error {
             return Err(match error.as_str() {
-                "access_denied" => SpotifyError::OAuth("acesso negado no Spotify".into()),
+                "access_denied" => SpotifyError::OAuth(
+                    tr("access denied on Spotify", "acesso negado no Spotify").into(),
+                ),
                 _ => SpotifyError::OAuth(error),
             });
         }
         let code = params
             .code
-            .ok_or_else(|| SpotifyError::OAuth("o Spotify não devolveu um código".into()))?;
+            .ok_or_else(|| SpotifyError::OAuth(
+                    tr("Spotify didn't return a code", "o Spotify não devolveu um código").into(),
+                ))?;
         client.exchange_code(&code, &self.pkce.verifier, &self.redirect_uri)
     }
 }
@@ -253,7 +266,8 @@ impl SpotifyClient {
                     std::thread::sleep(Duration::from_millis(50));
                 }
                 Err(e) => {
-                    return Err(SpotifyError::Other(format!(
+                    return Err(SpotifyError::Other(trf!(
+                        "could not listen on 127.0.0.1:{port} for the sign-in callback: {e}",
                         "não foi possível escutar em 127.0.0.1:{port} para o retorno do login: {e}"
                     )));
                 }
@@ -288,14 +302,18 @@ impl SpotifyClient {
             .map_err(http_error)?;
         if (200..300).contains(&status) {
             return serde_json::from_slice(&body)
-                .map_err(|e| SpotifyError::Other(format!("resposta de token inválida: {e}")));
+                .map_err(|e| SpotifyError::Other(trf!(
+                    "invalid token response: {e}",
+                    "resposta de token inválida: {e}"
+                )));
         }
         match serde_json::from_slice::<OAuthErrorBody>(&body) {
             Ok(err) if err.error == "invalid_grant" => Err(SpotifyError::NotSignedIn),
             Ok(err) => Err(SpotifyError::OAuth(
                 err.error_description.unwrap_or(err.error),
             )),
-            Err(_) => Err(SpotifyError::OAuth(format!(
+            Err(_) => Err(SpotifyError::OAuth(trf!(
+                "token request failed (HTTP {status})",
                 "pedido de token falhou (HTTP {status})"
             ))),
         }
@@ -425,7 +443,8 @@ impl SpotifyClient {
             }
             attempt += 1;
             if attempt >= MAX_ATTEMPTS {
-                return Err(SpotifyError::Http(format!(
+                return Err(SpotifyError::Http(trf!(
+                    "{path}: no valid response after {MAX_ATTEMPTS} attempts",
                     "{path}: sem resposta válida após {MAX_ATTEMPTS} tentativas"
                 )));
             }
@@ -436,14 +455,17 @@ impl SpotifyClient {
         match self.call(Method::Get, path, None)? {
             Some(bytes) => serde_json::from_slice(&bytes)
                 .map(Some)
-                .map_err(|e| SpotifyError::Other(format!("resposta inesperada de {path}: {e}"))),
+                .map_err(|e| SpotifyError::Other(trf!(
+                    "unexpected response from {path}: {e}",
+                    "resposta inesperada de {path}: {e}"
+                ))),
             None => Ok(None),
         }
     }
 
     pub fn current_user(&self) -> Result<User, SpotifyError> {
         self.get_json("/me")?
-            .ok_or_else(|| SpotifyError::Other("perfil vazio".into()))
+            .ok_or_else(|| SpotifyError::Other(tr("empty profile", "perfil vazio").into()))
     }
 
     /// Playlists the user owns or follows (`GET /me/playlists`).
@@ -469,7 +491,9 @@ impl SpotifyClient {
     /// tracks are left out.
     pub fn playlist_tracks(&self, playlist_id: &str) -> Result<Vec<Track>, SpotifyError> {
         if !is_valid_id(playlist_id) {
-            return Err(SpotifyError::Other("ID de playlist inválido".into()));
+            return Err(SpotifyError::Other(
+                tr("invalid playlist ID", "ID de playlist inválido").into(),
+            ));
         }
         let mut tracks = Vec::new();
         let mut offset = 0;
@@ -629,7 +653,7 @@ mod tests {
         assert_eq!(client.playlists(), Err(SpotifyError::NotSignedIn));
         assert_eq!(
             client.playlist_tracks("../x"),
-            Err(SpotifyError::Other("ID de playlist inválido".into()))
+            Err(SpotifyError::Other("invalid playlist ID".into()))
         );
     }
 }

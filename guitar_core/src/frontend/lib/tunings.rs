@@ -41,6 +41,11 @@ impl Tuning {
         Tuning::named("Standard").expect("in the table")
     }
 
+    /// The name to show in the UI (see [`display_name`]).
+    pub fn display_name(&self) -> &str {
+        display_name(&self.name)
+    }
+
     /// From a tab track's tuning (`ScoreTrack::tuning`, string 1 = the
     /// highest string first). Named after the matching preset if any.
     pub fn from_tab(tuning_high_first: &[u8]) -> Option<Tuning> {
@@ -56,6 +61,13 @@ impl Tuning {
         Some(Tuning { name, strings })
     }
 
+    /// The number guitarists (and tabs) give the string at `index` in
+    /// [`Tuning::strings`]: 1 is the highest string, so on a standard
+    /// guitar the low E (index 0) is string 6.
+    pub fn string_number(&self, index: usize) -> usize {
+        self.strings.len().saturating_sub(index)
+    }
+
     /// The string a frequency is closest to: `(string index, cents off)`.
     /// Cents are measured to that string's open pitch.
     pub fn nearest_string(&self, freq: f64, a4_hz: f64) -> Option<(usize, f64)> {
@@ -65,6 +77,32 @@ impl Tuning {
             .enumerate()
             .map(|(i, &s)| (i, (midi - s as f64) * 100.0))
             .min_by(|a, b| a.1.abs().total_cmp(&b.1.abs()))
+    }
+}
+
+/// The UI text for a tuning name. The names in [`TUNINGS`] are keys
+/// (saved in `UiPrefs::tuner_tuning`, matched by [`Tuning::named`]), so
+/// they stay English and are translated only when shown. So do the
+/// Portuguese names `transcribe::arrange` writes into tab sidecars
+/// (`TrackInfo::tuning_name`). Anything else (e.g. an "F A D G B E" label)
+/// is returned as is.
+pub fn display_name(name: &str) -> &str {
+    use crate::shared::i18n::tr;
+    match name {
+        "Standard" => tr("Standard", "Padrão"),
+        "Half step down (Eb)" => tr("Half step down (Eb)", "Meio tom abaixo (Eb)"),
+        "Whole step down (D)" => tr("Whole step down (D)", "Um tom abaixo (D)"),
+        "7-string standard" => tr("7-string standard", "7 cordas padrão"),
+        "Bass standard" => tr("Bass standard", "Baixo padrão"),
+        "Bass drop D" => tr("Bass drop D", "Baixo drop D"),
+        "5-string bass" => tr("5-string bass", "Baixo de 5 cordas"),
+        "E padrão" => tr("E standard", "E padrão"),
+        "C# padrão" => tr("C# standard", "C# padrão"),
+        "Eb (meio tom abaixo)" => tr("Eb (half step down)", "Eb (meio tom abaixo)"),
+        "7 cordas (B)" => tr("7-string (B)", "7 cordas (B)"),
+        "8 cordas (F#)" => tr("8-string (F#)", "8 cordas (F#)"),
+        "5 cordas (B E A D G)" => tr("5-string (B E A D G)", "5 cordas (B E A D G)"),
+        other => other,
     }
 }
 
@@ -108,5 +146,33 @@ mod tests {
             assert!(t.strings.windows(2).all(|w| w[0] < w[1]), "{name} goes low to high");
         }
         assert_eq!(label(&Tuning::standard().strings), "E A D G B E");
+    }
+
+    #[test]
+    fn strings_are_numbered_from_the_highest() {
+        let t = Tuning::standard();
+        // Low E is string 6, high E string 1, like in a tab.
+        assert_eq!(t.string_number(0), 6);
+        assert_eq!(t.string_number(1), 5);
+        assert_eq!(t.string_number(5), 1);
+        let seven = Tuning::named("7-string standard").unwrap();
+        assert_eq!(seven.string_number(0), 7);
+        assert_eq!(seven.string_number(6), 1);
+        let bass = Tuning::named("Bass standard").unwrap();
+        assert_eq!((0..4).map(|i| bass.string_number(i)).collect::<Vec<_>>(), [4, 3, 2, 1]);
+        let five = Tuning::named("5-string bass").unwrap();
+        assert_eq!(five.string_number(0), 5);
+        // A tab's string 1 (its first entry) keeps number 1 here.
+        let eight = Tuning::from_tab(&[64, 59, 55, 50, 45, 40, 35, 30]).unwrap();
+        assert_eq!(eight.strings[7], 64);
+        assert_eq!(eight.string_number(7), 1);
+        assert_eq!(eight.string_number(0), 8);
+    }
+
+    #[test]
+    fn display_names_keep_the_keys_in_english() {
+        assert_eq!(Tuning::standard().display_name(), "Standard");
+        assert_eq!(display_name("Drop D"), "Drop D");
+        assert_eq!(display_name("F A D G B E"), "F A D G B E");
     }
 }

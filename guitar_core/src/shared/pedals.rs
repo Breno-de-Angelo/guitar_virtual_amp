@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 use strum_macros::EnumIter;
 
+use crate::shared::i18n::tr;
+
 #[derive(Clone, Debug, PartialEq, EnumIter, Serialize, Deserialize)]
 pub enum PedalDescription {
     Amp(AmpParams),
@@ -107,24 +109,57 @@ impl PedalDescription {
     /// One line describing the effect, shown in the "add pedal" menu.
     pub fn blurb(&self) -> &'static str {
         match self {
-            PedalDescription::Amp(_) => "Preamp with Clean/Crunch/Lead voicings and a tone stack",
-            PedalDescription::Delay(_) => "Echoes with feedback, several taps and damping",
-            PedalDescription::Reverb(_) => "Room ambience",
-            PedalDescription::LowPass(_) => "Cuts the highs above a frequency",
-            PedalDescription::Flanger(_) => "Jet-like sweep from a short modulated delay",
-            PedalDescription::WahWah(_) => "Resonant filter swept by an LFO (auto-wah)",
-            PedalDescription::Distortion(_) => "Overdrive / distortion with tone and bias",
-            PedalDescription::NoiseGate(_) => "Silences hum and hiss between notes",
-            PedalDescription::Compressor(_) => "Evens out the dynamics, adds sustain",
-            PedalDescription::Tremolo(_) => "Pulsing volume",
-            PedalDescription::Chorus(_) => "Thickens the sound with a detuned copy",
-            PedalDescription::Eq(_) => "Three-band equalizer",
-            PedalDescription::Phaser(_) => "Swirling notches from all-pass filters",
-            PedalDescription::Octaver(_) => "Adds the octave below",
-            PedalDescription::PitchShift(_) => "Shifts the pitch up or down by semitones",
-            PedalDescription::Looper(_) => "Records a loop and plays along with it",
-            PedalDescription::Cabinet(_) => "Speaker cabinet from an impulse response (.wav)",
-            PedalDescription::Nam(_) => "Neural Amp Modeler capture (.nam) of a real amp or pedal",
+            PedalDescription::Amp(_) => tr(
+                "Preamp with Clean/Crunch/Lead voicings and a tone stack",
+                "Pré-amp com voicings Clean/Crunch/Lead e equalização",
+            ),
+            PedalDescription::Delay(_) => tr(
+                "Echoes with feedback, several taps and damping",
+                "Ecos com feedback, várias repetições e amortecimento",
+            ),
+            PedalDescription::Reverb(_) => tr("Room ambience", "Ambiência de sala"),
+            PedalDescription::LowPass(_) => tr("Cuts the highs above a frequency", "Corta os agudos acima de uma frequência"),
+            PedalDescription::Flanger(_) => tr(
+                "Jet-like sweep from a short modulated delay",
+                "Efeito de jato de um delay curto modulado",
+            ),
+            PedalDescription::WahWah(_) => tr(
+                "Resonant filter swept by an LFO (auto-wah)",
+                "Filtro ressonante varrido por um LFO (auto-wah)",
+            ),
+            PedalDescription::Distortion(_) => tr(
+                "Overdrive / distortion with tone and bias",
+                "Overdrive / distorção com tone e bias",
+            ),
+            PedalDescription::NoiseGate(_) => tr("Silences hum and hiss between notes", "Silencia ruído e chiado entre as notas"),
+            PedalDescription::Compressor(_) => tr("Evens out the dynamics, adds sustain", "Equilibra a dinâmica e dá sustain"),
+            PedalDescription::Tremolo(_) => tr("Pulsing volume", "Volume pulsante"),
+            PedalDescription::Chorus(_) => tr(
+                "Thickens the sound with a detuned copy",
+                "Encorpa o som com uma cópia desafinada",
+            ),
+            PedalDescription::Eq(_) => tr("Three-band equalizer", "Equalizador de três bandas"),
+            PedalDescription::Phaser(_) => tr(
+                "Swirling notches from all-pass filters",
+                "Ondulação de filtros passa-tudo",
+            ),
+            PedalDescription::Octaver(_) => tr("Adds the octave below", "Adiciona a oitava abaixo"),
+            PedalDescription::PitchShift(_) => tr(
+                "Shifts the pitch up or down by semitones",
+                "Sobe ou desce o tom em semitons",
+            ),
+            PedalDescription::Looper(_) => tr(
+                "Records a loop and plays along with it",
+                "Grava um loop para você tocar junto",
+            ),
+            PedalDescription::Cabinet(_) => tr(
+                "Speaker cabinet from an impulse response (.wav)",
+                "Gabinete de alto-falante a partir de uma resposta ao impulso (.wav)",
+            ),
+            PedalDescription::Nam(_) => tr(
+                "Neural Amp Modeler capture (.nam) of a real amp or pedal",
+                "Captura do Neural Amp Modeler (.nam) de um amp ou pedal real",
+            ),
         }
     }
 }
@@ -145,13 +180,13 @@ pub enum PedalCategory {
 impl PedalCategory {
     pub fn label(self) -> &'static str {
         match self {
-            PedalCategory::Dynamics => "Dynamics",
-            PedalCategory::Filter => "Filter & EQ",
+            PedalCategory::Dynamics => tr("Dynamics", "Dinâmica"),
+            PedalCategory::Filter => tr("Filter & EQ", "Filtro e EQ"),
             PedalCategory::Drive => "Drive",
-            PedalCategory::Amp => "Amp & Cabinet",
-            PedalCategory::Modulation => "Modulation",
+            PedalCategory::Amp => tr("Amp & Cabinet", "Amp e gabinete"),
+            PedalCategory::Modulation => tr("Modulation", "Modulação"),
             PedalCategory::Pitch => "Pitch",
-            PedalCategory::Time => "Delay & Reverb",
+            PedalCategory::Time => tr("Delay & Reverb", "Delay e reverb"),
             PedalCategory::Utility => "Looper",
         }
     }
