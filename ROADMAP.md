@@ -249,30 +249,39 @@ apps: Premium owner, 5 allow-listed users, `GET /search` capped at 10 results.
   but the rest of the song still reaches the mic).
 - **Tone from the tab file**: Guitar Pro 6+ files store RSE amp/effect settings per track;
   mapping them to pedals would give a real per-song chain instead of a GM-program guess.
-- **Tone from the recording** [research, started: `guitar_core/src/tone/`, no UI yet]: estimate a
-  preset for each guitar part of the user's own audio (separated stem, no DI) by fitting the app's
-  chain through `backend::offline::render_at` with gradient-free search, a pseudo-DI resynthesised
-  from the notes, and a final match IR. Literature, design and evaluation protocol:
+- **Tone from the recording** [experimental: `guitar_core/src/tone/`, Transcribe form checkbox,
+  CLI `--tone`]: estimate a preset for each guitar part of the user's own audio (separated stem, no
+  DI) by fitting the app's chain through `backend::offline::render_at` with gradient-free search, a
+  pseudo-DI played from the transcribed notes, and a final match IR. Saved as a user preset tagged
+  with the song and track, offered on the Tabs page. Literature, design and evaluation protocol:
   `docs/papers/tone-estimation/` (Section 10). Spotify audio stays out of scope (policy).
-  - Built (step 1 of the paper's plan): pluck-model pseudo-DI fitted on Guitar-TECHS DI, CMA-ES
-    per amp voicing over compressor / distortion / amp gain / reverb / input level, distance with
-    an EQ allowance, minimum-phase match IR for a final Cabinet pedal, factory-preset baseline.
-  - `eval_tone` on 12 EGDB items (isolated guitar, labelled notes, 12 s excerpts, ~15 s per
-    estimate on 28 threads). Mean log-band distance of the true DI through each estimate to the
-    target, dB (lower is better):
+  - Built: pluck-model pseudo-DI fitted on Guitar-TECHS DI; CMA-ES per amp voicing over
+    compressor / distortion / amp gain / delay / reverb / input level; delay time measured first
+    from echoes (onset-envelope autocorrelation against the pseudo-DI); distance with an EQ
+    allowance; minimum-phase match IR in a final Cabinet pedal; factory-preset baseline.
+  - `eval_tone` on the 12 EGDB items that have a BS-RoFormer stem (Marshall render mixed over
+    MUSDB18 backing, then separated), ~25 s per estimate. Mean log-band distance of the true DI
+    through each estimate to the target, dB (lower is better); "sep-Marshall" is estimated from the
+    stem and scored against the clean render:
     | target | dry DI | best factory preset | preset + match | search + match, notes | same, true DI |
     |---|---|---|---|---|---|
-    | random app chain + cab EQ | 6.60 | 9.29 | 6.64 | 5.30 | 0.66 |
-    | EGDB Marshall | 7.52 | 7.55 | 6.84 | 6.49 | 3.11 |
-    | EGDB Mesa | 7.94 | 8.90 | 6.52 | 5.83 | 2.67 |
-    | EGDB Plexi | 7.61 | 8.16 | 7.63 | 6.26 | 2.32 |
-    The search from notes beats every baseline on average and in 7-8 of 12 items per group, but the
-    true-DI column shows most of the error is the pseudo-DI (the pluck model is 9.9 dB from real DI
-    even with an EQ allowed). Settings are not recovered (mean parameter error 0.41 on a 0-1 scale,
-    voicing right 7/12), which is expected when several settings sound alike.
-  - Next: a better dry signal (learned DI renderer or effect remover; the player's DI through a
-    pre-chain tap), then separated stems, delay/modulation from notes and tempo, a learned initial
-    guess, listening tests, and the UI (save as a preset tagged with the song).
+    | random app chain + cab EQ (half with delay) | 7.34 | 8.25 | 6.45 | 5.65 | 1.52 |
+    | EGDB Marshall | 6.82 | 7.02 | 6.16 | 6.32 | 2.91 |
+    | EGDB Mesa | 7.71 | 8.15 | 5.84 | 5.43 | 2.38 |
+    | EGDB Plexi | 6.77 | 8.84 | 6.86 | 6.38 | 2.52 |
+    | EGDB Marshall, separated stem | 6.84 | 7.07 | **5.79** | 6.21 | 5.25 |
+    The search beats "preset + match" on 8-10 of 12 Mesa, Plexi and chain items, ties on Marshall
+    (6/12) and loses on separated stems (4/12): unconstrained, it fits separation artefacts, which a
+    factory preset can't. Even with the true DI the stem costs 2.3 dB (2.91 -> 5.25). 10 instead of 30
+    CMA-ES generations changes the means by < 0.4 dB. Delay: right time (within 5%) in 7/8 chain
+    targets with a delay, no false delay in 47/52 targets without (threshold set from 64 EGDB clips,
+    `echo_scores`). The pluck model is still 9.9 dB from real DI with an EQ allowed; a sampler of
+    real single-note DI (Guitar-TECHS) did worse (e.g. Marshall 7.6 vs 6.3), as did raising the
+    distance floor to 45 dB.
+  - Next: a preset prior in the search (Gaussian/GMM over factory and user presets, as MAP-ITO), to
+    stop it fitting stem artefacts; a better dry signal (learned DI renderer or effect remover; the
+    player's DI through a pre-chain tap); modulation from the notes; a learned initial guess (Sparks);
+    listening tests on the `GVA_TONE_OUT` WAVs; real songs (MoisesDB isolated guitars as reference).
 - **Tab library**: match by the title/artist inside the file, not only the file name; cache the
   index; Android folder picker (no `rfd` backend there).
 - **Spotify extras**: Liked Songs (`GET /me/tracks`, needs `user-library-read`), open the tab

@@ -1,13 +1,15 @@
 //! The chain the tone search fits: compressor -> distortion -> amp ->
-//! reverb, played at a searched input level. Every parameter lives on
+//! delay -> reverb, played at a searched input level. The delay time is not
+//! searched: it comes from [`super::analysis::echo_delay`], and without an
+//! echo there is no delay pedal. Every parameter lives on
 //! [0, 1] for the optimiser and maps to a pedal range. A pedal whose amount
 //! is near zero is left out of the chain. The amp's tone stack is not
 //! searched: after the clipping it is linear, so the final matching EQ
 //! covers it.
 
 use crate::shared::pedals::{
-    AmpParams, AmpVoicing, CompressorParams, DistortionParams, PedalDescription, PedalInstance,
-    ReverbParams,
+    AmpParams, AmpVoicing, CompressorParams, DelayParams, DistortionParams, PedalDescription,
+    PedalInstance, ReverbParams,
 };
 
 /// One searched parameter.
@@ -50,8 +52,10 @@ pub const AMP_GAIN: usize = 6;
 pub const REVERB_MIX: usize = 7;
 pub const REVERB_ROOM: usize = 8;
 pub const REVERB_DAMPING: usize = 9;
+pub const DELAY_MIX: usize = 10;
+pub const DELAY_FEEDBACK: usize = 11;
 
-pub const PARAMS: [Param; 10] = [
+pub const PARAMS: [Param; 12] = [
     Param {
         name: "input level (RMS)",
         lo: 0.01,
@@ -112,6 +116,18 @@ pub const PARAMS: [Param; 10] = [
         hi: 0.95,
         log: false,
     },
+    Param {
+        name: "delay mix",
+        lo: 0.0,
+        hi: 0.5,
+        log: false,
+    },
+    Param {
+        name: "delay feedback",
+        lo: 0.0,
+        hi: 0.7,
+        log: false,
+    },
 ];
 
 /// Below this amount (on [0, 1]) a pedal is left out.
@@ -120,16 +136,27 @@ const OFF: f64 = 0.04;
 const MAX_RATIO: f32 = 8.0;
 
 /// A point of the search: the unit-cube vector plus the amp voicing, which
-/// is searched separately because it's discrete.
+/// is searched separately because it's discrete, and the delay time, which
+/// is measured.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Settings {
     pub x: Vec<f64>,
     pub voicing: AmpVoicing,
+    pub delay_ms: Option<f32>,
 }
 
 impl Settings {
     pub fn new(x: Vec<f64>, voicing: AmpVoicing) -> Self {
-        Self { x, voicing }
+        Self {
+            x,
+            voicing,
+            delay_ms: None,
+        }
+    }
+
+    pub fn with_delay(mut self, delay_ms: Option<f32>) -> Self {
+        self.delay_ms = delay_ms;
+        self
     }
 
     /// A neutral start: clean level, a little of everything.
@@ -139,7 +166,9 @@ impl Settings {
         x[COMP_AMOUNT] = 0.2;
         x[DRIVE_MIX] = 0.3;
         x[REVERB_MIX] = 0.15;
-        Self { x, voicing }
+        x[DELAY_MIX] = 0.3;
+        x[DELAY_FEEDBACK] = 0.3;
+        Self::new(x, voicing)
     }
 
     pub fn value(&self, i: usize) -> f32 {
@@ -183,6 +212,18 @@ impl Settings {
             mid: 0.0,
             treble: 0.0,
         })));
+        if let Some(delay_ms) = self.delay_ms
+            && self.x[DELAY_MIX] > OFF
+        {
+            chain.push(on(PedalDescription::Delay(DelayParams {
+                delay_ms,
+                feedback: self.value(DELAY_FEEDBACK),
+                gain: 1.0,
+                mix: self.value(DELAY_MIX),
+                taps: 1,
+                damping: 0.3,
+            })));
+        }
         if self.x[REVERB_MIX] > OFF {
             chain.push(on(PedalDescription::Reverb(ReverbParams {
                 room_size: self.value(REVERB_ROOM),
@@ -196,6 +237,10 @@ impl Settings {
     /// One line per parameter, for logs.
     pub fn describe(&self) -> String {
         let mut s = format!("voicing {:?}", self.voicing);
+        match self.delay_ms {
+            Some(ms) => s.push_str(&format!(", delay {ms:.0} ms")),
+            None => s.push_str(", no delay"),
+        }
         for (i, p) in PARAMS.iter().enumerate() {
             s.push_str(&format!(", {} {:.2}", p.name, self.value(i)));
         }

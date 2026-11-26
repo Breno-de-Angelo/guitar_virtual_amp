@@ -86,6 +86,18 @@ pub fn guess_tone(track: &ScoreTrack) -> Option<ToneGuess> {
     })
 }
 
+/// Tag of presets estimated from a recording (`crate::tone::save_preset`).
+pub const ESTIMATED_TAG: &str = "timbre-estimado";
+/// Prefix of the tag naming the tab track a preset was made for.
+pub const TRACK_TAG_PREFIX: &str = "faixa:";
+
+/// `true` unless the preset names another track with a
+/// [`TRACK_TAG_PREFIX`] tag (presets without one fit every track).
+pub fn preset_fits_track(preset: &Preset, track_name: &str) -> bool {
+    let mut tracks = preset.tags.iter().filter_map(|t| t.strip_prefix(TRACK_TAG_PREFIX)).peekable();
+    tracks.peek().is_none() || tracks.any(|t| t.trim().eq_ignore_ascii_case(track_name.trim()))
+}
+
 /// `true` when the preset's song/artist metadata names this song. A preset
 /// with only an artist matches every song by that artist.
 pub fn preset_fits_song(preset: &Preset, title: &str, artist: &str) -> bool {
@@ -126,6 +138,16 @@ mod tests {
     }
 
     const E_STANDARD: [u8; 6] = [64, 59, 55, 50, 45, 40];
+
+    #[test]
+    fn track_tags_restrict_a_preset_to_its_track() {
+        let mut p = factory_presets().remove(0);
+        p.tags = vec![ESTIMATED_TAG.into()];
+        assert!(preset_fits_track(&p, "Guitarra solo (IA)"));
+        p.tags.push(format!("{TRACK_TAG_PREFIX}Guitarra base (IA)"));
+        assert!(preset_fits_track(&p, "guitarra base (ia)"));
+        assert!(!preset_fits_track(&p, "Guitarra solo (IA)"));
+    }
 
     #[test]
     fn guesses_follow_instrument_name_and_tuning() {

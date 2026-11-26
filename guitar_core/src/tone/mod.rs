@@ -8,8 +8,9 @@
 //!    the transcribed notes played by a plucked-string model ([`pluck`]);
 //! 2. the factory presets as a baseline and starting points;
 //! 3. a gradient-free search ([`cmaes`]) over a template chain
-//!    ([`template`]: input level, compressor, distortion, amp, reverb), one
-//!    run per amp voicing, rendering through `backend::offline::render_at`
+//!    ([`template`]: input level, compressor, distortion, amp, delay,
+//!    reverb; the delay time measured first by [`analysis`]), one run per
+//!    amp voicing, rendering through `backend::offline::render_at`
 //!    and scoring with a distance that forgives a smooth EQ
 //!    ([`features`]);
 //! 4. that EQ turned into a minimum-phase impulse response for the Cabinet
@@ -18,10 +19,12 @@
 //! Blocking and CPU-heavy: call it from a worker thread. Not yet wired to
 //! the UI; `eval_tone` (ignored test) measures it.
 
+pub mod analysis;
 pub mod cmaes;
 pub mod features;
 pub mod matching;
 pub mod pluck;
+pub mod sampler;
 pub mod template;
 
 #[cfg(test)]
@@ -41,6 +44,9 @@ pub struct Options {
     pub generations: usize,
     pub threads: usize,
     pub seed: u64,
+    /// Floor of the search distance, dB below the loudest band (see
+    /// [`features::Target::with_floor`]).
+    pub floor_db: f32,
 }
 
 impl Default for Options {
@@ -51,6 +57,7 @@ impl Default for Options {
             generations: 30,
             threads: std::thread::available_parallelism().map_or(4, |n| n.get()),
             seed: 1,
+            floor_db: features::FLOOR_DB,
         }
     }
 }
@@ -108,6 +115,8 @@ pub struct Estimate {
     pub settings: Settings,
     /// Excerpt used, in samples of the input: `start..end`.
     pub excerpt: (usize, usize),
+    /// Delay time found in the target (ms) and how clear the echo was.
+    pub echo: Option<(f32, f32)>,
     pub evaluations: usize,
 }
 
@@ -161,7 +170,9 @@ pub fn estimate(target: &[f32], dry: &[f32], opts: &Options) -> Estimate {
     let len = target.len().min(dry.len());
     let (start, end) = loudest_window(&target[..len], opts.max_secs, RENDER_RATE);
     let (target, dry) = (&target[start..end], &dry[start..end]);
-    let goal = Target::new(target, RENDER_RATE);
+    let goal = Target::with_floor(target, RENDER_RATE, opts.floor_db);
+    let echo = analysis::echo_delay(target, dry, RENDER_RATE);
+    let delay_ms = echo.map(|(ms, _)| ms);
 
     // Baseline: every factory preset at the default level, in parallel.
     let presets = preset_candidates();
@@ -197,7 +208,7 @@ pub fn estimate(target: &[f32], dry: &[f32], opts: &Options) -> Estimate {
         .enumerate()
     {
         let f = |x: &[f64]| -> f64 {
-            let s = Settings::new(x.to_vec(), voicing);
+            let s = Settings::new(x.to_vec(), voicing).with_delay(delay_ms);
             compare(&goal, s.pedals(), dry, s.level()).distance as f64
         };
         let found = cmaes::minimize(
@@ -213,7 +224,7 @@ pub fn estimate(target: &[f32], dry: &[f32], opts: &Options) -> Estimate {
         );
         evaluations += found.evaluations;
         if best.as_ref().is_none_or(|b| found.value < b.1) {
-            best = Some((Settings::new(found.x, voicing), found.value));
+            best = Some((Settings::new(found.x, voicing).with_delay(delay_ms), found.value));
         }
     }
     let (settings, _) = best.expect("three voicings searched");
@@ -231,9 +242,60 @@ pub fn estimate(target: &[f32], dry: &[f32], opts: &Options) -> Estimate {
         preset,
         settings,
         excerpt: (start, end),
+        echo,
         evaluations,
     }
 }
+
+/// [`estimate`] for a transcribed guitar part: `audio` at [`RENDER_RATE`],
+/// `notes` in seconds of that audio. The note model's mean posterior stands
+/// in for the velocity.
+pub fn estimate_from_transcription(
+    audio: &[f32],
+    notes: &[crate::transcribe::basic_pitch::NoteEstimate],
+    opts: &Options,
+) -> Estimate {
+    let notes: Vec<pluck::Note> = notes
+        .iter()
+        .map(|n| pluck::Note {
+            start: n.start,
+            end: n.end,
+            pitch: n.pitch,
+            velocity: (0.4 + 0.6 * n.amplitude).clamp(0.05, 1.0),
+        })
+        .collect();
+    estimate_from_notes(audio, &notes, opts)
+}
+
+/// Saves an estimate as a user preset for this song and track: the
+/// matching IR goes to `<data dir>/guitar_virtual_amp/tone_match/`, the
+/// preset (chain + a final Cabinet pedal with that IR) to the user preset
+/// folder, with `song`/`artist` set so the Tabs page offers it, and the
+/// tags `timbre-estimado` and `faixa:<track>`. Re-estimating overwrites.
+pub fn save_preset(est: &Estimate, title: &str, artist: &str, track: &str) -> Result<std::path::PathBuf, String> {
+    use crate::shared::preset::{Preset, sanitize_file_stem, save_to_file, user_preset_dir};
+    let data = crate::shared::paths::app_data_dir().ok_or("no data folder")?;
+    let stem = sanitize_file_stem(&format!("{artist} - {title} - {track}"));
+    let ir_dir = data.join("tone_match");
+    std::fs::create_dir_all(&ir_dir).map_err(|e| e.to_string())?;
+    let ir_path = ir_dir.join(format!("{stem}.wav"));
+    matching::write_ir(&ir_path, &est.best.ir(), RENDER_RATE)?;
+    let preset = Preset {
+        name: format!("{title} - {track} (timbre estimado)"),
+        author: Some("estimativa automática".into()),
+        pedals: est.best.chain_with_ir(&ir_path.to_string_lossy()),
+        tags: vec![ESTIMATED_TAG.into(), format!("{TRACK_TAG_PREFIX}{track}")],
+        song: Some(title.to_string()).filter(|s| !s.trim().is_empty()),
+        artist: Some(artist.to_string()).filter(|s| !s.trim().is_empty()),
+    };
+    let path = user_preset_dir()
+        .ok_or("no preset folder")?
+        .join(format!("{stem}.json"));
+    save_to_file(&preset, &path).map_err(|e| format!("{e:?}"))?;
+    Ok(path)
+}
+
+use crate::shared::tab::tone::{ESTIMATED_TAG, TRACK_TAG_PREFIX};
 
 /// [`estimate`] with the dry signal played from the target's notes
 /// (seconds from the start of `target`).

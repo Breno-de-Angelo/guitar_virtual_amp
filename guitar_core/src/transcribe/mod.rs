@@ -60,6 +60,9 @@ pub struct Request {
     pub guitar_model: guitar_crnn::GuitarModel,
     /// Learned fingering (when installed) or the Viterbi, for guitars.
     pub fingering: fingering_net::Fingering,
+    /// Estimate each guitar track's tone and save it as a user preset
+    /// tagged with the song (`crate::tone`; needs separation).
+    pub tone: bool,
     pub guitar: bool,
     pub bass: bool,
     /// Tab repository folder.
@@ -79,6 +82,7 @@ pub enum Stage {
     Techniques,
     Bass,
     Saving,
+    Tone,
 }
 
 impl Stage {
@@ -92,6 +96,7 @@ impl Stage {
             Stage::Techniques => "Detectando bends, slides e vibratos",
             Stage::Bass => "Transcrevendo o baixo",
             Stage::Saving => "Gravando a tab",
+            Stage::Tone => "Estimando o timbre da guitarra",
         }
     }
 
@@ -102,10 +107,11 @@ impl Stage {
             Stage::Downloading | Stage::Decoding => (0.0, 0.05),
             Stage::Separating => (0.05, sep),
             Stage::Beats => (0.05 + sep, 0.05),
-            Stage::Guitar => (0.10 + sep, (0.85 - sep) * 0.45),
-            Stage::Techniques => (0.10 + sep + (0.85 - sep) * 0.45, (0.85 - sep) * 0.15),
-            Stage::Bass => (0.10 + sep + (0.85 - sep) * 0.6, (0.85 - sep) * 0.4),
-            Stage::Saving => (0.95, 0.05),
+            Stage::Guitar => (0.10 + sep, (0.83 - sep) * 0.45),
+            Stage::Techniques => (0.10 + sep + (0.83 - sep) * 0.45, (0.83 - sep) * 0.15),
+            Stage::Bass => (0.10 + sep + (0.83 - sep) * 0.6, (0.83 - sep) * 0.4),
+            Stage::Saving => (0.93, 0.02),
+            Stage::Tone => (0.95, 0.05),
         }
     }
 }
@@ -129,6 +135,8 @@ pub struct Output {
     pub guitar_notes: Vec<NoteEstimate>,
     /// Techniques of `guitar_notes`, index for index.
     pub guitar_techniques: Vec<techniques::Technique>,
+    /// With [`Request::tone`]: (track name, preset file) per guitar track.
+    pub tone_presets: Vec<(String, PathBuf)>,
 }
 
 /// Splits "Artist - Title" file names; otherwise the whole stem is the title.
@@ -162,6 +170,7 @@ fn check(cancel: &AtomicBool) -> Result<(), String> {
 }
 
 /// Decoded mono audio, resampled on demand for each model.
+#[derive(Clone)]
 struct Mono {
     samples: Vec<f32>,
     rate: u32,
@@ -461,6 +470,8 @@ fn chord_share(notes: &[NoteEstimate]) -> f64 {
 
 /// A transcribed guitar part.
 struct GuitarPart {
+    /// The part's audio (its pan region of the stem, or the whole input).
+    audio: Mono,
     notes: Vec<NoteEstimate>,
     techniques: Vec<techniques::Technique>,
     side: Option<stereo::Side>,
@@ -535,6 +546,10 @@ fn transcribe_guitars(
         let (notes, techniques) =
             detect_techniques(audio, notes, post, separating, progress, cancel)?;
         return Ok(vec![GuitarPart {
+            audio: Mono {
+                samples: audio.samples.clone(),
+                rate: audio.rate,
+            },
             notes,
             techniques,
             side: None,
@@ -556,6 +571,7 @@ fn transcribe_guitars(
         let (notes, techniques) =
             detect_techniques(&part_audio, notes, post, separating, &mut sub, cancel)?;
         parts.push(GuitarPart {
+            audio: part_audio,
             notes,
             techniques,
             side,
@@ -869,6 +885,8 @@ pub fn run(
         fingering_net::Fingering::Viterbi => None,
     };
     let mut fingering_engine = fingering_net::VITERBI_ENGINE_NAME;
+    // (guitar part index, track name), for the tone stage.
+    let mut part_tracks: Vec<(usize, String)> = Vec::new();
     for (k, part) in guitar_parts.iter().enumerate() {
         if part.notes.is_empty() {
             continue;
@@ -899,6 +917,7 @@ pub fn run(
             Some(side) => format!("{} ({})", stem_name("guitar"), side.label()),
             None => stem_name("guitar"),
         };
+        part_tracks.push((k, spec.name.clone()));
         infos.push(TrackInfo {
             name: spec.name,
             stem,
@@ -977,6 +996,28 @@ pub fn run(
     };
     let tab_path = repository::save(&request.output_dir, &score, &metadata)?;
     report(progress, Stage::Saving, 1.0);
+    let mut tone_presets = Vec::new();
+    if request.tone && separating {
+        let count = part_tracks.len();
+        for (i, (k, track)) in part_tracks.iter().enumerate() {
+            if cancel.load(Ordering::Relaxed) {
+                return Err("cancelado".into());
+            }
+            report(progress, Stage::Tone, i as f32 / count.max(1) as f32);
+            let part = &guitar_parts[*k];
+            let audio = part.audio.at(crate::backend::offline::RENDER_RATE);
+            let estimate = crate::tone::estimate_from_transcription(
+                &audio,
+                &part.notes,
+                &crate::tone::Options::default(),
+            );
+            match crate::tone::save_preset(&estimate, &request.title, &request.artist, track) {
+                Ok(path) => tone_presets.push((track.clone(), path)),
+                Err(e) => log::warn!("tone preset for {track}: {e}"),
+            }
+        }
+        report(progress, Stage::Tone, 1.0);
+    }
     Ok(Output {
         tab_path,
         metadata,
@@ -991,6 +1032,7 @@ pub fn run(
             .next()
             .map(|p| p.techniques)
             .unwrap_or_default(),
+        tone_presets,
     })
 }
 
@@ -1078,8 +1120,12 @@ mod tests {
     #[test]
     fn stage_spans_cover_the_whole_job() {
         for separating in [false, true] {
+            let (save, save_share) = Stage::Saving.span(separating);
+            let (tone, tone_share) = Stage::Tone.span(separating);
+            assert!((save + save_share - tone).abs() < 1e-6);
+            assert!((tone + tone_share - 1.0).abs() < 1e-6);
             let (base, share) = Stage::Bass.span(separating);
-            assert!((base + share - 0.95).abs() < 1e-6);
+            assert!((base + share - save).abs() < 1e-6);
             let (tb, ts) = Stage::Techniques.span(separating);
             assert!((tb + ts - base).abs() < 1e-6);
             let (gb, gs) = Stage::Guitar.span(separating);
@@ -1141,6 +1187,7 @@ mod tests {
             separate: false,
             guitar_model: Default::default(),
             fingering: Default::default(),
+            tone: false,
             guitar: true,
             bass: false,
             output_dir: dir.join("repo"),

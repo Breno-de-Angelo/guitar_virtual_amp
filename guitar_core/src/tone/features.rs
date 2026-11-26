@@ -15,8 +15,11 @@ use rustfft::{FftPlanner, num_complex::Complex32};
 /// Analysis resolutions: (FFT size, hop, lowest band edge in Hz, bands).
 const RESOLUTIONS: [(usize, usize, f32, usize); 2] = [(2048, 512, 60.0, 40), (512, 128, 250.0, 20)];
 const HIGHEST_HZ: f32 = 16_000.0;
-/// Band energies below the loudest frame's level minus this are floored.
-const FLOOR_DB: f32 = 80.0;
+/// Band energies below the loudest band's level minus this are floored, in
+/// the benchmark score. The search can use a higher floor
+/// ([`Target::with_floor`]) so it ignores quiet bands, where a stand-in dry
+/// signal differs most from a real one.
+pub const FLOOR_DB: f32 = 80.0;
 /// Frames quieter than the loudest minus this don't count (silence).
 const ACTIVE_DB: f32 = 45.0;
 /// Largest boost or cut the matching EQ may apply.
@@ -85,7 +88,7 @@ pub fn normalized(x: &[f32]) -> Vec<f32> {
     x.iter().map(|v| v / rms).collect()
 }
 
-fn spectrogram(x: &[f32], fft: usize, hop: usize, bands: &Bands) -> Spectrogram {
+fn spectrogram(x: &[f32], fft: usize, hop: usize, bands: &Bands, floor_db: f32) -> Spectrogram {
     let window: Vec<f32> = (0..fft)
         .map(|i| 0.5 - 0.5 * (std::f32::consts::TAU * i as f32 / fft as f32).cos())
         .collect();
@@ -115,7 +118,7 @@ fn spectrogram(x: &[f32], fft: usize, hop: usize, bands: &Bands) -> Spectrogram 
     let bands_n = bands.weights.len();
     let peak = db.iter().copied().fold(f32::MIN, f32::max);
     for v in &mut db {
-        *v = v.max(peak - FLOOR_DB);
+        *v = v.max(peak - floor_db);
     }
     Spectrogram {
         frames,
@@ -165,6 +168,7 @@ struct Resolution {
 pub struct Target {
     rate: u32,
     len: usize,
+    floor_db: f32,
     resolutions: Vec<Resolution>,
 }
 
@@ -183,12 +187,17 @@ pub struct Comparison {
 
 impl Target {
     pub fn new(x: &[f32], rate: u32) -> Self {
+        Self::with_floor(x, rate, FLOOR_DB)
+    }
+
+    /// [`Target::new`] with another floor (dB below the loudest band).
+    pub fn with_floor(x: &[f32], rate: u32, floor_db: f32) -> Self {
         let x = normalized(x);
         let resolutions = RESOLUTIONS
             .iter()
             .map(|&(fft, hop, low, count)| {
                 let bands = Bands::new(fft, rate, low, count);
-                let spec = spectrogram(&x, fft, hop, &bands);
+                let spec = spectrogram(&x, fft, hop, &bands, floor_db);
                 let levels: Vec<f32> = (0..spec.frames).map(|t| frame_level(&spec, t)).collect();
                 let loudest = levels.iter().copied().fold(f32::MIN, f32::max);
                 let active: Vec<usize> = (0..spec.frames)
@@ -208,6 +217,7 @@ impl Target {
         Self {
             rate,
             len: x.len(),
+            floor_db,
             resolutions,
         }
     }
@@ -230,7 +240,7 @@ impl Target {
         let mut total = 0.0;
         let mut first_eq = None;
         for r in &self.resolutions {
-            let spec = spectrogram(&render, r.fft, r.hop, &r.bands);
+            let spec = spectrogram(&render, r.fft, r.hop, &r.bands, self.floor_db);
             let frames: Vec<usize> = r
                 .active
                 .iter()
@@ -274,7 +284,7 @@ pub fn plain_distance(target: &[f32], render: &[f32], rate: u32) -> f32 {
     let render = normalized(render);
     let mut total = 0.0;
     for r in &t.resolutions {
-        let spec = spectrogram(&render, r.fft, r.hop, &r.bands);
+        let spec = spectrogram(&render, r.fft, r.hop, &r.bands, FLOOR_DB);
         let frames: Vec<usize> = r
             .active
             .iter()

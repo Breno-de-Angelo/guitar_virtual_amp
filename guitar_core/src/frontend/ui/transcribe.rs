@@ -312,6 +312,7 @@ impl TranscribePanel {
             separate: self.separate && self.separator.is_some(),
             guitar_model: settings.transcription_guitar_model,
             fingering: settings.transcription_fingering,
+            tone: settings.transcription_tone && self.separate && self.separator.is_some(),
             guitar: self.guitar,
             bass: self.bass,
             output_dir,
@@ -490,6 +491,21 @@ impl TranscribePanel {
                     }
                 });
             }
+            ui.horizontal(|ui| {
+                let can = self.guitar && self.separate && self.separator.is_some();
+                let mut tone = settings.transcription_tone;
+                ui.add_enabled(can, egui::Checkbox::new(&mut tone, "Estimar o timbre (experimental)"))
+                    .on_hover_text(
+                        "Depois da tab, procura nos pedais do app um timbre parecido com cada guitarra da \
+                         gravação e salva como preset desta música (aparece em 💡 Timbre na página de tabs). \
+                         Precisa da separação de instrumentos; leva ~30 s por guitarra. É um ponto de \
+                         partida: ajuste de ouvido.",
+                    );
+                if tone != settings.transcription_tone {
+                    settings.transcription_tone = tone;
+                    save_settings(settings);
+                }
+            });
             ui.label(
                 RichText::new(engines_summary(
                     self.separate.then_some(self.separator.as_ref()).flatten(),

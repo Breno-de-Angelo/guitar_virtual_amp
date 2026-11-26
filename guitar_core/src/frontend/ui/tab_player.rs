@@ -29,7 +29,7 @@ use crate::shared::factory_presets::factory_presets;
 use crate::shared::pedals::PedalInstance;
 use crate::shared::preset::{self, Preset};
 use crate::shared::settings::{save_settings, AppSettings, PracticePrefs, PresetRef, TabSyncSettings};
-use crate::shared::tab::tone::{guess_tone, preset_fits_song};
+use crate::shared::tab::tone::{ESTIMATED_TAG, guess_tone, preset_fits_song, preset_fits_track};
 use crate::shared::tab::import::{load_score_file, SUPPORTED_EXTENSIONS};
 use crate::shared::tab::repository;
 use crate::shared::tab::model::Score;
@@ -542,17 +542,29 @@ impl TabPlayerPanel {
     /// Tone suggestions for the selected track.
     fn tone_row(&mut self, ui: &mut Ui) -> Option<(Vec<PedalInstance>, PresetRef)> {
         let tab = self.tab.as_ref()?;
-        let guess = tab.score.tracks.get(self.selected_track).and_then(guess_tone);
-        if guess.is_none() && self.song_presets.is_empty() {
+        let track = tab.score.tracks.get(self.selected_track);
+        let guess = track.and_then(guess_tone);
+        let track_name = track.map(|t| t.name.as_str()).unwrap_or_default();
+        let presets: Vec<&(Preset, PathBuf)> =
+            self.song_presets.iter().filter(|(p, _)| preset_fits_track(p, track_name)).collect();
+        if guess.is_none() && presets.is_empty() {
             return None;
         }
         let mut chosen = None;
         ui.horizontal_wrapped(|ui| {
             ui.label("💡 Timbre:")
                 .on_hover_text("Ponto de partida para o timbre. Não há como copiar o timbre exato da gravação.");
-            for (preset, path) in &self.song_presets {
-                let label = format!("⭐ {}", preset.name);
-                if ui.button(label).on_hover_text("Seu preset salvo para esta música/artista").clicked() {
+            for (preset, path) in presets {
+                let estimated = preset.tags.iter().any(|t| t == ESTIMATED_TAG);
+                let (label, hover) = if estimated {
+                    (
+                        format!("🎛 {}", preset.name),
+                        "Timbre estimado da gravação (experimental): um ponto de partida, ajuste de ouvido",
+                    )
+                } else {
+                    (format!("⭐ {}", preset.name), "Seu preset salvo para esta música/artista")
+                };
+                if ui.button(label).on_hover_text(hover).clicked() {
                     chosen = Some((preset.pedals.clone(), PresetRef::User(path.clone())));
                 }
             }

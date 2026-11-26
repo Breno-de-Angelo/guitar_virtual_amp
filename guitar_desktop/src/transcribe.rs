@@ -14,6 +14,10 @@
 //!                     (guitar_electric_crnn.onnx in the models folder)
 //!   --fingering F     learned (default when fingering_tagger.onnx is in the
 //!                     models folder) or viterbi
+//!   --tone            also estimate each guitar track's tone (experimental):
+//!                     saved as a user preset named after the song and track,
+//!                     with a matching IR in <data dir>/guitar_virtual_amp/tone_match/
+//!                     (needs a separator; adds ~30 s per guitar track)
 //!   --no-bass / --no-guitar
 //!   --force           redo files already in the repository (same audio hash)
 //!   --artist A --title T   only with a single file/video; otherwise taken from
@@ -64,6 +68,7 @@ fn main() {
     let mut youtube_queries: Vec<String> = Vec::new();
     let mut guitar_model = GuitarModel::Gaps;
     let mut fingering = Fingering::Learned;
+    let mut tone = false;
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--repo" => repo = args.next().map(PathBuf::from),
@@ -71,6 +76,7 @@ fn main() {
             "--no-bass" => bass = false,
             "--no-guitar" => guitar = false,
             "--force" => force = true,
+            "--tone" => tone = true,
             "--artist" => artist = args.next(),
             "--title" => title = args.next(),
             "--youtube" => youtube_queries.extend(args.next()),
@@ -173,6 +179,7 @@ fn main() {
             separate,
             guitar_model,
             fingering,
+            tone,
             guitar,
             bass,
             output_dir: repo.clone(),
@@ -214,6 +221,9 @@ fn main() {
                     .iter()
                     .map(|t| format!("{} {} notas ({})", t.name, t.notes, t.tuning_name))
                     .collect();
+                for (track, preset) in &output.tone_presets {
+                    println!("  timbre de \"{track}\": {}", preset.display());
+                }
                 println!(
                     "{label}: OK em {:.0}s, {:.0} bpm, {} -> {}\n",
                     started.elapsed().as_secs_f64(),
@@ -272,6 +282,7 @@ fn main() {
                 separate,
                 guitar_model,
                 fingering,
+                tone,
                 guitar,
                 bass,
                 output_dir: repo.clone(),
@@ -294,6 +305,9 @@ fn main() {
             );
             match result {
                 Ok(output) => {
+                    for (track, preset) in &output.tone_presets {
+                        println!("  timbre de \"{track}\": {}", preset.display());
+                    }
                     println!(
                         "{label}: OK em {:.0}s, {:.0} bpm -> {}\n",
                         started.elapsed().as_secs_f64(),
