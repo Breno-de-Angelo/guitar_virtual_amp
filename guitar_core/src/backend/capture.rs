@@ -202,12 +202,15 @@ impl OutputRenderer {
             let mut peak: i16 = 0;
             for sample in block.iter_mut() {
                 let raw = input_rx.try_recv().unwrap_or(0);
-                peak = peak.max(raw.saturating_abs());
                 *sample = if unity {
                     raw
                 } else {
                     (raw as f32 * input_gain).clamp(i16::MIN as f32, i16::MAX as f32) as i16
                 };
+                // What reaches the chain, but a clipping interface still
+                // shows even with the gain turned down.
+                let raw_clip = if raw.saturating_abs() == i16::MAX { i16::MAX } else { 0 };
+                peak = peak.max(sample.saturating_abs()).max(raw_clip);
             }
             self.controls.record_input_peak(peak as f32 / i16::MAX as f32);
             let dry_tap = self.controls.analysis_dry();
@@ -219,13 +222,16 @@ impl OutputRenderer {
                 self.pulse_remaining = PULSE_SAMPLES;
                 self.controls.mark_pulse_sent(self.controls.analysis_sent());
             }
+            let mut delivered = 0u64;
             for (i, &sample) in block.iter().enumerate() {
                 let click = self.metronome_click.next_sample().saturating_add(next_pulse_sample(&mut self.pulse_remaining));
                 let analysed = if dry_tap { self.dry[i] } else { sample };
-                let _ = audio_tx.try_send(analysed);
+                // Only delivered samples count, so the UI's received count
+                // stays aligned with this one (latency probe).
+                delivered += u64::from(audio_tx.try_send(analysed).is_ok());
                 write(done + i, sample, click);
             }
-            self.controls.count_analysis_samples(len as u64);
+            self.controls.count_analysis_samples(delivered);
             done += len;
         }
     }

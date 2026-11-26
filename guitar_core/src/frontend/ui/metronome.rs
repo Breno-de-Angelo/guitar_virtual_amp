@@ -57,6 +57,10 @@ impl MetronomePanel {
         self.audio_bpm.store(self.metronome.bpm.to_bits(), Ordering::Relaxed);
     }
 
+    pub fn running(&self) -> bool {
+        self.metronome.running
+    }
+
     pub fn toggle(&mut self) {
         if self.metronome.running {
             self.metronome.stop();

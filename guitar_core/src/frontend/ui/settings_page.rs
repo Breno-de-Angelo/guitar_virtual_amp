@@ -11,7 +11,7 @@ use crate::frontend::lib::latency::{LatencyProbe, ProbeState};
 use crate::frontend::style::{self, Palette};
 use crate::shared::midi::MidiAction;
 use crate::shared::pedals::PedalInstance;
-use crate::shared::settings::{AppSettings, ThemePref, save_settings};
+use crate::shared::settings::{AppSettings, ThemePref};
 
 /// `(keys, what they do)`, shown here and in the F1 overlay.
 pub const SHORTCUTS: &[(&str, &str)] = &[
@@ -60,6 +60,8 @@ pub struct SettingsOutput {
     pub cancel_latency_probe: bool,
     /// Practice mode's extra latency should become this (ms).
     pub use_extra_latency_ms: Option<f32>,
+    /// Settings changed: save them (debounced by the caller).
+    pub save: bool,
 }
 
 impl SettingsPage {
@@ -246,9 +248,7 @@ impl SettingsPage {
                 );
             });
         });
-        if save {
-            save_settings(settings);
-        }
+        out.save |= save;
         out
     }
 

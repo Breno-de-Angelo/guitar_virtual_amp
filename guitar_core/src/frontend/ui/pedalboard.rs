@@ -14,6 +14,8 @@ use crate::shared::pedals::{PedalCategory, PedalDescription, PedalInstance};
 #[derive(Default)]
 pub struct PedalboardPage {
     pub history: ChainHistory,
+    /// Undo/redo changed the chain this frame: don't record that as an edit.
+    navigated: bool,
     confirm_clear: bool,
     /// The other chain of an A/B comparison, and whether the live chain is B.
     compare: Option<(Vec<PedalInstance>, bool)>,
@@ -69,9 +71,13 @@ pub fn add_pedal_menu(ui: &mut Ui) -> Option<PedalDescription> {
 }
 
 impl PedalboardPage {
-    /// Records an edit made outside the page (preset load, MIDI, tone
-    /// suggestion) so it can be undone too.
-    pub fn record_external(&mut self, before: &[PedalInstance], after: &[PedalInstance]) {
+    /// Call once per frame with the chain as it was when the frame started:
+    /// records whatever changed it (this page, presets, MIDI, shortcuts,
+    /// tone suggestions) as one undoable edit.
+    pub fn end_frame(&mut self, before: &[PedalInstance], after: &[PedalInstance]) {
+        if std::mem::take(&mut self.navigated) {
+            return;
+        }
         if let Some(kind) = classify_edit(before, after) {
             self.history.record(before, kind);
         }
@@ -81,6 +87,7 @@ impl PedalboardPage {
         match self.history.undo(chain) {
             Some(previous) => {
                 *chain = previous;
+                self.navigated = true;
                 true
             }
             None => false,
@@ -91,6 +98,7 @@ impl PedalboardPage {
         match self.history.redo(chain) {
             Some(next) => {
                 *chain = next;
+                self.navigated = true;
                 true
             }
             None => false,
@@ -113,7 +121,6 @@ impl PedalboardPage {
         let palette = Palette::of(ui.ctx());
         let before = chain.clone();
         let mut out = BoardOutput::default();
-        let mut undo_redo = false;
 
         // Toolbar.
         ui.horizontal_wrapped(|ui| {
@@ -123,10 +130,10 @@ impl PedalboardPage {
             }
             ui.separator();
             if ui.add_enabled(self.history.can_undo(), egui::Button::new("⟲ Undo")).on_hover_text("Ctrl+Z").clicked() {
-                undo_redo |= self.undo(chain);
+                self.undo(chain);
             }
             if ui.add_enabled(self.history.can_redo(), egui::Button::new("⟳ Redo")).on_hover_text("Ctrl+Shift+Z / Ctrl+Y").clicked() {
-                undo_redo |= self.redo(chain);
+                self.redo(chain);
             }
             ui.separator();
             let any_on = chain.iter().any(|p| p.enabled);
@@ -189,9 +196,6 @@ impl PedalboardPage {
             self.cards(ui, chain, &mut out);
         }
 
-        if !undo_redo && let Some(kind) = classify_edit(&before, chain) {
-            self.history.record(&before, kind);
-        }
         out.chain_changed |= before != *chain;
         out
     }
@@ -375,8 +379,12 @@ mod tests {
         });
         let before = chain.clone();
         chain[0].enabled = false;
-        page.record_external(&before, &chain);
+        page.end_frame(&before, &chain);
         assert!(page.undo(&mut chain));
         assert!(chain[0].enabled);
+        // The undo itself isn't recorded as a new edit.
+        page.end_frame(&[], &chain);
+        assert!(!page.history.can_undo());
+        assert!(page.history.can_redo());
     }
 }

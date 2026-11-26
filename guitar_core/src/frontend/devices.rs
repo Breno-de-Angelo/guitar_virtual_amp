@@ -135,6 +135,17 @@ impl DeviceManager {
         }
     }
 
+    /// The newest chain waiting for the audio thread (tests).
+    #[cfg(test)]
+    pub fn take_pending_chain(&self) -> Option<Vec<PedalInstance>> {
+        self.shared.pedal_rx.try_iter().last()
+    }
+
+    /// Pauses the tab player's song (e.g. so the latency probe hears only its pulse).
+    pub fn pause_song(&self) {
+        self.shared.song_player.pause();
+    }
+
     /// Sample rate of the output stream (what recordings are written at).
     pub fn output_rate(&self) -> u32 {
         self.shared.song_player.status().output_rate()

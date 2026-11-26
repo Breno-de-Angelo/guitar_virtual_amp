@@ -517,6 +517,7 @@ impl TabPlayerPanel {
         self.soloed = vec![false; score.tracks.len()];
         self.layout = None;
         self.practice = None;
+        self.practice_loop = PracticeLoop::default();
         self.song_presets.clear();
         let (title, artist) = (score.title.clone(), score.artist.clone());
         self.loading_song_presets = Some(spawn(move || find_song_presets(title, artist)));
@@ -641,6 +642,8 @@ impl TabPlayerPanel {
     /// Hands the guitar samples that arrived this frame to practice mode.
     /// Call every frame, also while another page is shown.
     pub fn feed_input(&mut self, samples: &[f32], audio_latency_secs: f32) {
+        // Loop passes count on every page, not just while Tabs is shown.
+        self.on_loop_passes();
         if !self.practice_on {
             return;
         }
@@ -713,7 +716,6 @@ impl TabPlayerPanel {
         let tone = self.tone_row(ui);
         self.tuning_row(ui);
         ui.separator();
-        self.on_loop_passes();
         let playing = self.player.status().playing();
         if self.was_playing && !playing && self.practice_on {
             self.record_run(settings);

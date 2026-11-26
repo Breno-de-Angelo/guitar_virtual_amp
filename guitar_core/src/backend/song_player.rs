@@ -232,6 +232,8 @@ impl PlayerEngine {
             let n = chunk.len();
             let dt = n as f64 / rate;
             let audio_start = self.audio_secs;
+            // Only playing *into* the loop end wraps (not a seek past it).
+            let before_loop_end = self.loop_range.is_some_and(|(_, end)| self.score_secs < end);
             let new_score = if self.backing_active() {
                 self.audio_secs += dt;
                 self.sync.audio_to_score(self.audio_secs)
@@ -261,17 +263,17 @@ impl PlayerEngine {
                 }
             }
             self.score_secs = new_score;
-            let looped = match self.loop_range {
-                Some((start, loop_end)) if self.score_secs >= loop_end => {
-                    self.seek_score(start);
-                    self.status.loop_passes.fetch_add(1, Ordering::Relaxed);
-                    true
-                }
-                _ => false,
-            };
+            // This chunk's backing audio still comes from before the jump
+            // (`audio_start`), so the recording doesn't skip.
+            if let Some((start, loop_end)) = self.loop_range
+                && before_loop_end
+                && self.score_secs >= loop_end
+            {
+                self.seek_score(start);
+                self.status.loop_passes.fetch_add(1, Ordering::Relaxed);
+            }
 
-            if !looped
-                && self.backing_active()
+            if self.backing_active()
                 && let Some(backing) = &self.backing
             {
                 for (i, sample) in chunk.iter_mut().enumerate() {
@@ -374,6 +376,8 @@ impl SongPlayer {
     pub fn set_song(&self, timeline: Arc<Timeline>, channels: ChannelSetup, track_count: usize) {
         let old = self.with(|e| {
             e.playing = false;
+            e.loop_range = None;
+            e.count_in = None;
             e.channel_setup = channels;
             e.track_enabled = vec![true; track_count];
             let old = e.timeline.replace(timeline);
@@ -613,6 +617,25 @@ mod tests {
         player.set_loop(None);
         player.stop();
         assert_eq!(player.status().score_secs(), 0.0);
+    }
+
+    #[test]
+    fn seeking_past_the_loop_end_plays_on_without_a_pass() {
+        let player = player_at(1000);
+        player.set_loop(Some((0.5, 1.5)));
+        player.play();
+        player.seek(2.0);
+        let mut buf = vec![0.0; 500];
+        player.try_render(&mut buf);
+        assert_eq!(player.status().loop_passes(), 0);
+        assert!(player.status().score_secs() > 2.0);
+        // A new song drops the loop.
+        player.set_song(two_bar_timeline(), Vec::new(), 0);
+        player.play();
+        for _ in 0..4 {
+            player.try_render(&mut buf);
+        }
+        assert_eq!(player.status().loop_passes(), 0);
     }
 
     #[test]

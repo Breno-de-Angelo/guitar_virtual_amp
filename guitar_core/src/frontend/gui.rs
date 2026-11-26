@@ -29,7 +29,9 @@ use crate::{
         ui::metronome::MetronomePanel,
         ui::pedalboard::PedalboardPage,
         ui::pedals::looper_cycle,
-        ui::presets::{LoadedPreset, PresetPanel, load_preset_ref, preset_order, preset_ref_name, step_preset},
+        ui::presets::{
+            LoadedPreset, PresetFileEvent, PresetPanel, load_preset_ref, preset_order, preset_ref_name, step_preset,
+        },
         ui::settings_page::{SettingsPage, shortcuts_grid},
         ui::spotify::{SpotifyAction, SpotifyPanel},
         ui::tab_player::TabPlayerPanel,
@@ -192,6 +194,9 @@ pub struct AudioApp {
     title: String,
     /// Page last persisted.
     saved_page: Option<Page>,
+    /// Settings changed by a slider or field being dragged/typed: saved once
+    /// they've been still for a moment instead of on every frame.
+    save_due: Option<Instant>,
     settings: AppSettings,
 }
 
@@ -263,6 +268,7 @@ impl AudioApp {
             warned_clipping: false,
             title: String::new(),
             saved_page: None,
+            save_due: None,
             devices,
             settings,
         }
@@ -273,14 +279,18 @@ impl AudioApp {
         self.page = page;
     }
 
+    /// Saves the settings soon (debounced, for continuous controls).
+    fn save_soon(&mut self) {
+        self.save_due = Some(Instant::now() + Duration::from_millis(600));
+    }
+
     fn toast(&mut self, text: impl Into<String>, error: bool) {
         self.toast = Some(Toast { text: text.into(), error, until: Instant::now() + Duration::from_secs(3) });
     }
 
     /// Replaces the chain with a preset, as an undoable edit.
     fn load_preset(&mut self, loaded: LoadedPreset) {
-        let before = std::mem::replace(&mut self.pedal_chain, loaded.pedals.clone());
-        self.pedalboard.record_external(&before, &self.pedal_chain);
+        self.pedal_chain = loaded.pedals.clone();
         if matches!(loaded.preset_ref, PresetRef::User(_)) {
             self.preset_panel.set_save_name(&loaded.name);
         }
@@ -303,6 +313,31 @@ impl AudioApp {
         if let Some(next) = step_preset(&order, self.current_preset.as_ref().map(|c| &c.preset_ref), step) {
             self.load_preset_ref(next);
         }
+    }
+
+    /// Keeps the current preset pointing at the right file after the
+    /// Presets page saved, renamed or deleted one.
+    fn on_preset_file_event(&mut self, event: PresetFileEvent) {
+        match event {
+            PresetFileEvent::Saved(path, name) => {
+                self.current_preset =
+                    Some(CurrentPreset { preset_ref: PresetRef::User(path), name, pedals: self.pedal_chain.clone() });
+            }
+            PresetFileEvent::Renamed { from, to, name } => {
+                if let Some(current) = &mut self.current_preset
+                    && current.preset_ref == PresetRef::User(from)
+                {
+                    current.preset_ref = PresetRef::User(to);
+                    current.name = name;
+                }
+            }
+            PresetFileEvent::Deleted(path) => {
+                if self.current_preset.as_ref().is_some_and(|c| c.preset_ref == PresetRef::User(path.clone())) {
+                    self.current_preset = None;
+                }
+            }
+        }
+        self.settings.last_preset = self.current_preset.as_ref().map(|c| c.preset_ref.clone());
     }
 
     fn preset_dirty(&self) -> bool {
@@ -410,12 +445,7 @@ impl AudioApp {
                 }
                 _ => self.toast("Drop a preset (.json), a NAM capture (.nam) or an IR (.wav) here; tabs go on the Tabs page", true),
             }
-            if self.pedal_chain != before {
-                if !matches!(ext.as_str(), "json") {
-                    self.pedalboard.record_external(&before, &self.pedal_chain);
-                }
-                changed = true;
-            }
+            changed |= self.pedal_chain != before;
         }
         changed
     }
@@ -579,8 +609,8 @@ impl AudioApp {
                     self.settings.ui.output_volume_db = db;
                     self.apply_levels();
                 }
-                if slider.drag_stopped() {
-                    save_settings(&self.settings);
+                if slider.changed() || slider.drag_stopped() {
+                    self.save_soon();
                 }
                 if slider.double_clicked() {
                     self.settings.ui.output_volume_db = 0.0;
@@ -696,7 +726,17 @@ impl AudioApp {
         ui.add_space(style::space::XS);
     }
 
-    /// Draws the current page. Returns `(chain changed, tone choice)`.
+    /// Records the frame's chain edits for undo and sends the chain to the
+    /// audio thread if anything changed it.
+    fn finish_frame(&mut self, frame_start_chain: &[PedalInstance], chain_changed: bool) {
+        self.pedalboard.end_frame(frame_start_chain, &self.pedal_chain);
+        if chain_changed || self.pedal_chain != frame_start_chain {
+            preload_nam_models(&self.pedal_chain);
+            self.devices.send_chain(&self.pedal_tx, &self.pedal_chain);
+        }
+    }
+
+    /// Draws the current page. Returns whether the chain changed.
     fn central(&mut self, ui: &mut egui::Ui) -> bool {
         let mut chain_changed = false;
         if self.page != Page::Tabs && self.page != Page::Spotify {
@@ -712,8 +752,12 @@ impl AudioApp {
             }
             Page::Presets => {
                 let current = self.current_preset.as_ref().map(|c| c.preset_ref.clone());
-                let (loaded, prefs_changed) =
+                let (loaded, mut prefs_changed) =
                     self.preset_panel.ui(ui, &self.pedal_chain, current.as_ref(), &mut self.settings.ui);
+                for event in self.preset_panel.take_file_events() {
+                    self.on_preset_file_event(event);
+                    prefs_changed = true;
+                }
                 if prefs_changed {
                     save_settings(&self.settings);
                 }
@@ -740,7 +784,7 @@ impl AudioApp {
                         save |= prefs;
                     });
                     if save {
-                        save_settings(&self.settings);
+                        self.save_soon();
                     }
                 });
             }
@@ -791,7 +835,15 @@ impl AudioApp {
                     self.controls.set_analysis_dry(self.settings.ui.analysis_dry);
                 }
                 if out.start_latency_probe {
+                    // Only the pulse should be heard.
+                    if self.metronome_panel.running() {
+                        self.metronome_panel.toggle();
+                    }
+                    self.devices.pause_song();
                     self.latency_probe.start(self.received_total);
+                }
+                if out.save {
+                    self.save_soon();
                 }
                 if out.cancel_latency_probe {
                     self.latency_probe.cancel();
@@ -810,6 +862,9 @@ impl AudioApp {
 
 impl eframe::App for AudioApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // Whatever changes the chain this frame (pages, presets, MIDI,
+        // shortcuts) is found by comparing with this at the end.
+        let frame_start_chain = self.pedal_chain.clone();
         // Guitar samples since the last frame.
         let mut fresh: Vec<f32> = Vec::with_capacity(self.audio_rx.len());
         while let Ok(sample) = self.audio_rx.try_recv() {
@@ -888,10 +943,7 @@ impl eframe::App for AudioApp {
             });
 
         if let Some(loaded) = self.tone3000_panel.show(ctx) {
-            let before = self.pedal_chain.clone();
             apply_loaded_tone(&mut self.pedal_chain, loaded);
-            self.pedalboard.record_external(&before, &self.pedal_chain);
-            chain_changed = true;
         }
 
         if self.show_shortcuts {
@@ -943,9 +995,10 @@ impl eframe::App for AudioApp {
         let tuning_mute = self.page == Page::Tuner && self.settings.ui.mute_while_tuning;
         self.controls.set_muted(self.user_muted || tuning_mute);
 
-        if chain_changed {
-            preload_nam_models(&self.pedal_chain);
-            self.devices.send_chain(&self.pedal_tx, &self.pedal_chain);
+        self.finish_frame(&frame_start_chain, chain_changed);
+        if self.save_due.is_some_and(|due| Instant::now() >= due) {
+            self.save_due = None;
+            save_settings(&self.settings);
         }
 
         ctx.request_repaint();
@@ -994,6 +1047,36 @@ mod tests {
     }
 
     #[test]
+    fn stepping_presets_reaches_the_audio_thread() {
+        let mut app = app();
+        let start = app.pedal_chain.clone();
+        app.step_preset(1);
+        app.finish_frame(&start, false);
+        assert_eq!(app.devices.take_pending_chain(), Some(app.pedal_chain.clone()));
+        let start = app.pedal_chain.clone();
+        app.toggle_pedal(0);
+        app.finish_frame(&start, false);
+        assert!(app.devices.take_pending_chain().is_some(), "MIDI/keyboard toggles too");
+        assert!(app.pedalboard.history.can_undo());
+    }
+
+    #[test]
+    fn saving_renaming_and_deleting_follow_the_current_preset() {
+        let mut app = app();
+        app.step_preset(1);
+        let a = std::path::PathBuf::from("/p/a.json");
+        let b = std::path::PathBuf::from("/p/b.json");
+        app.pedal_chain.clear();
+        app.on_preset_file_event(PresetFileEvent::Saved(a.clone(), "A".into()));
+        assert!(!app.preset_dirty());
+        assert_eq!(app.settings.last_preset, Some(PresetRef::User(a.clone())));
+        app.on_preset_file_event(PresetFileEvent::Renamed { from: a, to: b.clone(), name: "B".into() });
+        assert_eq!(app.current_preset.as_ref().map(|c| c.name.as_str()), Some("B"));
+        app.on_preset_file_event(PresetFileEvent::Deleted(b));
+        assert!(app.current_preset.is_none());
+    }
+
+    #[test]
     fn presets_step_and_dirty_state() {
         let mut app = app();
         app.step_preset(1);
@@ -1001,9 +1084,11 @@ mod tests {
         assert!(!app.preset_dirty());
         app.pedal_chain.push(PedalInstance::new(PedalDescription::Reverb(Default::default())));
         assert!(app.preset_dirty());
+        let before = app.pedal_chain.clone();
         app.step_preset(-1);
         app.step_preset(1);
         assert_eq!(app.current_preset.as_ref().map(|c| c.name.clone()), Some(first));
+        app.pedalboard.end_frame(&before, &app.pedal_chain);
         assert!(app.pedalboard.undo(&mut app.pedal_chain), "preset loads are undoable");
     }
 

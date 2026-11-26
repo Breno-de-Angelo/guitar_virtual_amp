@@ -86,6 +86,8 @@ pub fn classify_edit(before: &[PedalInstance], after: &[PedalInstance]) -> Optio
         .zip(after)
         .all(|(a, b)| std::mem::discriminant(&a.description) == std::mem::discriminant(&b.description));
     match differing.as_slice() {
+        // Bypass toggles are steps of their own, never merged with tweaks.
+        [i] if same_kinds && before[*i].enabled != after[*i].enabled => Some(EditKind::Structure),
         [i] if same_kinds => Some(EditKind::Tweak(*i)),
         _ => Some(EditKind::Structure),
     }
@@ -135,6 +137,9 @@ mod tests {
             Some(EditKind::Tweak(0))
         );
         assert_eq!(classify_edit(&[delay(1.0)], &[]), Some(EditKind::Structure));
+        let mut off = delay(1.0);
+        off.enabled = false;
+        assert_eq!(classify_edit(&[delay(1.0)], &[off]), Some(EditKind::Structure), "bypass is its own step");
         assert_eq!(
             classify_edit(&[delay(1.0), reverb.clone()], &[reverb, delay(1.0)]),
             Some(EditKind::Structure)

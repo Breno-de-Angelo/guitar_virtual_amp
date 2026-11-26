@@ -158,11 +158,13 @@ impl AudioControls {
     /// Asks the output callback to play one latency-test pulse.
     pub fn request_pulse(&self) {
         self.pulse_sent_at.store(u64::MAX, Ordering::Relaxed);
-        self.pulse_requested.store(true, Ordering::Relaxed);
+        // Release: the audio thread that sees the request also sees the
+        // reset above, so its `mark_pulse_sent` can't be overwritten by it.
+        self.pulse_requested.store(true, Ordering::Release);
     }
     /// Takes a pending pulse request (audio thread).
     pub(crate) fn take_pulse_request(&self) -> bool {
-        self.pulse_requested.swap(false, Ordering::Relaxed)
+        self.pulse_requested.swap(false, Ordering::Acquire)
     }
     pub(crate) fn mark_pulse_sent(&self, at: u64) {
         self.pulse_sent_at.store(at, Ordering::Relaxed);

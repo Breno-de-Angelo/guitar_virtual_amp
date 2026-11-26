@@ -59,6 +59,15 @@ pub fn step_preset(order: &[PresetRef], current: Option<&PresetRef>, step: isize
     order.get(index as usize).cloned()
 }
 
+/// A user preset file that was saved, renamed or deleted from the page.
+#[derive(Clone, Debug, PartialEq)]
+pub enum PresetFileEvent {
+    /// The live chain was saved to this file under this name.
+    Saved(PathBuf, String),
+    Renamed { from: PathBuf, to: PathBuf, name: String },
+    Deleted(PathBuf),
+}
+
 /// A preset the user picked this frame.
 pub struct LoadedPreset {
     pub pedals: Vec<PedalInstance>,
@@ -78,6 +87,9 @@ pub struct PresetPanel {
     renaming: Option<(PathBuf, String)>,
     confirm_delete: Option<PathBuf>,
     confirm_overwrite: Option<PathBuf>,
+    /// File changes the app must reflect in its "current preset"
+    /// (see [`PresetPanel::take_file_events`]).
+    events: Vec<PresetFileEvent>,
     /// Manual path entry, used in place of a native file dialog on platforms
     /// (Android) where `rfd` has no backend.
     #[cfg(target_os = "android")]
@@ -102,11 +114,17 @@ impl PresetPanel {
             renaming: None,
             confirm_delete: None,
             confirm_overwrite: None,
+            events: Vec::new(),
             #[cfg(target_os = "android")]
             manual_path: String::new(),
         };
         panel.refresh();
         panel
+    }
+
+    /// Saves, renames and deletes since the last call.
+    pub fn take_file_events(&mut self) -> Vec<PresetFileEvent> {
+        std::mem::take(&mut self.events)
     }
 
     pub fn refresh(&mut self) {
@@ -160,6 +178,7 @@ impl PresetPanel {
         match preset::save_to_file(&preset, &path) {
             Ok(()) => {
                 self.set_status(format!("Saved \"{}\"", preset.name), false);
+                self.events.push(PresetFileEvent::Saved(path.clone(), preset.name.clone()));
                 self.refresh();
                 Some(path)
             }
@@ -346,6 +365,7 @@ impl PresetPanel {
                 }
                 prefs.setlist.retain(|r| r != &PresetRef::User(path.clone()));
                 prefs_changed = true;
+                self.events.push(PresetFileEvent::Deleted(path.clone()));
                 self.confirm_delete = None;
                 self.refresh();
             }
@@ -359,6 +379,11 @@ impl PresetPanel {
                         old_path.with_file_name(format!("{}.json", preset::sanitize_file_stem(&preset.name)));
                     match preset::save_to_file(&preset, &new_path) {
                         Ok(()) => {
+                            self.events.push(PresetFileEvent::Renamed {
+                                from: old_path.clone(),
+                                to: new_path.clone(),
+                                name: preset.name.clone(),
+                            });
                             if new_path != old_path {
                                 let _ = preset::delete_file(&old_path);
                                 for entry in prefs.setlist.iter_mut() {

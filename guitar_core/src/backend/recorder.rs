@@ -127,7 +127,13 @@ impl Recorder {
             return Err("Already recording".into());
         }
         std::fs::create_dir_all(dir).map_err(|e| format!("Can't create {}: {e}", dir.display()))?;
-        let path = dir.join(file_name_for_now());
+        let name = file_name_for_now();
+        let mut path = dir.join(&name);
+        let mut n = 2;
+        while path.exists() {
+            path = dir.join(name.replace(".wav", &format!("-{n}.wav")));
+            n += 1;
+        }
         let spec = hound::WavSpec {
             channels: 1,
             sample_rate: sample_rate.max(1),

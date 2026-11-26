@@ -61,6 +61,8 @@ pub struct LatencyProbe {
     received: u64,
     running: bool,
     pending: Option<u64>,
+    /// When the pending pulse was requested (to give up if audio is stopped).
+    requested_at: Instant,
     next_pulse_at: Option<Instant>,
     pulses_sent: usize,
     hits: Vec<f64>,
@@ -76,6 +78,7 @@ impl LatencyProbe {
             received: 0,
             running: false,
             pending: None,
+            requested_at: Instant::now(),
             next_pulse_at: None,
             pulses_sent: 0,
             hits: Vec::new(),
@@ -134,14 +137,19 @@ impl LatencyProbe {
                 return;
             }
             controls.request_pulse();
+            self.requested_at = Instant::now();
             self.pulses_sent += 1;
             self.pending = Some(u64::MAX);
             self.next_pulse_at = None;
         }
-        if self.pending == Some(u64::MAX)
-            && let Some(sent) = controls.pulse_sent_at()
-        {
-            self.pending = Some(sent);
+        if self.pending == Some(u64::MAX) {
+            if let Some(sent) = controls.pulse_sent_at() {
+                self.pending = Some(sent);
+            } else if self.requested_at.elapsed() > Duration::from_secs(2) {
+                self.running = false;
+                self.state = ProbeState::Failed("The audio output isn't running, so no pulse was played.".into());
+                return;
+            }
         }
         if let Some(sent) = self.pending.filter(|s| *s != u64::MAX) {
             let listen = (LISTEN_SECS * self.rate) as u64;
@@ -224,6 +232,19 @@ mod tests {
             }
             other => panic!("{other:?}"),
         }
+    }
+
+    #[test]
+    fn gives_up_when_the_audio_thread_never_plays_the_pulse() {
+        let controls = AudioControls::default();
+        let mut probe = LatencyProbe::new(1000.0);
+        probe.start(0);
+        probe.next_pulse_at = Some(Instant::now());
+        probe.feed(&[], &controls);
+        probe.requested_at = Instant::now() - Duration::from_secs(3);
+        probe.feed(&[], &controls);
+        assert!(matches!(probe.state(), ProbeState::Failed(_)));
+        assert!(!probe.running());
     }
 
     #[test]
