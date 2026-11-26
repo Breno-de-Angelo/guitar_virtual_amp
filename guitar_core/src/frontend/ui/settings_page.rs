@@ -32,6 +32,7 @@ pub const SHORTCUTS: &[(&str, &str)] = &[
 ];
 
 /// Opens a folder in the system file manager.
+#[cfg(not(target_os = "android"))]
 pub fn open_folder(path: &Path) {
     let _ = std::fs::create_dir_all(path);
     #[cfg(target_os = "linux")]

@@ -217,12 +217,20 @@ impl Widget for Knob<'_> {
 }
 
 /// Knob over a `usize` (e.g. delay taps).
-pub fn knob_usize(ui: &mut Ui, value: &mut usize, range: RangeInclusive<usize>, label: &str, default: usize) -> Response {
+pub fn knob_usize(
+    ui: &mut Ui,
+    value: &mut usize,
+    range: RangeInclusive<usize>,
+    label: &str,
+    default: usize,
+    color: Color32,
+) -> Response {
     let mut v = *value as f32;
     let response = ui.add(
         Knob::new(&mut v, (*range.start() as f32)..=(*range.end() as f32), label)
             .integer()
-            .default_value(default as f32),
+            .default_value(default as f32)
+            .color(color),
     );
     *value = (v.round() as usize).clamp(*range.start(), *range.end());
     response
@@ -402,7 +410,7 @@ mod tests {
                 let mut v = 1.0;
                 ui.add(Knob::new(&mut v, 0.0..=5.0, "Gain").default_value(1.0));
                 let mut taps = 3;
-                knob_usize(ui, &mut taps, 1..=8, "Taps", 4);
+                knob_usize(ui, &mut taps, 1..=8, "Taps", 4, Color32::RED);
                 led(ui, true, 14.0, Color32::RED);
                 footswitch(ui, false);
                 level_meter(ui, &MeterState { level: 0.5, hold: 0.7, ..Default::default() }, vec2(100.0, 10.0), "IN");

@@ -293,7 +293,7 @@ pub fn delay_ui(ui: &mut Ui, params: &mut DelayParams, color: Color32) -> bool {
         c |= k.unit(ui, &mut params.mix, "Mix", d.mix);
         c |= k.unit(ui, &mut params.gain, "Level", d.gain);
         c |= k.lin(ui, &mut params.damping, 0.0..=0.99, "Damping", d.damping);
-        c |= knob_usize(ui, &mut params.taps, 1..=8, "Taps", d.taps).changed();
+        c |= knob_usize(ui, &mut params.taps, 1..=8, "Taps", d.taps, color).changed();
         c
     })
 }
