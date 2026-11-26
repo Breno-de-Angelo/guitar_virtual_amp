@@ -74,6 +74,7 @@ No hand-written octave correction for distortion & Made clean and crunch worse, 
 Pan split for several guitars & Lead F1 0.40 $\to$ 0.85 in two-guitar mixes; single guitars unaffected & \ref{sec:separation} \\
 Train in TF32, not bf16 & bf16 crashed (NaN) at step 1100 & \ref{sec:notes} \\
 Separation-aware training (T1) moved down, fingering (T2) up, after BS-RoFormer & Stems cost only about 0.02 F50 against isolated guitar on synthetic mixes & \ref{sec:next} \\
+MoisesDB pseudo-label fine-tune (T1) not adopted & Onset F50 +0.01 (distorted songs 0.701 $\to$ 0.710); F50+offset $-0.04$ to $-0.06$ & \ref{sec:notes} \\
 \bottomrule
 \end{tabularx}
 \end{table}

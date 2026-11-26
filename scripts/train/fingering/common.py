@@ -99,20 +99,21 @@ def labels(notes, frets):
 
 # ---------------------------------------------------------------- inference
 
-def windowed(run, frets, cont, window=128, hop=64):
+def windowed(run, frets, cont, window=128, hop=64, extra=()):
     """Logits [N, 6] of a whole recording from `run(frets[1,T,6],
-    cont[1,T,F]) -> logits[1,T,6]` over overlapping windows; each note
-    takes the window where it is farthest from an edge."""
+    cont[1,T,F], *extra[1,T,...]) -> logits[1,T,6]` over overlapping
+    windows; each note takes the window where it is farthest from an edge.
+    `extra`: more per-note inputs (the audio patches), windowed the same."""
     n = len(frets)
     if n <= window:
-        return run(frets[None], cont[None])[0]
+        return run(frets[None], cont[None], *(a[None] for a in extra))[0]
     out = np.zeros((n, 6), np.float32)
     best = np.full(n, -1.0)
     starts = list(range(0, n - window + 1, hop))
     if starts[-1] != n - window:
         starts.append(n - window)
     for s in starts:
-        lg = run(frets[None, s : s + window], cont[None, s : s + window])[0]
+        lg = run(frets[None, s : s + window], cont[None, s : s + window], *(a[None, s : s + window] for a in extra))[0]
         idx = np.arange(s, s + window)
         margin = np.minimum(idx - s, s + window - 1 - idx).astype(float)
         margin[idx == 0] = window

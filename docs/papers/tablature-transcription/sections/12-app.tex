@@ -111,8 +111,8 @@ song. The CRNN windows are the memory peak (about 600\,MB each in tract, so at
 most 4 at a time). The tract crates are built with \cmd{opt-level = 3} even in
 debug builds, otherwise transcription takes minutes.
 
-\begin{inapp}[: work in progress at the time of writing \wip]
-Uncommitted changes in the working tree add an optional last stage: with
+\begin{inapp}[: tone estimate, experimental \done]
+An optional last stage: with
 ``Estimar o timbre (experimental)'' checked in the Transcribe form (setting
 \code{AppSettings::transcription_tone}), each guitar part's audio and notes go
 to \code{tone::estimate_from_transcription}, and the estimated chain is saved as

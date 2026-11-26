@@ -162,6 +162,30 @@ above them (the distortion difference tone) made clean and crunch worse and
 metal no better, so it was dropped: distortion needs a model trained on
 distorted guitar, which is what v2 is.
 
+\begin{inapp}[: separation-aware fine-tune (T1), tried and not adopted]
+\code{scripts/train/pseudo_label_moisesdb.py} splits the 222 MoisesDB songs
+into train (150), validation (17) and test (55) songs, by guitar kind. A
+training item is a 60\,s window of a separator's guitar stem (BS-RoFormer or
+\code{htdemucs_6s}) or of the isolated guitars; its labels are the notes v2
+transcribed from the isolated guitars (\term{pseudo-labels}: a model's output
+used as training targets). \code{finetune_crnn.py --extra-train} mixes these
+items into v2's usual data. Two runs from v2 (4000 steps, 30\% and 50\% of the
+crops from MoisesDB, about 1.7\,h each on one DGX Spark) \measured:
+\begin{itemize}
+\item onset F50 rose by 0.01--0.02 on the EGDB amp tones and on separated
+  EGDB mixes, by 0.009 on the 28 distorted MoisesDB test songs (0.701 $\to$
+  0.710), and not at all on GOAT, GuitarSet or Guitar-TECHS;
+\item note ends got worse the more MoisesDB crops a run saw: with 50\%,
+  F50+offset fell by 0.04--0.06 on EGSet12, GuitarSet and GOAT. The teacher's
+  offsets on dense multi-guitar stems are poor labels.
+\end{itemize}
+v2 stays the electric option. The teacher is v2 itself, so the student mostly
+learns what it already does. If T1 is retried:
+onset-only loss on the pseudo-labelled crops, whole songs instead of 60\,s
+windows (about 4$\times$ the data), and a stronger teacher on distorted guitar
+(notes on which v2 and MuScriptor large agree).
+\end{inapp}
+
 \subsection{Failure modes}
 \begin{itemize}
 \item \textbf{Distortion}: octave-low errors from difference tones
@@ -172,8 +196,8 @@ distorted guitar, which is what v2 is.
   BS-RoFormer stem scores 0.56 on distorted guitars, 0.75 on clean electric and
   0.83 on acoustic \measured. This is the largest remaining loss on real songs.
 \item \textbf{Separation artefacts} are unseen in training (no published guitar
-  transcriber is trained on separated stems); planned as training task T1
-  (Section~\ref{sec:next}).
+  transcriber is trained on separated stems). Training on separated MoisesDB
+  stems with pseudo-labels (task T1, below) gained only about 0.01 onset F1.
 \item \textbf{Same-pitch notes} (unisons on two strings) cannot be represented
   by MT3-style tokens.
 \end{itemize}
