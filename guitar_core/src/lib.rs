@@ -4,3 +4,4 @@ pub mod shared;
 pub mod tone3000;
 pub mod transcribe;
 pub mod spotify;
+pub mod tone;

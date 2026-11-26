@@ -12,7 +12,8 @@ Status snapshot as of 2026-11-25 (see CLAUDE.md for full architecture):
   The app now talks to the network: TONE3000, Spotify and yt-dlp, each from worker threads only.
   There is still no backend service and no account system of our own.
 - Transcription research (models, datasets, benchmarks, DGX Spark training) is tracked in
-  `docs/transcription_roadmap.md` and `docs/literature-review/`.
+  `docs/transcription_roadmap.md` and `docs/papers/tablature-transcription/`. Estimating a
+  recording's guitar tone (amp, cab, effects) is reviewed in `docs/papers/tone-estimation/`.
 - CI installs `libasound2-dev` (it had never built on the runner without it) and is clippy-clean;
   `cargo fmt --check` is still off.
 - Phases 4 (UI redesign), 5 (social) and 6 (launch) have not started.
@@ -248,6 +249,30 @@ apps: Premium owner, 5 allow-listed users, `GET /search` capped at 10 results.
   but the rest of the song still reaches the mic).
 - **Tone from the tab file**: Guitar Pro 6+ files store RSE amp/effect settings per track;
   mapping them to pedals would give a real per-song chain instead of a GM-program guess.
+- **Tone from the recording** [research, started: `guitar_core/src/tone/`, no UI yet]: estimate a
+  preset for each guitar part of the user's own audio (separated stem, no DI) by fitting the app's
+  chain through `backend::offline::render_at` with gradient-free search, a pseudo-DI resynthesised
+  from the notes, and a final match IR. Literature, design and evaluation protocol:
+  `docs/papers/tone-estimation/` (Section 10). Spotify audio stays out of scope (policy).
+  - Built (step 1 of the paper's plan): pluck-model pseudo-DI fitted on Guitar-TECHS DI, CMA-ES
+    per amp voicing over compressor / distortion / amp gain / reverb / input level, distance with
+    an EQ allowance, minimum-phase match IR for a final Cabinet pedal, factory-preset baseline.
+  - `eval_tone` on 12 EGDB items (isolated guitar, labelled notes, 12 s excerpts, ~15 s per
+    estimate on 28 threads). Mean log-band distance of the true DI through each estimate to the
+    target, dB (lower is better):
+    | target | dry DI | best factory preset | preset + match | search + match, notes | same, true DI |
+    |---|---|---|---|---|---|
+    | random app chain + cab EQ | 6.60 | 9.29 | 6.64 | 5.30 | 0.66 |
+    | EGDB Marshall | 7.52 | 7.55 | 6.84 | 6.49 | 3.11 |
+    | EGDB Mesa | 7.94 | 8.90 | 6.52 | 5.83 | 2.67 |
+    | EGDB Plexi | 7.61 | 8.16 | 7.63 | 6.26 | 2.32 |
+    The search from notes beats every baseline on average and in 7-8 of 12 items per group, but the
+    true-DI column shows most of the error is the pseudo-DI (the pluck model is 9.9 dB from real DI
+    even with an EQ allowed). Settings are not recovered (mean parameter error 0.41 on a 0-1 scale,
+    voicing right 7/12), which is expected when several settings sound alike.
+  - Next: a better dry signal (learned DI renderer or effect remover; the player's DI through a
+    pre-chain tap), then separated stems, delay/modulation from notes and tempo, a learned initial
+    guess, listening tests, and the UI (save as a preset tagged with the song).
 - **Tab library**: match by the title/artist inside the file, not only the file name; cache the
   index; Android folder picker (no `rfd` backend there).
 - **Spotify extras**: Liked Songs (`GET /me/tracks`, needs `user-library-read`), open the tab

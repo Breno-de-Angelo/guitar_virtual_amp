@@ -32,12 +32,18 @@ pub fn scale_drive(pedals: &mut [PedalInstance], factor: f32) {
 /// about the RMS of a guitar DI (-20 dBFS) so noise gates and drive act as
 /// they do live; peaks are clipped to i16. Returns mono at [`RENDER_RATE`].
 pub fn render(pedals: Vec<PedalInstance>, input: &[f32]) -> Vec<f32> {
+    render_at(pedals, input, 0.1)
+}
+
+/// [`render`] with the input scaled to RMS `level` (full scale = 1.0) instead
+/// of -20 dBFS: how hard the guitar hits the chain, which sets the drive.
+pub fn render_at(pedals: Vec<PedalInstance>, input: &[f32], level: f32) -> Vec<f32> {
     let rms = (input.iter().map(|s| s * s).sum::<f32>() / input.len().max(1) as f32)
         .sqrt()
         .max(1e-6);
     let mut samples: Vec<i16> = input
         .iter()
-        .map(|s| (s / rms * 0.1 * 32767.0).clamp(-32767.0, 32767.0) as i16)
+        .map(|s| (s / rms * level * 32767.0).clamp(-32767.0, 32767.0) as i16)
         .collect();
     let mut chain = PedalChain::from_description(pedals);
     for block in samples.chunks_mut(256) {
