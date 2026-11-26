@@ -5,9 +5,15 @@
 //! tab API to use, and the Spotify Developer Policy forbids mixing Spotify
 //! content with other services' content. Tabs come from files the user owns.
 //! Matching is by file name ("Artist - Title.gp5" and similar), which is how
-//! most tab collections are named; a manual link covers the rest.
+//! most tab collections are named, and by the title and artist stored inside
+//! the file (read once and cached, see [`read_tab_info`]); a manual link
+//! covers the rest.
 
 use std::path::{Path, PathBuf};
+
+use std::collections::BTreeMap;
+
+use serde::{Deserialize, Serialize};
 
 use super::import::SUPPORTED_EXTENSIONS;
 
@@ -131,24 +137,111 @@ fn score_words(file_words: &[String], title: &str, artists: &[String]) -> f64 {
     (0.6 + 0.4 * artist_part - 0.1 * extra).clamp(0.05, 1.0)
 }
 
-/// Library files with their names already split into words, so matching
-/// every visible track each frame stays cheap.
+/// Song title and artist stored inside a tab file.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct TabInfo {
+    pub title: String,
+    pub artist: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+struct CacheEntry {
+    modified_secs: u64,
+    size: u64,
+    /// `None` when the file didn't parse (so it isn't retried every scan).
+    info: Option<TabInfo>,
+}
+
+/// `<data dir>/guitar_virtual_amp/tab_library_cache.json`.
+pub fn library_cache_path() -> Option<PathBuf> {
+    crate::shared::paths::app_data_dir().map(|d| d.join("tab_library_cache.json"))
+}
+
+fn file_stamp(path: &Path) -> Option<(u64, u64)> {
+    let meta = std::fs::metadata(path).ok()?;
+    let modified = meta.modified().ok()?.duration_since(std::time::UNIX_EPOCH).ok()?.as_secs();
+    Some((modified, meta.len()))
+}
+
+fn parse_info(path: &Path) -> Option<TabInfo> {
+    let score = super::import::load_score_file(path).ok()?;
+    Some(TabInfo { title: score.title, artist: score.artist })
+}
+
+/// Title and artist of each file, parsed in parallel for files the cache
+/// at `cache_path` doesn't know (or that changed since), then saves the
+/// cache. Blocking: worker threads only.
+pub fn read_tab_info(files: &[PathBuf], cache_path: Option<&Path>) -> Vec<Option<TabInfo>> {
+    let mut cache: BTreeMap<String, CacheEntry> = cache_path
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .and_then(|json| serde_json::from_str(&json).ok())
+        .unwrap_or_default();
+    let stamps: Vec<Option<(u64, u64)>> = files.iter().map(|f| file_stamp(f)).collect();
+    let stale: Vec<usize> = (0..files.len())
+        .filter(|&i| {
+            let key = files[i].display().to_string();
+            match (cache.get(&key), stamps[i]) {
+                (Some(entry), Some((m, s))) => entry.modified_secs != m || entry.size != s,
+                _ => true,
+            }
+        })
+        .collect();
+    let threads = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4).min(8);
+    let chunk = stale.len().div_ceil(threads.max(1)).max(1);
+    let parsed: Vec<(usize, Option<TabInfo>)> = std::thread::scope(|scope| {
+        let handles: Vec<_> = stale
+            .chunks(chunk)
+            .map(|indices| scope.spawn(move || indices.iter().map(|&i| (i, parse_info(&files[i]))).collect::<Vec<_>>()))
+            .collect();
+        handles.into_iter().flat_map(|h| h.join().unwrap_or_default()).collect()
+    });
+    let changed = !parsed.is_empty();
+    for (i, info) in parsed {
+        let (modified_secs, size) = stamps[i].unwrap_or((0, 0));
+        cache.insert(files[i].display().to_string(), CacheEntry { modified_secs, size, info });
+    }
+    if changed && let Some(path) = cache_path {
+        // Drop entries for files that are gone.
+        let keep: std::collections::HashSet<String> = files.iter().map(|f| f.display().to_string()).collect();
+        let pruned: BTreeMap<&String, &CacheEntry> = cache.iter().filter(|(k, _)| keep.contains(*k)).collect();
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        if let Ok(json) = serde_json::to_string(&pruned) {
+            let _ = std::fs::write(path, json);
+        }
+    }
+    files.iter().map(|f| cache.get(&f.display().to_string()).and_then(|e| e.info.clone())).collect()
+}
+
+/// Library files with their names (and stored title/artist) already split
+/// into words, so matching every visible track each frame stays cheap.
 #[derive(Clone, Debug, Default)]
 pub struct LibraryIndex {
-    entries: Vec<(PathBuf, Vec<String>)>,
+    /// `(file, file name words, "artist title" words from inside the file)`.
+    entries: Vec<(PathBuf, Vec<String>, Vec<String>)>,
 }
 
 impl LibraryIndex {
     pub fn new(files: Vec<PathBuf>) -> Self {
+        let info = vec![None; files.len()];
+        Self::with_info(files, info)
+    }
+
+    /// Like [`LibraryIndex::new`], also matching the title and artist read
+    /// from each file (`info[i]` belongs to `files[i]`).
+    pub fn with_info(files: Vec<PathBuf>, info: Vec<Option<TabInfo>>) -> Self {
         let entries = files
             .into_iter()
-            .map(|path| {
+            .zip(info.into_iter().chain(std::iter::repeat(None)))
+            .map(|(path, info)| {
                 let stem = path
                     .file_stem()
                     .map(|s| s.to_string_lossy().into_owned())
                     .unwrap_or_default();
                 let stem_words = words(&stem);
-                (path, stem_words)
+                let info_words = info.map(|i| words(&format!("{} {}", i.artist, i.title))).unwrap_or_default();
+                (path, stem_words, info_words)
             })
             .collect();
         Self { entries }
@@ -166,7 +259,7 @@ impl LibraryIndex {
     pub fn best_match(&self, title: &str, artists: &[String]) -> Option<&PathBuf> {
         self.entries
             .iter()
-            .map(|(path, w)| (path, score_words(w, title, artists)))
+            .map(|(path, stem, info)| (path, score_words(stem, title, artists).max(score_words(info, title, artists))))
             .filter(|(_, score)| *score >= MIN_MATCH_SCORE)
             .max_by(|a, b| a.1.total_cmp(&b.1).then_with(|| b.0.cmp(a.0)))
             .map(|(path, _)| path)
@@ -194,6 +287,38 @@ pub fn find_matches<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stored_title_and_artist_match_badly_named_files() {
+        let files = vec![PathBuf::from("/tabs/track01.gp5"), PathBuf::from("/tabs/other.gp5")];
+        let info = vec![Some(TabInfo { title: "Back In Black".into(), artist: "AC/DC".into() }), None];
+        let index = LibraryIndex::with_info(files.clone(), info);
+        assert_eq!(index.best_match("Back In Black", &artists(&["AC/DC"])), Some(&files[0]));
+        assert!(LibraryIndex::new(files).best_match("Back In Black", &artists(&["AC/DC"])).is_none());
+    }
+
+    #[test]
+    fn tab_info_is_cached_by_modification_time() {
+        let dir = std::env::temp_dir().join(format!("gva_lib_cache_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let broken = dir.join("broken.gp5");
+        std::fs::write(&broken, b"not a guitar pro file").unwrap();
+        let cache = dir.join("cache.json");
+        assert_eq!(read_tab_info(std::slice::from_ref(&broken), Some(&cache)), vec![None]);
+        let saved = std::fs::read_to_string(&cache).unwrap();
+        assert!(saved.contains("broken.gp5"));
+        // A cached entry is used as is: plant one and see it come back.
+        let (m, s) = file_stamp(&broken).unwrap();
+        let planted = BTreeMap::from([(
+            broken.display().to_string(),
+            CacheEntry { modified_secs: m, size: s, info: Some(TabInfo { title: "T".into(), artist: "A".into() }) },
+        )]);
+        std::fs::write(&cache, serde_json::to_string(&planted).unwrap()).unwrap();
+        let info = read_tab_info(std::slice::from_ref(&broken), Some(&cache));
+        assert_eq!(info[0].as_ref().map(|i| i.title.as_str()), Some("T"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     fn artists(names: &[&str]) -> Vec<String> {
         names.iter().map(|s| s.to_string()).collect()

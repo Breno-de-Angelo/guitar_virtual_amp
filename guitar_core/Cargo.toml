@@ -38,3 +38,6 @@ symphonia = { version = "0.5", default-features = false, features = ["mp3", "ogg
 # path on Android instead of a native file picker.
 [target.'cfg(not(target_os = "android"))'.dependencies]
 rfd = "0.15"
+# MIDI footswitches/controllers (`backend::midi`). Desktop only: midir has
+# no Android backend.
+midir = "0.11"

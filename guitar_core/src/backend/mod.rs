@@ -1,6 +1,9 @@
 pub mod capture;
+pub mod controls;
 pub mod dsp;
+pub mod midi;
 pub mod offline;
+pub mod recorder;
 pub mod pedals;
 mod ring_buffer;
 pub mod audio_file;

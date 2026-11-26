@@ -224,6 +224,24 @@ fn note_suffix(note: &TabNote) -> &'static str {
 /// haven't been judged and keep their normal color.
 pub type NoteMarks = HashMap<NoteKey, bool>;
 
+/// Extra layers drawn over the tab.
+#[derive(Clone, Copy, Default)]
+pub struct TabOverlay<'a> {
+    /// Practice results per note.
+    pub marks: Option<&'a NoteMarks>,
+    /// Practice accuracy per bar (0..1), drawn as a red-to-green tint.
+    pub bar_heat: Option<&'a HashMap<usize, f32>>,
+    /// First and last bar (0-based, inclusive) of the practice loop.
+    pub loop_bars: Option<(usize, usize)>,
+}
+
+/// Red (0) to green (1) tint for a bar's accuracy.
+fn heat_color(accuracy: f32, dark: bool) -> Color32 {
+    let a = accuracy.clamp(0.0, 1.0);
+    let (r, g) = ((230.0 * (1.0 - a) + 40.0 * a) as u8, (60.0 * (1.0 - a) + 190.0 * a) as u8);
+    Color32::from_rgba_unmultiplied(r, g, 60, if dark { 34 } else { 46 })
+}
+
 /// Draws the whole tab for `track` inside a vertical scroll area.
 /// `follow_row` scrolls the row containing the cursor into view.
 pub fn tab_view(
@@ -233,8 +251,9 @@ pub fn tab_view(
     layout: &TabLayout,
     cursor: Option<CursorPos>,
     follow_row: bool,
-    marks: Option<&NoteMarks>,
+    overlay: TabOverlay,
 ) -> TabViewResponse {
+    let marks = overlay.marks;
     let palette = Palette::from_ui(ui);
     let mut clicked_bar = None;
     egui::ScrollArea::vertical()
@@ -274,6 +293,31 @@ pub fn tab_view(
 
                 for bar_layout in row_bars {
                     let bar_x = origin.x + bar_layout.x;
+                    let bar_rect = Rect::from_min_max(
+                        pos2(bar_x, staff_top - 8.0),
+                        pos2(bar_x + bar_layout.width, staff_top + staff_height + 8.0),
+                    );
+                    if let Some(accuracy) = overlay.bar_heat.and_then(|h| h.get(&bar_layout.bar)) {
+                        painter.rect_filled(bar_rect, 2.0, heat_color(*accuracy, ui.visuals().dark_mode));
+                    }
+                    if let Some((first, last)) = overlay.loop_bars
+                        && (first..=last).contains(&bar_layout.bar)
+                    {
+                        let band = Rect::from_min_max(
+                            pos2(bar_x, staff_top - 34.0),
+                            pos2(bar_x + bar_layout.width, staff_top - 30.0),
+                        );
+                        painter.rect_filled(band, 1.0, palette.accent);
+                        if bar_layout.bar == first {
+                            painter.text(
+                                pos2(bar_x + 2.0, staff_top - 36.0),
+                                Align2::LEFT_BOTTOM,
+                                "loop",
+                                FontId::proportional(9.0),
+                                palette.accent,
+                            );
+                        }
+                    }
                     if let Some((_, cb)) = cursor_bar
                         && cb.bar == bar_layout.bar
                     {
@@ -551,6 +595,14 @@ mod tests {
         let y = layout.row_top(1) + 40.0;
         let hit = hit_test(&layout, pos2(second_row.x + 5.0, y));
         assert_eq!(hit, Some(second_row.bar));
+    }
+
+    #[test]
+    fn heat_goes_from_red_to_green() {
+        let bad = heat_color(0.0, true);
+        let good = heat_color(1.0, true);
+        assert!(bad.r() > bad.g());
+        assert!(good.g() > good.r());
     }
 
     #[test]

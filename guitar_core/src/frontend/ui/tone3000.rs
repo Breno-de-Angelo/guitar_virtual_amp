@@ -684,7 +684,7 @@ impl Tone3000Panel {
         if let Some(message) = self.message.clone() {
             ui.horizontal(|ui| {
                 ui.colored_label(Color32::YELLOW, message);
-                if ui.small_button("✕").clicked() {
+                if ui.small_button("✖").clicked() {
                     self.message = None;
                 }
             });
@@ -930,7 +930,7 @@ impl Tone3000Panel {
         let View::Details(details) = &mut self.view else {
             return;
         };
-        if ui.button("← Back").clicked() {
+        if ui.button("⬅ Back").clicked() {
             back = true;
         }
 

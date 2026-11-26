@@ -81,6 +81,80 @@ impl PedalDescription {
             PedalDescription::Nam(_) => "NAM Model",
         }
     }
+
+    /// What kind of effect this is, for grouping the "add pedal" menu and
+    /// coloring pedal cards.
+    pub fn category(&self) -> PedalCategory {
+        match self {
+            PedalDescription::Compressor(_) | PedalDescription::NoiseGate(_) => PedalCategory::Dynamics,
+            PedalDescription::Distortion(_) => PedalCategory::Drive,
+            PedalDescription::Amp(_) | PedalDescription::Nam(_) | PedalDescription::Cabinet(_) => {
+                PedalCategory::Amp
+            }
+            PedalDescription::Eq(_) | PedalDescription::LowPass(_) | PedalDescription::WahWah(_) => {
+                PedalCategory::Filter
+            }
+            PedalDescription::Chorus(_)
+            | PedalDescription::Flanger(_)
+            | PedalDescription::Phaser(_)
+            | PedalDescription::Tremolo(_) => PedalCategory::Modulation,
+            PedalDescription::Octaver(_) | PedalDescription::PitchShift(_) => PedalCategory::Pitch,
+            PedalDescription::Delay(_) | PedalDescription::Reverb(_) => PedalCategory::Time,
+            PedalDescription::Looper(_) => PedalCategory::Utility,
+        }
+    }
+
+    /// One line describing the effect, shown in the "add pedal" menu.
+    pub fn blurb(&self) -> &'static str {
+        match self {
+            PedalDescription::Amp(_) => "Preamp with Clean/Crunch/Lead voicings and a tone stack",
+            PedalDescription::Delay(_) => "Echoes with feedback, several taps and damping",
+            PedalDescription::Reverb(_) => "Room ambience",
+            PedalDescription::LowPass(_) => "Cuts the highs above a frequency",
+            PedalDescription::Flanger(_) => "Jet-like sweep from a short modulated delay",
+            PedalDescription::WahWah(_) => "Resonant filter swept by an LFO (auto-wah)",
+            PedalDescription::Distortion(_) => "Overdrive / distortion with tone and bias",
+            PedalDescription::NoiseGate(_) => "Silences hum and hiss between notes",
+            PedalDescription::Compressor(_) => "Evens out the dynamics, adds sustain",
+            PedalDescription::Tremolo(_) => "Pulsing volume",
+            PedalDescription::Chorus(_) => "Thickens the sound with a detuned copy",
+            PedalDescription::Eq(_) => "Three-band equalizer",
+            PedalDescription::Phaser(_) => "Swirling notches from all-pass filters",
+            PedalDescription::Octaver(_) => "Adds the octave below",
+            PedalDescription::PitchShift(_) => "Shifts the pitch up or down by semitones",
+            PedalDescription::Looper(_) => "Records a loop and plays along with it",
+            PedalDescription::Cabinet(_) => "Speaker cabinet from an impulse response (.wav)",
+            PedalDescription::Nam(_) => "Neural Amp Modeler capture (.nam) of a real amp or pedal",
+        }
+    }
+}
+
+/// Effect families, in signal-chain order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, strum_macros::EnumIter)]
+pub enum PedalCategory {
+    Dynamics,
+    Filter,
+    Drive,
+    Amp,
+    Modulation,
+    Pitch,
+    Time,
+    Utility,
+}
+
+impl PedalCategory {
+    pub fn label(self) -> &'static str {
+        match self {
+            PedalCategory::Dynamics => "Dynamics",
+            PedalCategory::Filter => "Filter & EQ",
+            PedalCategory::Drive => "Drive",
+            PedalCategory::Amp => "Amp & Cabinet",
+            PedalCategory::Modulation => "Modulation",
+            PedalCategory::Pitch => "Pitch",
+            PedalCategory::Time => "Delay & Reverb",
+            PedalCategory::Utility => "Looper",
+        }
+    }
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -557,6 +631,16 @@ mod tests {
             }
             _ => panic!("pedal variant mismatch"),
         }
+    }
+
+    #[test]
+    fn every_pedal_has_a_category_and_blurb() {
+        use strum::IntoEnumIterator;
+        for pedal in PedalDescription::iter() {
+            assert!(!pedal.blurb().is_empty(), "{}", pedal.name());
+            let _ = pedal.category();
+        }
+        assert!(PedalCategory::iter().all(|c| !c.label().is_empty()));
     }
 
     #[test]

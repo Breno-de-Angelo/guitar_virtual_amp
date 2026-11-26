@@ -24,7 +24,7 @@ use eframe::egui::{self, Color32, RichText, Ui, Vec2};
 use crate::frontend::ui::tone3000::remote_image;
 use crate::frontend::ui::transcribe::repository_dir;
 use crate::shared::settings::{AppSettings, save_settings};
-use crate::shared::tab::library::{LibraryIndex, clean_title, scan_library};
+use crate::shared::tab::library::{LibraryIndex, clean_title, library_cache_path, read_tab_info, scan_library};
 use crate::spotify::types::{User, pick_image};
 use crate::spotify::{self, PlaybackState, Playlist, SpotifyClient, SpotifyError, Track};
 
@@ -58,7 +58,7 @@ enum Job {
     Tracks(String, Result<Vec<Track>, SpotifyError>),
     Playback(Result<Option<Box<PlaybackState>>, SpotifyError>),
     Command(Result<(), SpotifyError>),
-    Library(Vec<PathBuf>, Vec<PathBuf>),
+    Library(Vec<PathBuf>, LibraryIndex),
 }
 
 fn open_external(url: &str) {
@@ -259,8 +259,9 @@ impl SpotifyPanel {
         self.scanning = true;
         let tx = self.tx.clone();
         std::thread::spawn(move || {
-            let files = dirs.iter().flat_map(|d| scan_library(d)).collect();
-            let _ = tx.send(Job::Library(dirs, files));
+            let files: Vec<PathBuf> = dirs.iter().flat_map(|d| scan_library(d)).collect();
+            let info = read_tab_info(&files, library_cache_path().as_deref());
+            let _ = tx.send(Job::Library(dirs, LibraryIndex::with_info(files, info)));
         });
     }
 
@@ -317,10 +318,10 @@ impl SpotifyPanel {
                     }
                     self.request_playback(AFTER_COMMAND_POLL);
                 }
-                Job::Library(dirs, files) => {
+                Job::Library(dirs, index) => {
                     self.scanning = false;
                     if self.library_dirs == dirs {
-                        self.library = LibraryIndex::new(files);
+                        self.library = index;
                         self.match_cache.clear();
                     }
                 }
@@ -578,7 +579,7 @@ impl SpotifyPanel {
                 }
             } else {
                 if ui
-                    .button("🤖 Transcrever")
+                    .button("⚡ Transcrever")
                     .on_hover_text("Gera a tab a partir de um arquivo de áudio desta música que você tenha")
                     .clicked()
                 {
@@ -797,7 +798,7 @@ impl SpotifyPanel {
             None => {
                 link(ui, "🔎", &tab_search_url(track));
                 if ui
-                    .small_button("🤖 Transcrever")
+                    .small_button("⚡ Transcrever")
                     .on_hover_text("Gera a tab a partir de um arquivo de áudio desta música que você tenha")
                     .clicked()
                 {

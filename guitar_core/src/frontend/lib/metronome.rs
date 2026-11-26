@@ -8,11 +8,11 @@ const TAP_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Tempo state driving the metronome UI panel: current BPM, running/stopped
 /// transport, tap-tempo averaging, and beat-tick detection so time-based
-/// pedals (Delay/Tremolo) can be synced to it.
+/// pedals (Delay/Tremolo) can be synced to it. The audible click and the
+/// beat lights are driven by the audio thread (`backend::capture`).
 pub struct Metronome {
     pub bpm: f32,
     pub running: bool,
-    last_beat: Instant,
     tap_times: Vec<Instant>,
 }
 
@@ -27,7 +27,6 @@ impl Metronome {
         Self {
             bpm: 120.0,
             running: false,
-            last_beat: Instant::now(),
             tap_times: Vec::new(),
         }
     }
@@ -53,26 +52,8 @@ impl Metronome {
         }
     }
 
-    /// Call once per UI frame while running. Returns `true` the frame a beat
-    /// boundary is crossed (for a flashing beat indicator), advancing the
-    /// internal beat clock by exactly one period to avoid drift.
-    pub fn tick(&mut self) -> bool {
-        if !self.running {
-            return false;
-        }
-        let period = Duration::from_secs_f64(60.0 / self.bpm as f64);
-        let now = Instant::now();
-        if now.duration_since(self.last_beat) >= period {
-            self.last_beat += period;
-            true
-        } else {
-            false
-        }
-    }
-
     pub fn start(&mut self) {
         self.running = true;
-        self.last_beat = Instant::now();
     }
 
     pub fn stop(&mut self) {
@@ -106,20 +87,5 @@ mod tests {
         let initial = metronome.bpm;
         metronome.tap();
         assert_eq!(metronome.bpm, initial);
-    }
-
-    #[test]
-    fn tick_returns_false_when_not_running() {
-        let mut metronome = Metronome::new();
-        assert!(!metronome.tick());
-    }
-
-    #[test]
-    fn tick_fires_after_beat_period_elapses() {
-        let mut metronome = Metronome::new();
-        metronome.bpm = 600.0; // 100ms/beat, fast enough for a quick test
-        metronome.start();
-        sleep(Duration::from_millis(110));
-        assert!(metronome.tick());
     }
 }

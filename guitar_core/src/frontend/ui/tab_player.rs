@@ -19,6 +19,9 @@ use crossbeam::channel::{bounded, Receiver};
 use eframe::egui::{self, Color32, Key, RichText, Ui};
 use rustysynth::SoundFont;
 
+use crate::frontend::lib::tunings::{Tuning, label as tuning_label};
+use crate::frontend::ui::tab_view::TabOverlay;
+
 use crate::backend::audio_file::{self, DecodedAudio, AUDIO_EXTENSIONS};
 use crate::backend::song_player::SongPlayer;
 use crate::frontend::lib::practice::{expected_beats, PracticeSession, PracticeSettings};
@@ -148,8 +151,76 @@ pub struct TabPlayerPanel {
     transcriber: TranscribePanel,
     /// Audio file and bar-accurate sync from a transcribed tab's sidecar.
     sidecar_sync: Option<(PathBuf, SyncMap)>,
+    practice_loop: PracticeLoop,
+    /// Count-in before playback, in bars (0 = off).
+    count_in_bars: u32,
+    show_heatmap: bool,
+    /// The user asked to tune to this tab (see [`TabPlayerPanel::take_tuner_request`]).
+    tuner_requested: bool,
+    /// Playing state last frame, to notice the end of a run.
+    was_playing: bool,
     #[cfg(target_os = "android")]
     path_input: String,
+}
+
+/// A-B loop over bars plus the speed trainer.
+#[derive(Clone, Debug, PartialEq)]
+struct PracticeLoop {
+    on: bool,
+    /// First and last bar, 0-based, inclusive.
+    bars: (usize, usize),
+    trainer: bool,
+    /// Speed the trainer starts at, then raises by `step` after each good
+    /// pass until `target`.
+    start_speed: f32,
+    step: f32,
+    target_speed: f32,
+    /// Accuracy a pass needs (with practice mode on) to speed up.
+    pass_accuracy: f32,
+    /// `PlayerStatus::loop_passes` already handled.
+    passes_seen: u32,
+    good_passes: u32,
+}
+
+impl Default for PracticeLoop {
+    fn default() -> Self {
+        Self {
+            on: false,
+            bars: (0, 0),
+            trainer: false,
+            start_speed: 0.6,
+            step: 0.05,
+            target_speed: 1.0,
+            pass_accuracy: 0.9,
+            passes_seen: 0,
+            good_passes: 0,
+        }
+    }
+}
+
+/// Score-time range covering bars `first..=last`: the occurrence of `first`
+/// nearest to `near_secs`, through the first occurrence of `last` after it.
+fn loop_secs(timeline: &Timeline, (first, last): (usize, usize), near_secs: f64) -> Option<(f64, f64)> {
+    let (first, last) = (first.min(last), first.max(last));
+    let start = timeline.closest_occurrence(first, near_secs)?;
+    let start_occ = &timeline.occurrences[start];
+    let end = timeline.occurrences[start..].iter().find(|o| o.bar == last)?;
+    Some((start_occ.start_secs, end.end_secs))
+}
+
+/// Bars sorted from least to most accurate (only bars with judged notes).
+fn hardest_bars(results: &std::collections::BTreeMap<usize, (u32, u32)>, min_notes: u32) -> Vec<(usize, f32)> {
+    let mut bars: Vec<(usize, f32)> = results
+        .iter()
+        .filter(|(_, (_, judged))| *judged >= min_notes)
+        .map(|(&bar, &(hit, judged))| (bar, hit as f32 / judged as f32))
+        .collect();
+    bars.sort_by(|a, b| a.1.total_cmp(&b.1).then(a.0.cmp(&b.0)));
+    bars
+}
+
+fn unix_now() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
 }
 
 /// User presets made for this song (or artist), read on a worker thread.
@@ -195,6 +266,11 @@ impl TabPlayerPanel {
             loading_song_presets: None,
             transcriber: TranscribePanel::new(),
             sidecar_sync: None,
+            practice_loop: PracticeLoop::default(),
+            count_in_bars: 0,
+            show_heatmap: true,
+            tuner_requested: false,
+            was_playing: false,
             #[cfg(target_os = "android")]
             path_input: String::new(),
         };
@@ -219,6 +295,117 @@ impl TabPlayerPanel {
     /// Opens a tab file (e.g. one picked on the Spotify page).
     pub fn open_tab(&mut self, path: PathBuf) {
         self.load_tab(path);
+    }
+
+    /// Tuning of the open tab's selected track (string 1 = highest first),
+    /// for the tuner's "tune to the tab" target.
+    pub fn selected_tuning(&self) -> Option<Vec<u8>> {
+        let track = self.tab.as_ref()?.score.tracks.get(self.selected_track)?;
+        (!track.percussion && !track.tuning.is_empty()).then(|| track.tuning.clone())
+    }
+
+    /// Replaces the practice knobs (e.g. after a latency measurement).
+    pub fn set_practice_prefs(&mut self, prefs: &PracticePrefs) {
+        self.practice_prefs = prefs.clone();
+    }
+
+    /// `true` once after the user pressed "tune to this tab".
+    pub fn take_tuner_request(&mut self) -> bool {
+        std::mem::take(&mut self.tuner_requested)
+    }
+
+    /// Applies the loop range to the player (or clears it).
+    fn apply_loop(&mut self) {
+        let Some(tab) = &self.tab else { return };
+        let range = if self.practice_loop.on {
+            loop_secs(&tab.timeline, self.practice_loop.bars, self.player.status().score_secs())
+        } else {
+            None
+        };
+        self.player.set_loop(range);
+    }
+
+    /// Loops `first..=last` (0-based bars).
+    fn loop_bars(&mut self, first: usize, last: usize) {
+        self.practice_loop.on = true;
+        self.practice_loop.bars = (first.min(last), first.max(last));
+        self.practice_loop.passes_seen = self.player.status().loop_passes();
+        self.apply_loop();
+    }
+
+    /// Seconds between count-in clicks: one beat of the bar at the cursor,
+    /// as heard (synth speed or the recording's tempo).
+    fn count_in_beat_secs(&self) -> f64 {
+        let Some(tab) = &self.tab else { return 0.5 };
+        let status = self.player.status();
+        let Some(occ) = tab.timeline.occurrence_at(status.score_secs()).map(|i| &tab.timeline.occurrences[i]) else {
+            return 0.5;
+        };
+        let numerator = tab.score.bars.get(occ.bar).map(|b| b.numerator.max(1) as f64).unwrap_or(4.0);
+        let beat = (occ.end_secs - occ.start_secs) / numerator;
+        if self.use_backing && self.backing.is_some() {
+            let sync = self.active_sync();
+            (sync.score_to_audio(occ.start_secs + beat) - sync.score_to_audio(occ.start_secs)).abs()
+        } else {
+            beat / self.speed.max(0.05) as f64
+        }
+    }
+
+    fn count_in_beats(&self) -> u32 {
+        let Some(tab) = &self.tab else { return 0 };
+        let bar = tab.timeline.occurrence_at(self.player.status().score_secs()).map(|i| tab.timeline.occurrences[i].bar);
+        let numerator = bar.and_then(|b| tab.score.bars.get(b)).map(|b| b.numerator.max(1)).unwrap_or(4);
+        numerator * self.count_in_bars
+    }
+
+    /// Handles finished loop passes: the speed trainer and per-pass marks.
+    fn on_loop_passes(&mut self) {
+        let passes = self.player.status().loop_passes();
+        if passes == self.practice_loop.passes_seen {
+            return;
+        }
+        self.practice_loop.passes_seen = passes;
+        let (first, last) = self.practice_loop.bars;
+        // Accuracy of the pass that just ended, from practice mode.
+        let accuracy = self.practice.as_ref().filter(|_| self.practice_on).and_then(|(_, _, session)| {
+            let results = session.bar_results();
+            let (hit, judged) = results
+                .range(first..=last)
+                .fold((0, 0), |(h, j), (_, (bh, bj))| (h + bh, j + bj));
+            (judged > 0).then(|| hit as f32 / judged as f32)
+        });
+        let backing_on = self.use_backing && self.backing.is_some();
+        let good = accuracy.is_none_or(|a| a >= self.practice_loop.pass_accuracy);
+        if good {
+            self.practice_loop.good_passes += 1;
+        }
+        if self.practice_loop.trainer && !backing_on && good && self.speed < self.practice_loop.target_speed {
+            self.speed = (self.speed + self.practice_loop.step).min(self.practice_loop.target_speed);
+            self.player.set_speed(self.speed as f64);
+            self.set_message(format!("Treino de velocidade: {:.0}%", self.speed * 100.0), false);
+        } else if let Some(a) = accuracy
+            && !good
+        {
+            self.set_message(format!("Passada com {:.0}%: repita nesta velocidade.", a * 100.0), false);
+        }
+        if let Some((_, _, session)) = &mut self.practice {
+            session.clear_marks_in(first..=last);
+        }
+    }
+
+    /// Records a finished practice run in the history.
+    fn record_run(&mut self, settings: &mut AppSettings) {
+        let Some(tab) = &self.tab else { return };
+        let Some((_, track_index, session)) = &self.practice else { return };
+        let stats = session.stats();
+        let Some(accuracy) = stats.note_accuracy().filter(|_| stats.notes_judged >= 8) else { return };
+        let track_name = tab.score.tracks.get(*track_index).map(|t| t.name.clone()).unwrap_or_default();
+        let record = settings.practice_log.entry(tab_key(&tab.path)).or_default();
+        record.runs += 1;
+        record.last_run_unix = unix_now();
+        let best = record.best_accuracy.entry(track_name).or_insert(0.0);
+        *best = best.max(accuracy as f32);
+        save_settings(settings);
     }
 
     /// Opens the transcription form, prefilled (e.g. from a Spotify track).
@@ -330,6 +517,7 @@ impl TabPlayerPanel {
         self.soloed = vec![false; score.tracks.len()];
         self.layout = None;
         self.practice = None;
+        self.practice_loop = PracticeLoop::default();
         self.song_presets.clear();
         let (title, artist) = (score.title.clone(), score.artist.clone());
         self.loading_song_presets = Some(spawn(move || find_song_presets(title, artist)));
@@ -454,13 +642,15 @@ impl TabPlayerPanel {
     /// Hands the guitar samples that arrived this frame to practice mode.
     /// Call every frame, also while another page is shown.
     pub fn feed_input(&mut self, samples: &[f32], audio_latency_secs: f32) {
+        // Loop passes count on every page, not just while Tabs is shown.
+        self.on_loop_passes();
         if !self.practice_on {
             return;
         }
         self.ensure_practice();
         let settings = self.practice_settings(audio_latency_secs as f64);
         let status = self.player.status();
-        let (score_secs, playing) = (status.score_secs(), status.playing());
+        let (score_secs, playing) = (status.score_secs(), status.playing() && !status.counting_in());
         if let Some((_, _, session)) = &mut self.practice {
             session.settings = settings;
             session.feed(samples, score_secs, playing);
@@ -488,6 +678,8 @@ impl TabPlayerPanel {
     fn toggle_play(&self) {
         if self.player.status().playing() {
             self.player.pause();
+        } else if self.count_in_bars > 0 {
+            self.player.play_with_count_in(self.count_in_beats(), self.count_in_beat_secs());
         } else {
             self.player.play();
         }
@@ -522,8 +714,18 @@ impl TabPlayerPanel {
             return None;
         }
         let tone = self.tone_row(ui);
+        self.tuning_row(ui);
         ui.separator();
+        let playing = self.player.status().playing();
+        if self.was_playing && !playing && self.practice_on {
+            self.record_run(settings);
+        }
+        self.was_playing = playing;
         self.transport_row(ui);
+        if self.practice_loop.on {
+            ui.separator();
+            self.loop_row(ui);
+        }
         if self.practice_on {
             ui.separator();
             self.practice_row(ui, settings);
@@ -603,7 +805,7 @@ impl TabPlayerPanel {
                 }
             }
             if ui
-                .add_enabled(!self.transcriber.is_running(), egui::Button::new("🤖 Transcrever áudio..."))
+                .add_enabled(!self.transcriber.is_running(), egui::Button::new("⚡ Transcrever áudio..."))
                 .on_hover_text("Gera uma tab (guitarra e baixo) a partir de um arquivo de música")
                 .clicked()
             {
@@ -673,7 +875,7 @@ impl TabPlayerPanel {
             } else if speed.changed() {
                 self.player.set_speed(self.speed as f64);
             }
-            ui.toggle_value(&mut self.show_mixer, "🎚 Mixer");
+            ui.toggle_value(&mut self.show_mixer, "🔉 Mixer");
             let mut practice = self.practice_on;
             if ui
                 .toggle_value(&mut practice, "🎯 Prática")
@@ -682,7 +884,107 @@ impl TabPlayerPanel {
             {
                 self.set_practice(practice);
             }
+            let mut looping = self.practice_loop.on;
+            if ui
+                .toggle_value(&mut looping, "🔁 Loop")
+                .on_hover_text("Repete um trecho. Com o loop ligado, Shift+clique num compasso marca o fim.")
+                .changed()
+            {
+                if looping {
+                    let bar = timeline
+                        .occurrence_at(status.score_secs())
+                        .map(|i| timeline.occurrences[i].bar)
+                        .unwrap_or(0);
+                    self.loop_bars(bar, bar);
+                } else {
+                    self.practice_loop.on = false;
+                    self.apply_loop();
+                }
+            }
+            egui::ComboBox::from_id_salt("tab_count_in")
+                .selected_text(match self.count_in_bars {
+                    0 => "sem contagem".to_string(),
+                    1 => "contagem: 1 compasso".to_string(),
+                    n => format!("contagem: {n} compassos"),
+                })
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(&mut self.count_in_bars, 0, "sem contagem");
+                    ui.selectable_value(&mut self.count_in_bars, 1, "1 compasso");
+                    ui.selectable_value(&mut self.count_in_bars, 2, "2 compassos");
+                })
+                .response
+                .on_hover_text("Cliques antes de começar a tocar");
+            if status.counting_in() {
+                ui.colored_label(Color32::from_rgb(255, 170, 60), "contando...");
+            }
         });
+    }
+
+    /// The selected track's tuning, with a shortcut to the tuner.
+    fn tuning_row(&mut self, ui: &mut Ui) {
+        let Some(tuning) = self.selected_tuning().and_then(|t| Tuning::from_tab(&t)) else { return };
+        let standard = tuning.strings == Tuning::standard().strings;
+        ui.horizontal_wrapped(|ui| {
+            let text = if standard {
+                "🎸 Afinação padrão (E A D G B E)".to_string()
+            } else {
+                format!("🎸 Afinação: {} ({})", tuning.name, tuning_label(&tuning.strings))
+            };
+            let color = if standard { ui.visuals().weak_text_color() } else { Color32::from_rgb(240, 200, 70) };
+            ui.label(RichText::new(text).color(color));
+            if ui
+                .small_button("🎵 Afinar")
+                .on_hover_text("Abre o afinador com as cordas desta faixa")
+                .clicked()
+            {
+                self.tuner_requested = true;
+            }
+        });
+    }
+
+    /// Loop range and speed trainer.
+    fn loop_row(&mut self, ui: &mut Ui) {
+        let Some(bar_count) = self.tab.as_ref().map(|t| t.score.bars.len()) else { return };
+        let backing_on = self.use_backing && self.backing.is_some();
+        let mut changed = false;
+        ui.horizontal_wrapped(|ui| {
+            ui.label(RichText::new("🔁 Loop").strong());
+            let (mut first, mut last) = (self.practice_loop.bars.0 + 1, self.practice_loop.bars.1 + 1);
+            ui.label("compassos");
+            changed |= ui.add(egui::DragValue::new(&mut first).range(1..=bar_count)).changed();
+            ui.label("a");
+            changed |= ui.add(egui::DragValue::new(&mut last).range(1..=bar_count)).changed();
+            if changed {
+                self.practice_loop.bars = (first.min(last) - 1, first.max(last) - 1);
+            }
+            ui.label(RichText::new(format!("· passadas: {}", self.practice_loop.good_passes)).weak())
+                .on_hover_text("Passadas boas (com o modo prática, acima da exigência do treino)");
+            ui.separator();
+            ui.add_enabled_ui(!backing_on, |ui| {
+                let trainer = ui
+                    .checkbox(&mut self.practice_loop.trainer, "Treino de velocidade")
+                    .on_hover_text("Começa devagar e acelera a cada passada boa");
+                if trainer.changed() && self.practice_loop.trainer {
+                    self.speed = self.practice_loop.start_speed;
+                    self.player.set_speed(self.speed as f64);
+                    self.practice_loop.good_passes = 0;
+                }
+                if self.practice_loop.trainer {
+                    let pl = &mut self.practice_loop;
+                    ui.add(egui::DragValue::new(&mut pl.start_speed).range(0.25..=1.5).speed(0.01).custom_formatter(|v, _| format!("de {:.0}%", v * 100.0)));
+                    ui.add(egui::DragValue::new(&mut pl.step).range(0.01..=0.25).speed(0.005).custom_formatter(|v, _| format!("+{:.0}%", v * 100.0)));
+                    ui.add(egui::DragValue::new(&mut pl.target_speed).range(0.25..=1.5).speed(0.01).custom_formatter(|v, _| format!("até {:.0}%", v * 100.0)));
+                    ui.add(egui::DragValue::new(&mut pl.pass_accuracy).range(0.5..=1.0).speed(0.01).custom_formatter(|v, _| format!("passa com {:.0}%", v * 100.0)))
+                        .on_hover_text("Com o modo prática ligado, só acelera se a passada tiver esta precisão");
+                    ui.label(RichText::new(format!("agora {:.0}%", self.speed * 100.0)).strong());
+                }
+            })
+            .response
+            .on_disabled_hover_text("O treino de velocidade só funciona com o áudio sintetizado (desligue o áudio original).");
+        });
+        if changed {
+            self.apply_loop();
+        }
     }
 
     fn practice_row(&mut self, ui: &mut Ui, settings: &mut AppSettings) {
@@ -713,6 +1015,8 @@ impl TabPlayerPanel {
             if ui.button("Zerar").clicked() {
                 session.reset();
             }
+            ui.checkbox(&mut self.show_heatmap, "mapa de acertos")
+                .on_hover_text("Pinta cada compasso de vermelho (errou muito) a verde (acertou)");
             ui.separator();
             let prefs = &mut self.practice_prefs;
             prefs_changed |= ui
@@ -734,6 +1038,50 @@ impl TabPlayerPanel {
         if prefs_changed {
             settings.practice = self.practice_prefs.clone();
             save_settings(settings);
+        }
+        self.practice_history_row(ui, settings);
+    }
+
+    /// Best result so far and the bars that need work.
+    fn practice_history_row(&mut self, ui: &mut Ui, settings: &AppSettings) {
+        let Some(tab) = &self.tab else { return };
+        let track_name = tab.score.tracks.get(self.selected_track).map(|t| t.name.clone()).unwrap_or_default();
+        let record = settings.practice_log.get(&tab_key(&tab.path));
+        let hardest = self
+            .practice
+            .as_ref()
+            .map(|(_, _, s)| hardest_bars(&s.bar_results(), 2))
+            .unwrap_or_default();
+        let mut loop_bar = None;
+        ui.horizontal_wrapped(|ui| {
+            if let Some(record) = record {
+                let best = record.best_accuracy.get(&track_name).map(|a| format!("{:.0}%", a * 100.0));
+                ui.label(
+                    RichText::new(format!(
+                        "Histórico: melhor {} · {} sessões",
+                        best.unwrap_or_else(|| "—".into()),
+                        record.runs
+                    ))
+                    .weak(),
+                );
+                ui.separator();
+            }
+            let weak: Vec<&(usize, f32)> = hardest.iter().filter(|(_, a)| *a < 0.9).take(4).collect();
+            if !weak.is_empty() {
+                ui.label("Compassos mais difíceis:");
+                for (bar, accuracy) in weak {
+                    if ui
+                        .small_button(format!("{} ({:.0}%)", bar + 1, accuracy * 100.0))
+                        .on_hover_text("Repetir este compasso em loop")
+                        .clicked()
+                    {
+                        loop_bar = Some(*bar);
+                    }
+                }
+            }
+        });
+        if let Some(bar) = loop_bar {
+            self.loop_bars(bar, bar);
         }
     }
 
@@ -921,7 +1269,10 @@ impl TabPlayerPanel {
     fn tab_area(&mut self, ui: &mut Ui) {
         let Some(tab) = &self.tab else { return };
         let Some(track) = tab.score.tracks.get(self.selected_track) else { return };
-        let width = ui.available_width();
+        // Rows above (combo boxes can't wrap) may have widened the page past
+        // the window: lay the tab out for what's actually visible.
+        let visible = ui.clip_rect().right() - ui.cursor().left();
+        let width = ui.available_width().min(visible.max(200.0));
         let stale = match &self.layout {
             Some((t, w, _)) => *t != self.selected_track || (*w - width).abs() > 1.0,
             None => true,
@@ -944,11 +1295,26 @@ impl TabPlayerPanel {
             }
             _ => None,
         };
-        let response = tab_view(ui, &tab.score, track, layout, cursor, follow, marks);
-        if let Some(bar) = response.clicked_bar
-            && let Some(occ) = tab.timeline.closest_occurrence(bar, score_secs)
-        {
-            self.player.seek(tab.timeline.occurrences[occ].start_secs);
+        let heat: Option<std::collections::HashMap<usize, f32>> = match &self.practice {
+            Some((_, track_index, session)) if self.practice_on && self.show_heatmap && *track_index == self.selected_track => {
+                Some(session.bar_results().into_iter().map(|(bar, (hit, judged))| (bar, hit as f32 / judged.max(1) as f32)).collect())
+            }
+            _ => None,
+        };
+        let overlay = TabOverlay {
+            marks,
+            bar_heat: heat.as_ref(),
+            loop_bars: self.practice_loop.on.then_some(self.practice_loop.bars),
+        };
+        let response = tab_view(ui, &tab.score, track, layout, cursor, follow, overlay);
+        let shift = ui.input(|i| i.modifiers.shift);
+        if let Some(bar) = response.clicked_bar {
+            if shift && self.practice_loop.on {
+                let first = self.practice_loop.bars.0;
+                self.loop_bars(first.min(bar), first.max(bar));
+            } else if let Some(occ) = tab.timeline.closest_occurrence(bar, score_secs) {
+                self.player.seek(tab.timeline.occurrences[occ].start_secs);
+            }
         }
     }
 }
@@ -1072,6 +1438,77 @@ mod tests {
             other => panic!("expected bar sync, got {other:?}"),
         }
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn four_bar_score() -> Score {
+        use crate::shared::tab::model::{MasterBar, ScoreTrack, TabBeat, TabNote, TrackBar};
+        let beat = TabBeat {
+            duration: 3840,
+            value: 1,
+            notes: vec![TabNote { string: 5, fret: 2, velocity: 100, ..Default::default() }],
+            ..Default::default()
+        };
+        Score {
+            initial_tempo: 120.0,
+            bars: vec![MasterBar { numerator: 4, denominator: 4, ..Default::default() }; 4],
+            tracks: vec![ScoreTrack {
+                name: "Guitar".into(),
+                tuning: vec![64, 59, 55, 50, 45, 38],
+                bars: vec![TrackBar { voices: vec![vec![beat]] }; 4],
+                ..Default::default()
+            }],
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn loop_ranges_cover_whole_bars_and_hardest_bars_sort_by_accuracy() {
+        let timeline = Timeline::build(&four_bar_score());
+        // 120 bpm 4/4: 2 s per bar.
+        assert_eq!(loop_secs(&timeline, (1, 2), 0.0), Some((2.0, 6.0)));
+        assert_eq!(loop_secs(&timeline, (2, 1), 0.0), Some((2.0, 6.0)), "order doesn't matter");
+        assert_eq!(loop_secs(&timeline, (9, 9), 0.0), None);
+        let results = std::collections::BTreeMap::from([(0, (9, 10)), (1, (2, 4)), (2, (1, 1)), (3, (0, 3))]);
+        assert_eq!(hardest_bars(&results, 2), vec![(3, 0.0), (1, 0.5), (0, 0.9)]);
+    }
+
+    #[test]
+    fn loop_and_trainer_drive_the_player() {
+        let score = four_bar_score();
+        let timeline = Timeline::build(&score);
+        let player = SongPlayer::new();
+        player.set_output_rate(1000);
+        player.set_song(Arc::new(Timeline::build(&score)), Vec::new(), 1);
+        let mut panel = TabPlayerPanel::new(player.clone(), &AppSettings::default());
+        panel.tab = Some(LoadedTab { path: PathBuf::from("/t/l.gp5"), score: Arc::new(score), timeline: Arc::new(timeline) });
+        panel.muted = vec![false];
+        panel.soloed = vec![false];
+        assert_eq!(panel.selected_tuning().and_then(|t| Tuning::from_tab(&t)).map(|t| t.name), Some("Drop D".into()));
+        panel.loop_bars(1, 1);
+        assert!((player.status().score_secs() - 2.0).abs() < 1e-9);
+        panel.practice_loop.trainer = true;
+        panel.speed = 0.6;
+        player.set_speed(0.6);
+        player.play();
+        let mut buf = vec![0.0; 1000];
+        for _ in 0..4 {
+            player.try_render(&mut buf);
+        }
+        panel.on_loop_passes();
+        assert!(panel.speed > 0.6, "a pass without practice mode counts as good");
+        assert_eq!(panel.practice_loop.good_passes, 1);
+        panel.count_in_bars = 1;
+        assert_eq!(panel.count_in_beats(), 4);
+        let beat = panel.count_in_beat_secs();
+        assert!((beat - 0.5 / panel.speed as f64).abs() < 1e-6, "{beat}");
+
+        let ctx = egui::Context::default();
+        let mut settings = AppSettings::default();
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                panel.ui(ui, &mut settings);
+            });
+        });
     }
 
     #[test]

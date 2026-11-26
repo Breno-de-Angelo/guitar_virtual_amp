@@ -65,7 +65,9 @@ use crossbeam::channel::{bounded, Receiver, Sender};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
+use crate::backend::controls::{AudioControls, RecordSource};
 use crate::backend::pedals::pedal::{MultiChannelPedalChain, PedalChain};
+use crate::backend::recorder::record_channel;
 use crate::backend::song_player::SongPlayer;
 use crate::shared::pedals::PedalInstance;
 use crate::shared::config::GLOBAL_CONFIG;
@@ -126,29 +128,60 @@ struct OutputRenderer {
     metronome_click: MetronomeClick,
     trimmer: BacklogTrimmer,
     block: Vec<i16>,
+    /// The block before the chain (for the dry analysis tap).
+    dry: Vec<i16>,
+    controls: Arc<AudioControls>,
+    /// Samples of the latency-test pulse still to play.
+    pulse_remaining: u32,
 }
 
+/// Latency-test pulse: a 2 ms, 2 kHz burst at half scale.
+const PULSE_SAMPLES: u32 = 96;
+const PULSE_FREQ_HZ: f32 = 2000.0;
+const PULSE_GAIN: f32 = 0.5;
+
 impl OutputRenderer {
-    fn new(pedal_chain: PedalChain, metronome_click: MetronomeClick) -> Self {
+    fn new(pedal_chain: PedalChain, metronome_click: MetronomeClick, controls: Arc<AudioControls>) -> Self {
         Self {
             pedal_chain,
             metronome_click,
             trimmer: BacklogTrimmer::default(),
             block: vec![0; OUTPUT_BLOCK_SAMPLES],
+            dry: vec![0; OUTPUT_BLOCK_SAMPLES],
+            controls,
+            pulse_remaining: 0,
         }
     }
 
-    /// Renders `frames` mono samples, calling `write(frame_index, sample)`
-    /// for each. Pulls input from `input_rx` (silence if it runs dry), runs
-    /// the chain on whole blocks, adds the metronome click, and forwards
-    /// each sample to the visualizer.
+}
+
+/// Next sample of the latency-test pulse (added to the click).
+fn next_pulse_sample(remaining: &mut u32) -> i16 {
+    {
+        if *remaining == 0 {
+            return 0;
+        }
+        let i = (PULSE_SAMPLES - *remaining) as f32;
+        *remaining -= 1;
+        let phase = i * std::f32::consts::TAU * PULSE_FREQ_HZ / GLOBAL_CONFIG.sample_rate;
+        (phase.sin() * PULSE_GAIN * i16::MAX as f32) as i16
+    }
+}
+
+impl OutputRenderer {
+
+    /// Renders `frames` mono samples, calling `write(frame_index, guitar,
+    /// click)` for each. Pulls input from `input_rx` (silence if it runs
+    /// dry), applies the input gain, runs the chain on whole blocks, and
+    /// forwards the processed guitar (without the click, which would fool
+    /// the tuner and practice mode) to the visualizer.
     fn render(
         &mut self,
         frames: usize,
         pedal_rx: &Receiver<Vec<PedalInstance>>,
         input_rx: &Receiver<i16>,
         audio_tx: &Sender<i16>,
-        mut write: impl FnMut(usize, i16),
+        mut write: impl FnMut(usize, i16, i16),
     ) {
         for msg in pedal_rx.try_iter() {
             self.pedal_chain.apply_description(msg);
@@ -160,22 +193,79 @@ impl OutputRenderer {
             let _ = input_rx.try_recv();
         }
 
+        let input_gain = self.controls.input_gain();
+        let unity = (input_gain - 1.0).abs() < 1e-6;
         let mut done = 0;
         while done < frames {
             let len = (frames - done).min(self.block.len());
             let block = &mut self.block[..len];
+            let mut peak: i16 = 0;
             for sample in block.iter_mut() {
-                *sample = input_rx.try_recv().unwrap_or(0);
+                let raw = input_rx.try_recv().unwrap_or(0);
+                *sample = if unity {
+                    raw
+                } else {
+                    (raw as f32 * input_gain).clamp(i16::MIN as f32, i16::MAX as f32) as i16
+                };
+                // What reaches the chain, but a clipping interface still
+                // shows even with the gain turned down.
+                let raw_clip = if raw.saturating_abs() == i16::MAX { i16::MAX } else { 0 };
+                peak = peak.max(sample.saturating_abs()).max(raw_clip);
+            }
+            self.controls.record_input_peak(peak as f32 / i16::MAX as f32);
+            let dry_tap = self.controls.analysis_dry();
+            if dry_tap {
+                self.dry[..len].copy_from_slice(block);
             }
             self.pedal_chain.process_block(block);
-            for (i, &sample) in block.iter().enumerate() {
-                let processed = sample.saturating_add(self.metronome_click.next_sample());
-                let _ = audio_tx.try_send(processed);
-                write(done + i, processed);
+            if self.controls.take_pulse_request() {
+                self.pulse_remaining = PULSE_SAMPLES;
+                self.controls.mark_pulse_sent(self.controls.analysis_sent());
             }
+            let mut delivered = 0u64;
+            for (i, &sample) in block.iter().enumerate() {
+                let click = self.metronome_click.next_sample().saturating_add(next_pulse_sample(&mut self.pulse_remaining));
+                let analysed = if dry_tap { self.dry[i] } else { sample };
+                // Only delivered samples count, so the UI's received count
+                // stays aligned with this one (latency probe).
+                delivered += u64::from(audio_tx.try_send(analysed).is_ok());
+                write(done + i, sample, click);
+            }
+            self.controls.count_analysis_samples(delivered);
             done += len;
         }
     }
+}
+
+/// Everything an output stream needs besides its device: the channels and
+/// shared state it is wired to. Cloned into every rebuilt output stream
+/// (device or buffer-size changes) so they all share the same state.
+#[derive(Clone)]
+pub struct OutputShared {
+    pub input_rx: Receiver<i16>,
+    pub audio_tx: Sender<i16>,
+    pub pedal_rx: Receiver<Vec<PedalInstance>>,
+    pub last_output_callback_ns: Arc<AtomicU64>,
+    pub metronome_running: Arc<AtomicBool>,
+    pub metronome_bpm: Arc<AtomicU32>,
+    pub song_player: SongPlayer,
+    pub controls: Arc<AudioControls>,
+    /// Recorded samples, while `controls.record_source()` is set.
+    pub record_tx: Sender<f32>,
+}
+
+/// Mixes one output frame: guitar + click + song, through the master
+/// volume. Returns `(speaker sample, sample to record)` in -1..1.
+#[inline]
+fn mix_frame(guitar: i16, click: i16, song: f32, volume: f32, source: Option<RecordSource>) -> (f32, f32) {
+    let guitar = guitar as f32 / i16::MAX as f32;
+    let full = guitar + click as f32 / i16::MAX as f32 + song;
+    let out = (full * volume).clamp(-1.0, 1.0);
+    let recorded = match source {
+        Some(RecordSource::Guitar) => guitar,
+        _ => full.clamp(-1.0, 1.0),
+    };
+    (out, recorded)
 }
 
 /// Length of the metronome's click sound, in samples at `GLOBAL_CONFIG.sample_rate`.
@@ -192,19 +282,30 @@ const METRONOME_CLICK_GAIN: f32 = 0.5;
 struct MetronomeClick {
     running: Arc<AtomicBool>,
     bpm_bits: Arc<AtomicU32>,
+    controls: Arc<AudioControls>,
     samples_into_beat: u64,
+    beat_in_bar: u32,
     click_remaining: u32,
     click_phase: f32,
+    click_freq: f32,
+    click_gain: f32,
 }
 
+/// Pitch of the accented first beat of each bar.
+const METRONOME_ACCENT_FREQ_HZ: f32 = 2200.0;
+
 impl MetronomeClick {
-    fn new(running: Arc<AtomicBool>, bpm_bits: Arc<AtomicU32>) -> Self {
+    fn new(running: Arc<AtomicBool>, bpm_bits: Arc<AtomicU32>, controls: Arc<AudioControls>) -> Self {
         Self {
             running,
             bpm_bits,
+            controls,
             samples_into_beat: 0,
+            beat_in_bar: 0,
             click_remaining: 0,
             click_phase: 0.0,
+            click_freq: METRONOME_CLICK_FREQ_HZ,
+            click_gain: METRONOME_CLICK_GAIN,
         }
     }
 
@@ -215,24 +316,35 @@ impl MetronomeClick {
             let bpm = f32::from_bits(self.bpm_bits.load(Ordering::Relaxed)).clamp(1.0, 1000.0);
             let period_samples = ((GLOBAL_CONFIG.sample_rate * 60.0 / bpm) as u64).max(1);
             if self.samples_into_beat == 0 {
+                let beats_per_bar = self.controls.metronome_beats_per_bar();
+                if beats_per_bar == 0 || self.beat_in_bar >= beats_per_bar {
+                    self.beat_in_bar = 0;
+                }
+                let accent = beats_per_bar > 1 && self.beat_in_bar == 0;
+                let volume = self.controls.metronome_volume();
+                self.click_freq = if accent { METRONOME_ACCENT_FREQ_HZ } else { METRONOME_CLICK_FREQ_HZ };
+                self.click_gain = METRONOME_CLICK_GAIN * volume * if accent { 1.0 } else { 0.7 };
                 self.click_remaining = METRONOME_CLICK_SAMPLES;
                 self.click_phase = 0.0;
+                self.controls.publish_metronome_click(self.beat_in_bar);
+                self.beat_in_bar += 1;
             }
             self.samples_into_beat = (self.samples_into_beat + 1) % period_samples;
         } else {
             self.samples_into_beat = 0;
+            self.beat_in_bar = 0;
             self.click_remaining = 0;
         }
 
         if self.click_remaining > 0 {
             let envelope = self.click_remaining as f32 / METRONOME_CLICK_SAMPLES as f32;
-            let value = (self.click_phase * 2.0 * std::f32::consts::PI * METRONOME_CLICK_FREQ_HZ
+            let value = (self.click_phase * 2.0 * std::f32::consts::PI * self.click_freq
                 / GLOBAL_CONFIG.sample_rate)
                 .sin()
                 * envelope
                 * envelope
                 * i16::MAX as f32
-                * METRONOME_CLICK_GAIN;
+                * self.click_gain.min(1.0);
             self.click_phase += 1.0;
             self.click_remaining -= 1;
             value as i16
@@ -336,8 +448,9 @@ fn extract_channels<T: Copy>(frame: &[T], channel_count: usize) -> Vec<T> {
 }
 
 pub struct AudioSetup {
-    pub input_stream: cpal::Stream,
-    pub output_stream: cpal::Stream,
+    /// `None` when the app runs without audio (see [`AudioSetup::without_audio`]).
+    pub input_stream: Option<cpal::Stream>,
+    pub output_stream: Option<cpal::Stream>,
     pub input_tx: Sender<i16>,
     pub pedal_tx: Sender<Vec<PedalInstance>>,
     // Kept around so the output stream can be rebuilt on a different device later
@@ -362,6 +475,53 @@ pub struct AudioSetup {
     /// Tab-player song engine (synth + backing track), mixed into the output
     /// after the pedal chain. See `backend::song_player`.
     pub song_player: SongPlayer,
+    /// Master volume, mute, input gain, metronome accent and level meters.
+    pub controls: Arc<AudioControls>,
+    pub record_tx: Sender<f32>,
+    /// Read by `backend::recorder::Recorder`.
+    pub record_rx: Receiver<f32>,
+}
+
+impl AudioSetup {
+    /// The channels and shared state, with no streams: the app still opens
+    /// (and can retry the devices later) when no audio device works.
+    pub fn without_audio(audio_tx: Sender<i16>) -> Self {
+        let (input_tx, input_rx) = bounded::<i16>(4096);
+        let (pedal_tx, pedal_rx) = bounded::<Vec<PedalInstance>>(8);
+        let (record_tx, record_rx) = record_channel();
+        Self {
+            input_stream: None,
+            output_stream: None,
+            input_tx,
+            pedal_tx,
+            input_rx,
+            pedal_rx,
+            audio_tx,
+            configured_latency_secs: 2.0 * GLOBAL_CONFIG.buffer_size as f32 / GLOBAL_CONFIG.sample_rate,
+            last_output_callback_ns: Arc::new(AtomicU64::new(0)),
+            metronome_running: Arc::new(AtomicBool::new(false)),
+            metronome_bpm: Arc::new(AtomicU32::new(120.0f32.to_bits())),
+            song_player: SongPlayer::new(),
+            controls: Arc::new(AudioControls::default()),
+            record_tx,
+            record_rx,
+        }
+    }
+
+    /// What `switch_output_device` needs to rebuild the output stream.
+    pub fn output_shared(&self) -> OutputShared {
+        OutputShared {
+            input_rx: self.input_rx.clone(),
+            audio_tx: self.audio_tx.clone(),
+            pedal_rx: self.pedal_rx.clone(),
+            last_output_callback_ns: self.last_output_callback_ns.clone(),
+            metronome_running: self.metronome_running.clone(),
+            metronome_bpm: self.metronome_bpm.clone(),
+            song_player: self.song_player.clone(),
+            controls: self.controls.clone(),
+            record_tx: self.record_tx.clone(),
+        }
+    }
 }
 
 pub fn start_audio_processing(
@@ -472,20 +632,22 @@ pub fn start_audio_processing_with_devices(
     let metronome_running = Arc::new(AtomicBool::new(false));
     let metronome_bpm = Arc::new(AtomicU32::new(120.0f32.to_bits()));
     let song_player = SongPlayer::new();
+    let controls = Arc::new(AudioControls::default());
+    let (record_tx, record_rx) = record_channel();
 
-    let (output_stream, output_effective_frames) = build_output_stream(
-        &output_device,
-        output_config,
-        buffer_frames,
-        input_rx.clone(),
-        audio_tx.clone(),
-        pedal_rx.clone(),
-        Vec::new(),
-        last_output_callback_ns.clone(),
-        metronome_running.clone(),
-        metronome_bpm.clone(),
-        song_player.clone(),
-    )?;
+    let shared = OutputShared {
+        input_rx: input_rx.clone(),
+        audio_tx: audio_tx.clone(),
+        pedal_rx: pedal_rx.clone(),
+        last_output_callback_ns: last_output_callback_ns.clone(),
+        metronome_running: metronome_running.clone(),
+        metronome_bpm: metronome_bpm.clone(),
+        song_player: song_player.clone(),
+        controls: controls.clone(),
+        record_tx: record_tx.clone(),
+    };
+    let (output_stream, output_effective_frames) =
+        build_output_stream(&output_device, output_config, buffer_frames, shared, Vec::new())?;
 
     output_stream.play()?;
 
@@ -498,8 +660,8 @@ pub fn start_audio_processing_with_devices(
         / GLOBAL_CONFIG.sample_rate;
 
     Ok(AudioSetup {
-        input_stream,
-        output_stream,
+        input_stream: Some(input_stream),
+        output_stream: Some(output_stream),
         input_tx,
         pedal_tx,
         input_rx,
@@ -510,29 +672,37 @@ pub fn start_audio_processing_with_devices(
         metronome_running,
         metronome_bpm,
         song_player,
+        controls,
+        record_tx,
+        record_rx,
     })
 }
 
 /// Builds the output stream: drains pedal-chain updates, pulls processed samples off
-/// `input_rx`, and forwards the result to `audio_tx` for visualization. Returns the
+/// `input_rx`, mixes in the metronome and the tab-player song through the master
+/// volume, and forwards the guitar to `audio_tx` for visualization. Returns the
 /// stream plus the buffer size actually applied (see `resolve_stream_config`).
-#[allow(clippy::too_many_arguments)]
 fn build_output_stream(
     device: &cpal::Device,
     config: cpal::SupportedStreamConfig,
     buffer_frames: u32,
-    input_rx: Receiver<i16>,
-    audio_tx: Sender<i16>,
-    pedal_rx: Receiver<Vec<PedalInstance>>,
+    shared: OutputShared,
     initial_pedals: Vec<PedalInstance>,
-    last_output_callback_ns: Arc<AtomicU64>,
-    metronome_running: Arc<AtomicBool>,
-    metronome_bpm: Arc<AtomicU32>,
-    song_player: SongPlayer,
 ) -> Result<(cpal::Stream, Option<u32>), Box<dyn std::error::Error>> {
     let sample_format = config.sample_format();
     let (stream_config, effective_frames) = resolve_stream_config(&config, buffer_frames);
     let channels = stream_config.channels;
+    let OutputShared {
+        input_rx,
+        audio_tx,
+        pedal_rx,
+        last_output_callback_ns,
+        metronome_running,
+        metronome_bpm,
+        song_player,
+        controls,
+        record_tx,
+    } = shared;
     song_player.set_output_rate(stream_config.sample_rate);
     // Song audio for the current callback, rendered in one block before the
     // per-frame loop. Sized generously up front so the realtime callback
@@ -540,55 +710,48 @@ fn build_output_stream(
     let mut song_buffer: Vec<f32> = vec![0.0; 8192];
 
     let pedal_chain = PedalChain::from_description(initial_pedals);
-    let metronome_click = MetronomeClick::new(metronome_running, metronome_bpm);
-    let mut renderer = OutputRenderer::new(pedal_chain, metronome_click);
+    let metronome_click = MetronomeClick::new(metronome_running, metronome_bpm, controls.clone());
+    let mut renderer = OutputRenderer::new(pedal_chain, metronome_click, controls.clone());
     let channels_usize = (channels as usize).max(1);
+
+    // One callback body for both sample formats: `to_sample` converts the
+    // mixed -1..1 value.
+    macro_rules! callback {
+        ($ty:ty, $to_sample:expr) => {
+            move |data: &mut [$ty], _: &cpal::OutputCallbackInfo| {
+                let callback_start = Instant::now();
+                let frames = data.len() / channels_usize;
+                let song = render_song_block(&song_player, &mut song_buffer, frames);
+                let volume = controls.effective_volume();
+                let record = controls.record_source();
+                let mut peak = 0.0f32;
+                renderer.render(frames, &pedal_rx, &input_rx, &audio_tx, |i, guitar, click| {
+                    let (out, recorded) = mix_frame(guitar, click, song[i], volume, record);
+                    peak = peak.max(out.abs());
+                    if record.is_some() {
+                        let _ = record_tx.try_send(recorded);
+                    }
+                    let start = i * channels_usize;
+                    data[start..start + channels_usize].fill($to_sample(out));
+                });
+                controls.record_output_peak(peak);
+                last_output_callback_ns.store(callback_start.elapsed().as_nanos() as u64, Ordering::Relaxed);
+            }
+        };
+    }
 
     let stream = match sample_format {
         cpal::SampleFormat::I16 => device.build_output_stream(
             stream_config,
-            move |data: &mut [i16], _| {
-                let callback_start = Instant::now();
-
-                let frames = data.len() / channels_usize;
-                let song = render_song_block(&song_player, &mut song_buffer, frames);
-                renderer.render(frames, &pedal_rx, &input_rx, &audio_tx, |i, processed| {
-                    // The visualizer/tuner (fed inside `render`) only sees the
-                    // guitar + click; the song is mixed in for the output only.
-                    let mixed = processed
-                        .saturating_add((song[i].clamp(-1.0, 1.0) * i16::MAX as f32) as i16);
-                    let start = i * channels_usize;
-                    data[start..start + channels_usize].fill(mixed);
-                });
-
-                last_output_callback_ns.store(
-                    callback_start.elapsed().as_nanos() as u64,
-                    Ordering::Relaxed,
-                );
-            },
+            callback!(i16, |v: f32| (v * i16::MAX as f32) as i16),
             |err| eprintln!("Erro no output stream (I16): {}", err),
-            None
+            None,
         )?,
         cpal::SampleFormat::F32 => device.build_output_stream(
             stream_config,
-            move |data: &mut [f32], _| {
-                let callback_start = Instant::now();
-
-                let frames = data.len() / channels_usize;
-                let song = render_song_block(&song_player, &mut song_buffer, frames);
-                renderer.render(frames, &pedal_rx, &input_rx, &audio_tx, |i, processed| {
-                    let mixed = (processed as f32 / i16::MAX as f32 + song[i]).clamp(-1.0, 1.0);
-                    let start = i * channels_usize;
-                    data[start..start + channels_usize].fill(mixed);
-                });
-
-                last_output_callback_ns.store(
-                    callback_start.elapsed().as_nanos() as u64,
-                    Ordering::Relaxed,
-                );
-            },
+            callback!(f32, |v: f32| v),
             |err| eprintln!("Erro no output stream (F32): {}", err),
-            None
+            None,
         )?,
         _ => return Err("Formato de amostra de saída não suportado pelo CPAL".into()),
     };
@@ -611,54 +774,33 @@ fn render_song_block<'a>(player: &SongPlayer, buffer: &'a mut Vec<f32>, frames: 
 
 /// Finds the named output device, builds a fresh output stream for it (seeded with
 /// `initial_pedals` so the pedal chain doesn't reset to empty), requesting
-/// `buffer_frames` as the callback buffer size, and starts it playing.
-///
-/// Kept API-compatible with existing callers (`guitar_core::frontend::gui`'s device-switching
-/// flow), so it doesn't take/return the `last_output_callback_ns` handle from `AudioSetup`;
-/// a fresh counter is created internally for the new stream's callback and simply isn't
-/// surfaced to the caller. If a future overlay needs live timing across device switches too,
-/// this would need a signature change on the UI side as well.
-#[allow(clippy::too_many_arguments)]
+/// `buffer_frames` as the callback buffer size, and starts it playing. The new
+/// stream shares everything in `shared` with the one it replaces, including the
+/// callback timing the UI's CPU meter reads.
 pub fn switch_output_device(
     device_name: &str,
     buffer_frames: u32,
-    input_rx: Receiver<i16>,
-    audio_tx: Sender<i16>,
-    pedal_rx: Receiver<Vec<PedalInstance>>,
+    shared: OutputShared,
     initial_pedals: Vec<PedalInstance>,
-    metronome_running: Arc<AtomicBool>,
-    metronome_bpm: Arc<AtomicU32>,
-    song_player: SongPlayer,
 ) -> Result<cpal::Stream, String> {
     let host = cpal::default_host();
     let devices = host.output_devices().map_err(|e| e.to_string())?;
     let device = devices
         .into_iter()
         .find(|d| d.to_string() == device_name)
+        .or_else(|| device_name.is_empty().then(|| host.default_output_device()).flatten())
         .ok_or_else(|| "Dispositivo de saída não encontrado".to_string())?;
 
     let target_sample_rate = GLOBAL_CONFIG.sample_rate as u32;
     let config = find_best_config(&device, target_sample_rate, false).map_err(|e| e.to_string())?;
 
-    let last_output_callback_ns = Arc::new(AtomicU64::new(0));
-    let (stream, _effective_frames) = build_output_stream(
-        &device,
-        config,
-        buffer_frames,
-        input_rx,
-        audio_tx,
-        pedal_rx,
-        initial_pedals,
-        last_output_callback_ns,
-        metronome_running,
-        metronome_bpm,
-        song_player,
-    )
-    .map_err(|e| e.to_string())?;
+    let (stream, _effective_frames) =
+        build_output_stream(&device, config, buffer_frames, shared, initial_pedals).map_err(|e| e.to_string())?;
 
     stream.play().map_err(|e| e.to_string())?;
     Ok(stream)
 }
+
 
 /// Finds the named input device, builds a fresh input stream for it requesting
 /// `buffer_frames` as the callback buffer size, and starts it playing. Mirrors
@@ -675,6 +817,7 @@ pub fn switch_input_device(
     let device = devices
         .into_iter()
         .find(|d| d.to_string() == device_name)
+        .or_else(|| device_name.is_empty().then(|| host.default_input_device()).flatten())
         .ok_or_else(|| "Dispositivo de entrada não encontrado".to_string())?;
 
     let target_sample_rate = GLOBAL_CONFIG.sample_rate as u32;
@@ -965,17 +1108,105 @@ mod tests {
         let (input_tx, input_rx) = bounded::<i16>(64);
         let (_pedal_tx, pedal_rx) = bounded::<Vec<PedalInstance>>(1);
         let (audio_tx, _audio_rx) = bounded::<i16>(64);
+        let controls = Arc::new(AudioControls::default());
         let metronome = MetronomeClick::new(
             Arc::new(AtomicBool::new(false)),
             Arc::new(AtomicU32::new(120.0f32.to_bits())),
+            controls.clone(),
         );
-        let mut renderer = OutputRenderer::new(PedalChain::new(), metronome);
+        let mut renderer = OutputRenderer::new(PedalChain::new(), metronome, controls.clone());
         for s in [10, 20, 30] {
             input_tx.send(s).unwrap();
         }
         let mut out = [99i16; 5];
-        renderer.render(5, &pedal_rx, &input_rx, &audio_tx, |i, s| out[i] = s);
+        renderer.render(5, &pedal_rx, &input_rx, &audio_tx, |i, s, click| {
+            assert_eq!(click, 0);
+            out[i] = s;
+        });
         assert_eq!(out, [10, 20, 30, 0, 0]);
+        assert!((controls.take_input_peak() - 30.0 / i16::MAX as f32).abs() < 1e-6);
+    }
+
+    #[test]
+    fn input_gain_scales_the_guitar_before_the_chain() {
+        let (input_tx, input_rx) = bounded::<i16>(64);
+        let (_pedal_tx, pedal_rx) = bounded::<Vec<PedalInstance>>(1);
+        let (audio_tx, audio_rx) = bounded::<i16>(64);
+        let controls = Arc::new(AudioControls::default());
+        controls.set_input_gain(2.0);
+        let metronome =
+            MetronomeClick::new(Arc::new(AtomicBool::new(false)), Arc::new(AtomicU32::new(0)), controls.clone());
+        let mut renderer = OutputRenderer::new(PedalChain::new(), metronome, controls.clone());
+        for s in [100, -20_000] {
+            input_tx.send(s).unwrap();
+        }
+        let mut out = [0i16; 2];
+        renderer.render(2, &pedal_rx, &input_rx, &audio_tx, |i, s, _| out[i] = s);
+        assert_eq!(out, [200, i16::MIN]);
+        // The visualizer gets the same (gained) guitar signal.
+        assert_eq!(audio_rx.try_iter().collect::<Vec<_>>(), vec![200, i16::MIN]);
+    }
+
+    #[test]
+    fn dry_tap_sends_the_input_and_pulses_are_placed_in_the_analysis_stream() {
+        use crate::shared::pedals::{AmpParams, PedalDescription};
+        let (input_tx, input_rx) = bounded::<i16>(64);
+        let (pedal_tx, pedal_rx) = bounded::<Vec<PedalInstance>>(1);
+        let (audio_tx, audio_rx) = bounded::<i16>(64);
+        let controls = Arc::new(AudioControls::default());
+        let metronome =
+            MetronomeClick::new(Arc::new(AtomicBool::new(false)), Arc::new(AtomicU32::new(0)), controls.clone());
+        let mut renderer = OutputRenderer::new(PedalChain::new(), metronome, controls.clone());
+        pedal_tx.send(vec![PedalInstance::new(PedalDescription::Amp(AmpParams { gain: 4.0, ..Default::default() }))]).unwrap();
+        for s in [1000, 2000, 3000, 4000] {
+            input_tx.send(s).unwrap();
+        }
+        let mut clicks = Vec::new();
+        renderer.render(2, &pedal_rx, &input_rx, &audio_tx, |_, _, _| {});
+        controls.request_pulse();
+        renderer.render(2, &pedal_rx, &input_rx, &audio_tx, |_, _, click| clicks.push(click));
+        assert_eq!(audio_rx.try_iter().collect::<Vec<_>>(), vec![1000, 2000, 3000, 4000], "dry by default");
+        assert_eq!(controls.pulse_sent_at(), Some(2), "pulse starts at the third analysis sample");
+        assert_eq!(controls.analysis_sent(), 4);
+        assert!(clicks[1] != 0, "pulse is audible");
+    }
+
+    #[test]
+    fn metronome_accents_the_first_beat_and_reports_clicks() {
+        let controls = Arc::new(AudioControls::default());
+        controls.set_metronome_beats_per_bar(3);
+        let running = Arc::new(AtomicBool::new(true));
+        // 960 bpm = one beat per 3000 samples at 48 kHz.
+        let mut click = MetronomeClick::new(running, Arc::new(AtomicU32::new(960.0f32.to_bits())), controls.clone());
+        let mut beats = Vec::new();
+        let mut clicks_seen = 0;
+        for _ in 0..9500 {
+            click.next_sample();
+            let (beat, clicks) = controls.metronome_position();
+            if clicks != clicks_seen {
+                clicks_seen = clicks;
+                beats.push((beat, click.click_freq));
+            }
+        }
+        assert_eq!(
+            beats,
+            vec![
+                (0, METRONOME_ACCENT_FREQ_HZ),
+                (1, METRONOME_CLICK_FREQ_HZ),
+                (2, METRONOME_CLICK_FREQ_HZ),
+                (0, METRONOME_ACCENT_FREQ_HZ)
+            ]
+        );
+    }
+
+    #[test]
+    fn mix_applies_volume_to_the_speakers_but_not_the_recording() {
+        let half = i16::MAX / 2;
+        let (out, recorded) = mix_frame(half, 0, 0.25, 0.5, Some(RecordSource::Mix));
+        assert!((out - 0.375).abs() < 1e-3);
+        assert!((recorded - 0.75).abs() < 1e-3);
+        let (_, guitar_only) = mix_frame(half, half, 0.25, 0.0, Some(RecordSource::Guitar));
+        assert!((guitar_only - 0.5).abs() < 1e-3);
     }
 
     #[test]

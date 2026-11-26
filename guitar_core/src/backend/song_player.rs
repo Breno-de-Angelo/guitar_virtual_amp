@@ -38,6 +38,8 @@ pub struct PlayerStatus {
     score_secs: AtomicU64,
     audio_secs: AtomicU64,
     output_rate: AtomicU32,
+    counting_in: AtomicBool,
+    loop_passes: AtomicU32,
 }
 
 impl PlayerStatus {
@@ -55,7 +57,27 @@ impl PlayerStatus {
     pub fn output_rate(&self) -> u32 {
         self.output_rate.load(Ordering::Relaxed)
     }
+    /// The count-in clicks are playing (the song starts after them).
+    pub fn counting_in(&self) -> bool {
+        self.counting_in.load(Ordering::Relaxed)
+    }
+    /// How many times playback jumped from the loop end back to its start.
+    pub fn loop_passes(&self) -> u32 {
+        self.loop_passes.load(Ordering::Relaxed)
+    }
 }
+
+/// Clicks before playback starts, so the player can come in on time.
+#[derive(Clone, Copy, Debug)]
+struct CountIn {
+    /// Output samples per beat.
+    period: u64,
+    total: u64,
+    elapsed: u64,
+}
+
+/// Length of a count-in click, seconds.
+const COUNT_IN_CLICK_SECS: f64 = 0.03;
 
 pub struct PlayerEngine {
     output_rate: u32,
@@ -77,6 +99,9 @@ pub struct PlayerEngine {
     left: Vec<f32>,
     right: Vec<f32>,
     status: Arc<PlayerStatus>,
+    /// `(start, end)` in score seconds: playback jumps back at the end.
+    loop_range: Option<(f64, f64)>,
+    count_in: Option<CountIn>,
 }
 
 impl PlayerEngine {
@@ -101,6 +126,8 @@ impl PlayerEngine {
             left: vec![0.0; CHUNK_FRAMES],
             right: vec![0.0; CHUNK_FRAMES],
             status,
+            loop_range: None,
+            count_in: None,
         }
     }
 
@@ -151,6 +178,33 @@ impl PlayerEngine {
         self.status.playing.store(self.playing, Ordering::Relaxed);
         self.status.score_secs.store(self.score_secs.to_bits(), Ordering::Relaxed);
         self.status.audio_secs.store(self.audio_secs.to_bits(), Ordering::Relaxed);
+        self.status.counting_in.store(self.count_in.is_some(), Ordering::Relaxed);
+    }
+
+    /// Mixes count-in clicks into `chunk`. Returns `false` once it's over.
+    fn render_count_in(&mut self, chunk: &mut [f32]) -> bool {
+        let rate = self.output_rate.max(1) as f64;
+        let Some(ci) = &mut self.count_in else { return false };
+        let click_len = (COUNT_IN_CLICK_SECS * rate) as u64;
+        for sample in chunk.iter_mut() {
+            if ci.elapsed >= ci.total {
+                break;
+            }
+            let in_beat = ci.elapsed % ci.period.max(1);
+            if in_beat < click_len {
+                let first = ci.elapsed < ci.period;
+                let freq = if first { 1800.0 } else { 1300.0 };
+                let env = 1.0 - in_beat as f64 / click_len as f64;
+                let t = in_beat as f64 / rate;
+                *sample += ((t * freq * std::f64::consts::TAU).sin() * env * env * 0.35) as f32;
+            }
+            ci.elapsed += 1;
+        }
+        if ci.elapsed >= ci.total {
+            self.count_in = None;
+            return false;
+        }
+        true
     }
 
     fn end_secs(&self) -> f64 {
@@ -172,9 +226,14 @@ impl PlayerEngine {
         let rate = self.output_rate.max(1) as f64;
         let end = self.end_secs();
         for chunk in out.chunks_mut(CHUNK_FRAMES) {
+            if self.count_in.is_some() && self.render_count_in(chunk) {
+                continue;
+            }
             let n = chunk.len();
             let dt = n as f64 / rate;
             let audio_start = self.audio_secs;
+            // Only playing *into* the loop end wraps (not a seek past it).
+            let before_loop_end = self.loop_range.is_some_and(|(_, end)| self.score_secs < end);
             let new_score = if self.backing_active() {
                 self.audio_secs += dt;
                 self.sync.audio_to_score(self.audio_secs)
@@ -204,6 +263,15 @@ impl PlayerEngine {
                 }
             }
             self.score_secs = new_score;
+            // This chunk's backing audio still comes from before the jump
+            // (`audio_start`), so the recording doesn't skip.
+            if let Some((start, loop_end)) = self.loop_range
+                && before_loop_end
+                && self.score_secs >= loop_end
+            {
+                self.seek_score(start);
+                self.status.loop_passes.fetch_add(1, Ordering::Relaxed);
+            }
 
             if self.backing_active()
                 && let Some(backing) = &self.backing
@@ -308,6 +376,8 @@ impl SongPlayer {
     pub fn set_song(&self, timeline: Arc<Timeline>, channels: ChannelSetup, track_count: usize) {
         let old = self.with(|e| {
             e.playing = false;
+            e.loop_range = None;
+            e.count_in = None;
             e.channel_setup = channels;
             e.track_enabled = vec![true; track_count];
             let old = e.timeline.replace(timeline);
@@ -365,9 +435,38 @@ impl SongPlayer {
         });
     }
 
+    /// Plays `beats` clicks `beat_secs` apart, then starts the song.
+    pub fn play_with_count_in(&self, beats: u32, beat_secs: f64) {
+        self.with(|e| {
+            if e.timeline.is_none() {
+                return;
+            }
+            if e.score_secs >= e.end_secs() - 1.0 {
+                e.seek_score(0.0);
+            }
+            let period = (beat_secs.clamp(0.1, 4.0) * e.output_rate.max(1) as f64) as u64;
+            e.count_in = (beats > 0).then_some(CountIn { period, total: period * beats as u64, elapsed: 0 });
+            e.playing = true;
+            e.publish();
+        });
+    }
+
+    /// Repeats `start..end` (score seconds) until cleared with `None`.
+    pub fn set_loop(&self, range: Option<(f64, f64)>) {
+        self.with(|e| {
+            e.loop_range = range.filter(|(a, b)| b > a);
+            if let Some((start, end)) = e.loop_range
+                && (e.score_secs < start - 0.01 || e.score_secs >= end)
+            {
+                e.seek_score(start);
+            }
+        });
+    }
+
     pub fn pause(&self) {
         self.with(|e| {
             e.playing = false;
+            e.count_in = None;
             e.silence();
             e.publish();
         });
@@ -376,7 +475,9 @@ impl SongPlayer {
     pub fn stop(&self) {
         self.with(|e| {
             e.playing = false;
-            e.seek_score(0.0);
+            e.count_in = None;
+            let start = e.loop_range.map(|(a, _)| a).unwrap_or(0.0);
+            e.seek_score(start);
         });
     }
 
@@ -495,6 +596,62 @@ mod tests {
         player.set_sync(SyncMap::Linear { offset_secs: 0.5, tempo_ratio: 1.0 });
         assert!((player.status().audio_secs() - 2.0).abs() < 1e-9);
         assert!((player.status().score_secs() - 1.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn loops_jump_back_and_count_passes() {
+        let player = player_at(1000);
+        player.set_loop(Some((1.0, 2.0)));
+        assert!((player.status().score_secs() - 1.0).abs() < 1e-9, "moved into the loop");
+        player.play();
+        let mut buf = vec![0.0; 500];
+        for _ in 0..5 {
+            player.try_render(&mut buf);
+        }
+        // 2.5 s of playback from 1.0 inside a 1 s loop: two wraps.
+        assert_eq!(player.status().loop_passes(), 2);
+        let pos = player.status().score_secs();
+        assert!((1.0..2.0).contains(&pos), "{pos}");
+        player.stop();
+        assert!((player.status().score_secs() - 1.0).abs() < 1e-9, "stop returns to the loop start");
+        player.set_loop(None);
+        player.stop();
+        assert_eq!(player.status().score_secs(), 0.0);
+    }
+
+    #[test]
+    fn seeking_past_the_loop_end_plays_on_without_a_pass() {
+        let player = player_at(1000);
+        player.set_loop(Some((0.5, 1.5)));
+        player.play();
+        player.seek(2.0);
+        let mut buf = vec![0.0; 500];
+        player.try_render(&mut buf);
+        assert_eq!(player.status().loop_passes(), 0);
+        assert!(player.status().score_secs() > 2.0);
+        // A new song drops the loop.
+        player.set_song(two_bar_timeline(), Vec::new(), 0);
+        player.play();
+        for _ in 0..4 {
+            player.try_render(&mut buf);
+        }
+        assert_eq!(player.status().loop_passes(), 0);
+    }
+
+    #[test]
+    fn count_in_clicks_before_the_song_moves() {
+        let player = player_at(1000);
+        player.play_with_count_in(2, 0.5);
+        assert!(player.status().counting_in());
+        let mut buf = vec![0.0; 500];
+        player.try_render(&mut buf);
+        assert!(buf.iter().any(|s| s.abs() > 0.01), "a click is audible");
+        assert_eq!(player.status().score_secs(), 0.0, "song waits");
+        player.try_render(&mut vec![0.0; 500]);
+        player.try_render(&mut vec![0.0; 64]);
+        assert!(!player.status().counting_in());
+        player.try_render(&mut vec![0.0; 500]);
+        assert!(player.status().score_secs() > 0.4);
     }
 
     #[test]
