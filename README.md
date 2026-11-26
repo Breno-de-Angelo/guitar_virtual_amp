@@ -196,11 +196,12 @@ is one).
 `--tone` in batch mode; needs a separator), after the tab the app searches its own pedals for a
 chain that makes each guitar track sound like the recording: compressor, distortion, amp gain and
 voicing, delay (its time measured from the echoes), reverb, and a final matching filter loaded in a
-Cabinet pedal. Each result is saved as a user preset named after the song and track and shows up
-under 💡 Timbre on the Tabs page. It takes 15-30 s per guitar track. It's a starting point to adjust
-by ear: on EGDB recordings through amp simulations it is closer to the target than the nearest
-factory preset, but on separated stems the nearest factory preset plus the matching filter is
-still as close or closer, and no listening test has been done. Details in
+Cabinet pedal. For each track it saves two user presets named after the song and track, which
+show up under 💡 Timbre on the Tabs page: the search result, and the nearest factory preset plus
+the matching filter. It takes 15-30 s per guitar track. It's a starting point to adjust by ear: on
+EGDB recordings through amp simulations the search is closer to the target than the nearest
+factory preset, but on separated stems the factory preset plus the matching filter is about as
+close, and no listening test has been done. Details in
 `docs/papers/tone-estimation/` and `ROADMAP.md`.
 
 Batch mode, to fill the repository offline (skips files already transcribed):
