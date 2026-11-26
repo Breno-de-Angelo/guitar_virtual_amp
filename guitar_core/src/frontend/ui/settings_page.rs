@@ -2,8 +2,6 @@
 //! and UI scale, MIDI controller bindings (with MIDI learn), recordings,
 //! keyboard shortcuts and where the app keeps its files.
 
-use std::path::Path;
-
 use eframe::egui::{self, RichText, Ui};
 
 use crate::backend::midi::MidiInputManager;
@@ -33,7 +31,7 @@ pub const SHORTCUTS: &[(&str, &str)] = &[
 
 /// Opens a folder in the system file manager.
 #[cfg(not(target_os = "android"))]
-pub fn open_folder(path: &Path) {
+pub fn open_folder(path: &std::path::Path) {
     let _ = std::fs::create_dir_all(path);
     #[cfg(target_os = "linux")]
     let _ = std::process::Command::new("xdg-open").arg(path).spawn();
@@ -226,7 +224,7 @@ impl SettingsPage {
                                 ui.add(egui::Label::new(RichText::new(p.display().to_string()).monospace().small()).truncate());
                                 #[cfg(not(target_os = "android"))]
                                 {
-                                    let folder = if p.extension().is_some() { p.parent().map(Path::to_path_buf) } else { Some(p.clone()) };
+                                    let folder = if p.extension().is_some() { p.parent().map(std::path::Path::to_path_buf) } else { Some(p.clone()) };
                                     if let Some(folder) = folder
                                         && ui.small_button("Open").clicked()
                                     {
