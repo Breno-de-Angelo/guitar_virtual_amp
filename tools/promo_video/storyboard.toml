@@ -1,0 +1,284 @@
+# The promo video: one piece of music (E minor, 100 bpm), scene after
+# scene on the bar lines. Render it with `cargo run` in this folder; see
+# README.md for every field, the notation and the action verbs.
+#
+# To show a new feature: add a [[scene]] where it fits the song, give it a
+# page, a preset and parts to play, and script the clicks on the beats.
+# `{pedal_count}`, `{preset_count}` and `{page_count}` in any text are
+# filled in from the app's code, so they stay right as features are added.
+
+[video]
+width = 1920
+height = 1080
+fps = 30
+output = "out/guitar_virtual_amp.mp4"
+poster = "pedalboard@6.0"
+fade = 0.3
+
+[music]
+bpm = 100
+# GeneralUser GS (free, see README.md) plays the bass and drums.
+soundfont = "~/.cache/gva_promo/GeneralUser-GS.sf2"
+# Real DI recordings of every fret of every string, by two players
+# (Guitar-TECHS, CC BY 4.0): player 1 is take 0, player 2 take 1.
+guitars = [
+    "~/.cache/gva_test/guitar_techs/P1_singlenotes/audio/directinput/directinput_allsinglenotes.wav:~/.cache/gva_test/prepared/notes/techs/P1_singlenotes/allsinglenotes.txt",
+    "~/.cache/gva_test/guitar_techs/P2_singlenotes/audio/directinput/directinput_allsinglenotes.wav:~/.cache/gva_test/prepared/notes/techs/P2_singlenotes/allsinglenotes.txt",
+]
+guitar_db = -19.0
+band_db = -22.0
+
+# ---------------------------------------------------------------- guitar --
+# Em(add9) - Cmaj7 - G6 - Dsus2, let ring.
+[riffs.arpeggio]
+ring = true
+notes = "6:0 4:2 3:0 2:0 1:2 2:0 3:0 4:2 | 5:3 4:2 3:0 2:0 1:0 2:0 3:0 4:2 | 6:3 4:0 3:0 2:0 1:3 2:0 3:0 4:0 | 4:0 3:2 2:3 1:0 1:2 2:3 3:2 4:0"
+
+# E5 - C5 - G5 - D5: open chords on 1 and the "and" of 2, palm-muted chugs between.
+[riffs.rhythm]
+notes = """
+6:0+5:2+4:2! - 6:0m 6:0m 6:0+5:2+4:2 - 6:0m 6:0m |
+5:3+4:5+3:5! - 5:3m 5:3m 5:3+4:5+3:5 - 5:3m 5:3m |
+6:3+5:5+4:5! - 6:3m 6:3m 6:3+5:5+4:5 - 6:3m 6:3m |
+5:5+4:7+3:7! - 5:5m 5:5m 5:5+4:7+3:7 - - -
+"""
+
+# Held chords under the solo.
+[riffs.pads]
+notes = "6:0+5:2+4:2 - - - - - - - | 5:3+4:5+3:5 - - - - - - - | 6:3+5:5+4:5 - - - - - - - | 5:5+4:7+3:7 - - - 5:5+4:7+3:7 - - -"
+
+[riffs.heavy]
+notes = "6:0m 6:0m 6:0m 6:0m 6:3+5:5! - 6:0m 6:0m | 6:0m 6:0m 6:0m 6:0m 6:5+5:7! - 6:6+5:8 6:7+5:9!"
+
+# The tab scene's melody: G B A | G E G E | D E G B | A (vibrato).
+[riffs.lead]
+program = 29
+notes = "2:8 - 1:7! - - - 1:5 - | 1:3 - 2:5 - 2:8 - 2:5 - | 2:3 - 2:5 - 1:3 - 1:7 - | 1:5~ - - - - - - ."
+
+[riffs.last_chord]
+ring = true
+notes = "6:0+5:2+4:2+3:0+2:0+1:0! - - - - - - - - - - - - - - - - - - - - - - -"
+
+# ------------------------------------------------------------------ bass --
+[riffs.bass_whole]
+instrument = "bass"
+program = 33
+notes = "4:0 - - - - - - - | 3:3 - - - - - - - | 4:3 - - - - - - - | 3:5 - - - - - 3:4 3:2"
+
+[riffs.bass_eighths]
+instrument = "bass"
+program = 34
+notes = "4:0! 4:0 4:0 4:0 4:0 4:0 4:0 4:0 | 3:3! 3:3 3:3 3:3 3:3 3:3 3:3 3:3 | 4:3! 4:3 4:3 4:3 4:3 4:3 4:3 4:3 | 3:5! 3:5 3:5 3:5 3:5 3:5 3:5 3:5"
+
+# Silent for a bar while the guitar plays dry, then in.
+[riffs.bass_entry]
+instrument = "bass"
+program = 34
+notes = ". . . . . . . . | 3:3! 3:3 3:3 3:3 3:3 3:3 3:3 3:3 | 4:3! 4:3 4:3 4:3 4:3 4:3 4:3 4:3 | 3:5! 3:5 3:5 3:5 3:5 3:5 3:5 3:5"
+
+[riffs.bass_heavy]
+instrument = "bass"
+program = 34
+notes = "4:0 4:0 4:0 4:0 4:3! - 4:0 4:0 | 4:0 4:0 4:0 4:0 4:5! - 4:6 4:7!"
+
+[riffs.bass_solo]
+instrument = "bass"
+program = 34
+notes = "4:0! - - 4:0 4:0 - 4:0 4:0 | 3:3! - - 3:3 3:3 - 3:3 3:3 | 4:3! - - 4:3 4:3 - 4:3 4:3 | 3:5! - - 3:5 3:5 - 3:5 3:5"
+
+[riffs.bass_end]
+instrument = "bass"
+program = 34
+notes = "4:0! - - - - - - - - - - - - - - - . . . . . . . ."
+
+# ----------------------------------------------------------------- drums --
+[drums.soft]
+kit = 8
+kick = "x . . . . . . . | x . . . . x . ."
+side = ". . . . x . . . | . . . . x . . ."
+hat  = "o o o o o o o o | o o o o o o o o"
+
+[drums.entry]
+kit = 16
+kick  = ". . . . . . . . | x . . x x . . . | x . . x x . . . | x . . x . . . ."
+snare = ". . . . . . . . | . . x . . . x . | . . x . . . x . | . . x . x x . ."
+hat   = ". . . . . . . . | x o x o x o x o | x o x o x o x o | x o x o . . . ."
+crash = ". . . . . . . . | X . . . . . . . | . . . . . . . . | . . . . . . . ."
+tom_hi  = ". . . . . . . . | . . . . . . . . | . . . . . . . . | . . . . . . x ."
+tom_low = ". . . . . . . . | . . . . . . . . | . . . . . . . . | . . . . . . . x"
+
+[drums.rock]
+kit = 16
+kick  = "x . . x x . . . | x . . x x . . . | x . . x x . . . | x . . x x . x ."
+snare = ". . x . . . x . | . . x . . . x . | . . x . . . x . | . . x . . . x x"
+hat   = "x o x o x o x o | x o x o x o x o | x o x o x o x o | x o x o x o . ."
+crash = "X . . . . . . . | . . . . . . . . | . . . . . . . . | . . . . . . . ."
+
+[drums.heavy]
+kit = 16
+kick  = "x x x x X . x x | x x x x X . x x"
+snare = ". . . . X . . . | . . . . X . . X"
+ride  = "x . x . x . x . | x . x . x . . ."
+crash = "X . . . . . . . | . . . . X . . ."
+
+[drums.solo]
+kit = 16
+kick  = "x . . x x . x . | x . . x x . x . | x . . x x . x . | x . . x x . . ."
+snare = ". . x . . . x . | . . x . . . x . | . . x . . . x . | . . x . x x X X"
+ride  = "x x x x x x x x | x x x x x x x x | x x x x x x x x | x x x x . . . ."
+crash = "X . . . . . . . | . . . . . . . . | X . . . . . . . | . . . . . . . ."
+
+[drums.groove]
+kit = 8
+kick = "x . . . . x . . | x . . x . x . ."
+side = ". . x . . . x . | . . x . . . x ."
+hat  = "x o x o x o x o | x o x o x o x o"
+
+[drums.end]
+kit = 16
+kick  = "X . . . . . . . | . . . . . . . . | . . . . . . . ."
+crash = "X . . . . . . . | . . . . . . . . | . . . . . . . ."
+
+# ---------------------------------------------------------------- scenes --
+# One string rings in tune, then the metronome counts the band in.
+[[scene]]
+id = "tuner"
+bars = 2
+title = "Tune up"
+subtitle = "Tuner with string targets for standard, drop, open and 7-string tunings, and a metronome."
+page = "Tuner"
+preset = "Clean Jazz"
+guitar = { tune = "5:0", cents = [-35, 0] }
+actions = [
+    { beat = 4, key = "K" },
+]
+
+[[scene]]
+id = "intro"
+layout = "title"
+bars = 4
+title = "Guitar Virtual Amp"
+subtitle = "A real-time guitar rig for desktop and Android"
+preset = "Ambient Ping-Pong"
+guitar = { riff = "arpeggio" }
+bass = "bass_whole"
+drums = "soft"
+
+# A bar of the dry guitar, then every pedal comes on with the band.
+[[scene]]
+id = "pedalboard"
+bars = 4
+title = "Build your pedalboard"
+subtitle = "{pedal_count} effect pedals in any order. Bypass, A/B and undo every edit."
+page = "Pedals"
+preset = "Metal High Gain"
+bypass_all = true
+guitar = { riff = "rhythm" }
+double = true
+bass = "bass_entry"
+drums = "entry"
+# Clicks that change the chain land just before the downbeat: the pedals
+# are rebuilt (a few ms of silence), then the new tone hits with the band.
+actions = [
+    { beat = 3.92, click = "Enable all" },
+    { beat = 6, zoom = [100, 145, 900, 300], secs = 1.0 },
+    { beat = 12, unzoom = true, secs = 1.0 },
+]
+
+# A new tone on every downbeat.
+[[scene]]
+id = "presets"
+bars = 4
+title = "{preset_count} factory presets"
+subtitle = "Plus your own, with tags, search and a setlist for the gig."
+page = "Presets"
+preset = "Blues Crunch"
+guitar = { riff = "rhythm" }
+double = true
+bass = "bass_eighths"
+drums = "rock"
+actions = [
+    { beat = 3.92, click = "Classic Rock Rhythm" },
+    { beat = 7.92, click = "Shoegaze Wall" },
+    { beat = 11.92, click = "Metal High Gain" },
+]
+
+[[scene]]
+id = "nam"
+bars = 2
+title = "Neural Amp Modeler and TONE3000"
+subtitle = "Load .nam captures and speaker IRs, or browse TONE3000 right from the pedal."
+page = "Pedals"
+preset = "Metal High Gain"
+guitar = { riff = "rhythm" }
+double = true
+bass = "bass_eighths"
+drums = "rock"
+actions = [
+    { beat = 2, click = "➕ Add pedal" },
+    { beat = 3.92, click = "NAM Model" },
+    { beat = 5.5, hover = "Browse TONE3000" },
+]
+
+[[scene]]
+id = "analyzer"
+bars = 2
+title = "See your tone"
+subtitle = "Oscilloscope and spectrum of the dry guitar or of the pedals' output."
+page = "Analyzer"
+preset = "Metal High Gain"
+guitar = { riff = "heavy" }
+double = true
+bass = "bass_heavy"
+drums = "heavy"
+setup = [
+    { click = "after the pedals" },
+]
+
+# The tab player scores the melody against the tab, with the band.
+[[scene]]
+id = "tabs"
+bars = 4
+title = "Play along with tabs"
+subtitle = "Guitar Pro files, bar loops and a speed trainer. Practice mode scores every note you play."
+tab = true
+preset = "Rock Lead"
+guitar = { riff = "lead" }
+backing = [{ riff = "pads", preset = "Classic Rock Rhythm", gain_db = -7.0 }]
+bass = "bass_solo"
+drums = "solo"
+setup = [
+    { click = "🎯 Prática" },
+    { key = "Space" },
+]
+
+[[scene]]
+id = "phone"
+layout = "phone"
+bars = 4
+title = "Desktop and Android"
+subtitle = "The same app on Linux, Windows, macOS and Android."
+bullets = ["Touch-size controls on phones", "Dark and light themes", "MIDI footswitches on desktop"]
+page = "Pedals"
+preset = "Pop Clean"
+theme = "light"
+guitar = { riff = "arpeggio" }
+bass = "bass_whole"
+drums = "groove"
+
+[[scene]]
+id = "outro"
+layout = "title"
+bars = 3
+title = "Guitar Virtual Amp"
+subtitle = "Free and open source (GPL-3.0), written in Rust"
+bullets = [
+    "{pedal_count} pedals · {preset_count} presets · tuner · tabs · practice · transcription",
+    "github.com/Breno-de-Angelo/guitar_virtual_amp",
+]
+footnote = "Guitar notes: Guitar-TECHS (Pedroza et al., ICASSP 2025), CC BY 4.0 · Bass and drums: GeneralUser GS by S. Christian Collins · Every guitar tone by the app's own pedals"
+preset = "Shoegaze Wall"
+guitar = { riff = "last_chord" }
+double = true
+bass = "bass_end"
+drums = "end"

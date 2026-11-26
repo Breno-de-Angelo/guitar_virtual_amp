@@ -1,0 +1,30 @@
+# Renders the promo video from storyboard.toml: the real app, offscreen,
+# driven by a synthesized guitar through its own pedals. Its own workspace
+# (not a member of the root one), so regular builds don't compile wgpu.
+# See README.md.
+[package]
+name = "promo_video"
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-or-later"
+publish = false
+
+[workspace]
+
+[dependencies]
+guitar_core = { path = "../../guitar_core" }
+eframe = "0.32.1"
+egui_kittest = { version = "0.32.1", features = ["wgpu", "eframe"] }
+crossbeam = "0.8.4"
+serde = { version = "1.0", features = ["derive"] }
+toml = "0.8"
+hound = "3.5"
+rustysynth = "1.3"
+strum = "0.27.2"
+image = { version = "0.25", default-features = false, features = ["png"] }
+
+[profile.dev.package."*"]
+opt-level = 2
+
+[profile.dev]
+opt-level = 1
