@@ -102,7 +102,10 @@ pub fn user_preset_dir_in(base: &Path) -> PathBuf {
 /// for the current platform (e.g. Android) — callers on those platforms should
 /// fall back to [`user_preset_dir_in`] with an explicit base path.
 pub fn user_preset_dir() -> Option<PathBuf> {
-    dirs::data_dir().map(|base| user_preset_dir_in(&base))
+    dirs::data_dir()
+        .map(|base| user_preset_dir_in(&base))
+        // Android: the app's private storage (`paths::set_app_data_dir`).
+        .or_else(|| super::paths::app_data_dir().map(|dir| dir.join("presets")))
 }
 
 /// One entry in a preset listing: the preset's own `name` field plus the file

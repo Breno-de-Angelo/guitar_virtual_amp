@@ -221,6 +221,13 @@ impl TabPlayerPanel {
         self.load_tab(path);
     }
 
+    /// Tuning of the open tab's selected track (string 1 = highest first),
+    /// for the tuner's "tune to the tab" target.
+    pub fn selected_tuning(&self) -> Option<Vec<u8>> {
+        let track = self.tab.as_ref()?.score.tracks.get(self.selected_track)?;
+        (!track.percussion && !track.tuning.is_empty()).then(|| track.tuning.clone())
+    }
+
     /// Opens the transcription form, prefilled (e.g. from a Spotify track).
     pub fn start_transcription_for(
         &mut self,

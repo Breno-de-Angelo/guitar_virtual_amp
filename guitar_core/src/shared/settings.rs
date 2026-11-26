@@ -60,6 +60,75 @@ impl Default for PracticePrefs {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ThemePref {
+    #[default]
+    Dark,
+    Light,
+    /// Follow the operating system.
+    System,
+}
+
+/// Look and feel, master levels, tuner, metronome and controller settings.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct UiPrefs {
+    pub theme: ThemePref,
+    /// UI scale (egui zoom factor).
+    pub zoom: f32,
+    pub output_volume_db: f32,
+    pub input_gain_db: f32,
+    /// Tuner reference pitch for A4, in Hz.
+    pub tuner_reference_hz: f32,
+    /// Name of the tuning the tuner shows string targets for
+    /// (see `frontend::lib::tunings`).
+    pub tuner_tuning: String,
+    /// Silence the speakers while the tuner page is open.
+    pub mute_while_tuning: bool,
+    pub metronome_bpm: f32,
+    /// 0 = no accent.
+    pub metronome_beats_per_bar: u32,
+    pub metronome_volume: f32,
+    /// Record everything heard (guitar + metronome + song) instead of the guitar alone.
+    pub record_mix: bool,
+    /// Presets in performance order, for next/previous switching and MIDI
+    /// program changes. Empty = every preset, user ones first.
+    pub setlist: Vec<PresetRef>,
+    pub midi: crate::shared::midi::MidiPrefs,
+}
+
+impl Default for UiPrefs {
+    fn default() -> Self {
+        Self {
+            theme: ThemePref::Dark,
+            zoom: 1.0,
+            output_volume_db: 0.0,
+            input_gain_db: 0.0,
+            tuner_reference_hz: 440.0,
+            tuner_tuning: "Standard".into(),
+            mute_while_tuning: false,
+            metronome_bpm: 120.0,
+            metronome_beats_per_bar: 4,
+            metronome_volume: 1.0,
+            record_mix: false,
+            setlist: Vec::new(),
+            midi: Default::default(),
+        }
+    }
+}
+
+/// Practice-mode history for one tab.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PracticeRecord {
+    /// Best note accuracy (0..1) of a full run, per track name.
+    pub best_accuracy: BTreeMap<String, f32>,
+    /// Number of runs that judged at least one note.
+    pub runs: u32,
+    /// Unix seconds of the last run.
+    pub last_run_unix: u64,
+}
+
 // `serde(default)` keeps settings files written by older versions loadable
 // when fields are added (a parse failure would reset every setting).
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -79,6 +148,9 @@ pub struct AppSettings {
     /// Keyed by the tab file's path.
     pub tab_sync: BTreeMap<String, TabSyncSettings>,
     pub practice: PracticePrefs,
+    pub ui: UiPrefs,
+    /// Practice history keyed by the tab file's path.
+    pub practice_log: BTreeMap<String, PracticeRecord>,
     /// Folder of Guitar Pro files matched against Spotify tracks by name.
     pub tab_library_dir: Option<PathBuf>,
     /// Tabs the user linked by hand, keyed by Spotify track ID.
@@ -108,7 +180,11 @@ pub fn settings_path() -> Option<PathBuf> {
     if cfg!(test) {
         return None;
     }
-    dirs::config_dir().map(|base| base.join(SETTINGS_SUBPATH))
+    dirs::config_dir()
+        .map(|base| base.join(SETTINGS_SUBPATH))
+        // Android has no config dir: use the app's private storage, set by
+        // the Android entry point through `paths::set_app_data_dir`.
+        .or_else(|| crate::shared::paths::app_data_dir().map(|dir| dir.join("settings.json")))
 }
 
 /// Loads settings from disk, falling back to `AppSettings::default()` if the
@@ -158,6 +234,8 @@ mod tests {
                 },
             )]),
             practice: PracticePrefs { extra_latency_ms: 15.0, tolerance_ms: 80.0, strictness: 0.7 },
+            ui: UiPrefs { theme: ThemePref::Light, zoom: 1.25, setlist: vec![PresetRef::Factory("Rock Lead".into())], ..Default::default() },
+            practice_log: BTreeMap::from([("/tabs/song.gp5".to_string(), PracticeRecord { runs: 3, ..Default::default() })]),
             tab_library_dir: Some(PathBuf::from("/tabs")),
             spotify_tab_links: BTreeMap::from([("4uLU6hMCjMI75M1A2tKUQC".to_string(), PathBuf::from("/tabs/acdc.gp5"))]),
             tab_repository_dir: Some(PathBuf::from("/repo")),

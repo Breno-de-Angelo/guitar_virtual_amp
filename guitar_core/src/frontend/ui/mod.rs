@@ -1,9 +1,13 @@
+pub mod analyzer;
 pub mod metronome;
+pub mod pedalboard;
 pub mod pedals;
 pub mod presets;
+pub mod settings_page;
 pub mod spotify;
 pub mod tone3000;
 pub mod transcribe;
 pub mod tuner;
 pub mod tab_player;
 pub mod tab_view;
+pub mod widgets;

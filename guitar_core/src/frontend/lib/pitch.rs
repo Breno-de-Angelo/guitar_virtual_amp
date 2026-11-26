@@ -4,7 +4,11 @@ const NOTE_NAMES: [&str; 12] = [
     "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B",
 ];
 
-const MIN_FREQ_HZ: f64 = 70.0; // just below guitar low E (E2 ≈ 82.4 Hz)
+/// Just below a 5-string bass's low B (B0 ≈ 30.9 Hz is too low for the
+/// tuner's window; E1 ≈ 41.2 Hz, a 4-string bass, is the lowest supported).
+/// The search is capped at half the buffer, so short buffers simply can't
+/// see the lowest notes.
+const MIN_FREQ_HZ: f64 = 38.0;
 const MAX_FREQ_HZ: f64 = 1000.0;
 const SILENCE_RMS_THRESHOLD: f64 = 0.01;
 /// YIN's "absolute threshold": the cumulative mean normalized difference must
@@ -111,16 +115,24 @@ pub fn detect_pitch(buffer: &VecDeque<f64>, sample_rate: f32) -> Option<f64> {
     Some(sample_rate_f / refined_tau)
 }
 
-/// Converts a frequency in Hz to the nearest equal-temperament note (A4 = 440Hz),
-/// returning `(note name, octave, cents deviation from that note)`.
-pub fn freq_to_note(freq: f64) -> (&'static str, i32, f64) {
-    let semitones_from_a4 = 12.0 * (freq / 440.0).log2();
-    let midi_rounded = (69.0 + semitones_from_a4).round();
-    let cents = (semitones_from_a4 - (midi_rounded - 69.0)) * 100.0;
-    let midi = midi_rounded as i32;
-    let name_idx = midi.rem_euclid(12) as usize;
-    let octave = midi.div_euclid(12) - 1;
-    (NOTE_NAMES[name_idx], octave, cents)
+/// Frequency of MIDI note `midi` with A4 (MIDI 69) at `a4_hz`.
+pub fn midi_to_freq(midi: f64, a4_hz: f64) -> f64 {
+    a4_hz * 2f64.powf((midi - 69.0) / 12.0)
+}
+
+/// Fractional MIDI note of a frequency.
+pub fn freq_to_midi(freq: f64, a4_hz: f64) -> f64 {
+    69.0 + 12.0 * (freq / a4_hz).log2()
+}
+
+/// Note name without octave, e.g. `"F#"`.
+pub fn pitch_class_name(midi: i32) -> &'static str {
+    NOTE_NAMES[midi.rem_euclid(12) as usize]
+}
+
+/// Note name with octave, e.g. `"E2"`.
+pub fn note_name(midi: i32) -> String {
+    format!("{}{}", pitch_class_name(midi), midi.div_euclid(12) - 1)
 }
 
 #[cfg(test)]
@@ -162,19 +174,43 @@ mod tests {
         assert_eq!(detect_pitch(&buffer, 48000.0), None);
     }
 
+    /// `(note name, cents off)` of the nearest note.
+    fn freq_to_note(freq: f64) -> (String, f64) {
+        let midi = freq_to_midi(freq, 440.0);
+        (note_name(midi.round() as i32), (midi - midi.round()) * 100.0)
+    }
+
+    #[test]
+    fn reference_pitch_shifts_the_note_grid() {
+        let midi = freq_to_midi(432.0, 432.0);
+        assert_eq!(note_name(midi.round() as i32), "A4");
+        // 440 Hz is ~+31.8 cents sharp of A when A4 = 432 Hz.
+        let cents = (freq_to_midi(440.0, 432.0) - 69.0) * 100.0;
+        assert!((cents - 31.77).abs() < 0.1, "{cents}");
+        assert!((midi_to_freq(40.0, 440.0) - 82.407).abs() < 0.01);
+        assert!((freq_to_midi(110.0, 440.0) - 45.0).abs() < 1e-9);
+        assert_eq!(note_name(40), "E2");
+        assert_eq!(pitch_class_name(-1), "B");
+    }
+
+    #[test]
+    fn detects_low_bass_e_with_a_long_enough_buffer() {
+        let buffer = sine_buffer(41.2, 24000.0, 2048);
+        let detected = detect_pitch(&buffer, 24000.0).expect("should detect pitch");
+        assert!((detected - 41.2).abs() < 0.5, "got {detected}");
+    }
+
     #[test]
     fn a4_is_recognized_as_a() {
-        let (name, octave, cents) = freq_to_note(440.0);
-        assert_eq!(name, "A");
-        assert_eq!(octave, 4);
+        let (name, cents) = freq_to_note(440.0);
+        assert_eq!(name, "A4");
         assert!(cents.abs() < 0.01, "expected ~0 cents, got {cents}");
     }
 
     #[test]
     fn low_e_is_recognized() {
-        let (name, octave, cents) = freq_to_note(82.41);
-        assert_eq!(name, "E");
-        assert_eq!(octave, 2);
+        let (name, cents) = freq_to_note(82.41);
+        assert_eq!(name, "E2");
         assert!(cents.abs() < 1.0, "expected near 0 cents, got {cents}");
     }
 
@@ -182,8 +218,8 @@ mod tests {
     fn sharp_note_reports_positive_cents() {
         // 5 cents sharp of A4.
         let freq = 440.0 * 2f64.powf(5.0 / 1200.0);
-        let (name, _, cents) = freq_to_note(freq);
-        assert_eq!(name, "A");
+        let (name, cents) = freq_to_note(freq);
+        assert_eq!(name, "A4");
         assert!((cents - 5.0).abs() < 0.1, "expected ~+5 cents, got {cents}");
     }
 }
