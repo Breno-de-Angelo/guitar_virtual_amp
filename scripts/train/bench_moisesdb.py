@@ -71,6 +71,7 @@ def main():
     ap.add_argument("--data", type=Path, required=True)
     ap.add_argument("--bench", type=Path, required=True)
     ap.add_argument("--ref", default="crnn-v2_spark_s5000,muscriptor-large-known")
+    ap.add_argument("--songs", type=Path, default=None, help="only the song ids listed in this file (e.g. test_songs.txt)")
     ap.add_argument("--common", default=None, help="only songs where this engine has notes for every input")
     ap.add_argument("--out", type=Path, default=None)
     args = ap.parse_args()
@@ -88,6 +89,10 @@ def main():
     def notes(engine, it):
         return guitar_notes(notes_dir / engine / f"{it['id']}.json")
 
+    if args.songs:
+        wanted = set(args.songs.expanduser().read_text().split())
+        iso = {k: v for k, v in iso.items() if k in wanted}
+        inputs = {name: {k: v for k, v in its.items() if k in wanted} for name, its in inputs.items()}
     if args.common:
         keep = {song for song in iso
                 if all(song in its and notes(args.common, its[song]) is not None for its in inputs.values()
